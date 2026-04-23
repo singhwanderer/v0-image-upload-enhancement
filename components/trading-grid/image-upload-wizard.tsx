@@ -6,13 +6,13 @@ import {
   ChevronRight, 
   ChevronLeft, 
   Upload, 
-  ImageIcon, 
   Check,
-  AlertCircle,
   ChevronDown,
   Trash2,
-  Edit3,
-  FileImage
+  FileImage,
+  ZoomIn,
+  Download,
+  Printer
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -40,7 +40,7 @@ interface ImageUploadWizardProps {
   onComplete: () => void
 }
 
-// Mock data based on provided patterns
+// Mock data with multiple GTINs per product and 3-digit color codes
 const MOCK_DATA = {
   selectionCodes: [
     { code: "001", description: "dresses" },
@@ -50,20 +50,101 @@ const MOCK_DATA = {
     { code: "005", description: "Footwear" },
   ],
   products: [
-    { id: "TESTPROD1", description: "TESTPROD1 Desc", gtin: "00123456789012" },
-    { id: "TESTPROD2", description: "Summer Floral Dress", gtin: "00123456789013" },
-    { id: "B11442", description: "Boon DESERT Drying Rack", gtin: "00123456789014" },
-    { id: "TESTPROD4", description: "Classic Denim Jacket", gtin: "00123456789015" },
-    { id: "TESTPROD5", description: "Cotton Blend Cardigan", gtin: "00123456789016" },
+    { 
+      id: "1TESTPROD1", 
+      description: "1TESTPROD1 Desc", 
+      gtins: ["00123456789012", "00123456789022", "00123456789032"] 
+    },
+    { 
+      id: "TESTPROD2", 
+      description: "Summer Floral Dress", 
+      gtins: ["00123456789013", "00123456789023"] 
+    },
+    { 
+      id: "B11442", 
+      description: "Boon DESERT Drying Rack", 
+      gtins: ["00123456789014"] 
+    },
+    { 
+      id: "TESTPROD4", 
+      description: "Classic Denim Jacket", 
+      gtins: ["00123456789015", "00123456789025", "00123456789035", "00123456789045"] 
+    },
+    { 
+      id: "TESTPROD5", 
+      description: "Cotton Blend Cardigan", 
+      gtins: ["00123456789016", "00123456789026"] 
+    },
   ],
+  // 3-digit color codes as per requirement
   colorCodes: [
-    { code: "BLK", name: "Black" },
-    { code: "WHT", name: "White" },
-    { code: "NVY", name: "Navy Blue" },
-    { code: "RED", name: "Cardinal Red" },
-    { code: "GRN", name: "Forest Green" },
+    { code: "001", name: "Black" },
+    { code: "002", name: "White" },
+    { code: "003", name: "Navy Blue" },
+    { code: "004", name: "Cardinal Red" },
+    { code: "005", name: "Forest Green" },
+    { code: "010", name: "Charcoal Grey" },
+    { code: "015", name: "Burgundy" },
+    { code: "020", name: "Ivory" },
   ],
 }
+
+// Dropdown options from screenshots
+const ORIENTATION_OPTIONS = [
+  { value: "PRI", label: "PRI-Primary" },
+  { value: "SDL", label: "SDL-Side Left" },
+  { value: "SDR", label: "SDR-Side Right" },
+  { value: "VF1", label: "VF1-Front" },
+  { value: "VIB", label: "VIB-Bottom" },
+  { value: "VIT", label: "VIT-Top" },
+  { value: "VBK", label: "VBK-Back" },
+]
+
+const ANGLE_OPTIONS = [
+  { value: "1", label: "1-Center, No plunge angle" },
+  { value: "2", label: "2-Left, No plunge angle" },
+  { value: "3", label: "3-Right, No plunge angle" },
+  { value: "7", label: "7-Center, Plunge angle present" },
+  { value: "8", label: "8-Left, Plunge angle present" },
+  { value: "9", label: "9-Right, Plunge angle present" },
+]
+
+const IMAGE_TYPE_OPTIONS = [
+  { value: "SI", label: "SI-Still Shot" },
+  { value: "LI", label: "LI-Lifestyle Image" },
+  { value: "SW", label: "SW-Swatch" },
+  { value: "DT", label: "DT-Detail Shot" },
+  { value: "PK", label: "PK-Packaging" },
+]
+
+const PURPOSE_OPTIONS = [
+  { value: "INT", label: "INT-Internet" },
+  { value: "CAT", label: "CAT-Catalog" },
+  { value: "PRT", label: "PRT-Print" },
+  { value: "PKG", label: "PKG-Packaging" },
+]
+
+const LOCATION_TYPE_OPTIONS = [
+  { value: "URL", label: "URL" },
+  { value: "FTP", label: "FTP" },
+  { value: "ACL", label: "ACL" },
+]
+
+const FACING_OPTIONS = [
+  { value: "1", label: "1-Front" },
+  { value: "2", label: "2-Back" },
+  { value: "3", label: "3-Left" },
+  { value: "4", label: "4-Right" },
+  { value: "5", label: "5-Top" },
+  { value: "6", label: "6-Bottom" },
+]
+
+const IMAGE_STYLE_OPTIONS = [
+  { value: "STD", label: "Standard" },
+  { value: "EDI", label: "Editorial" },
+  { value: "MOD", label: "Model Shot" },
+  { value: "FLT", label: "Flat Lay" },
+]
 
 type UploadedFile = {
   id: string
@@ -88,14 +169,14 @@ export function ImageUploadWizard({
   const [isDragging, setIsDragging] = useState(false)
   const [applyToAll, setApplyToAll] = useState(true)
   const [advancedOpen, setAdvancedOpen] = useState(false)
-  const [showSuccess, setShowSuccess] = useState(false)
+  const [showProductMedia, setShowProductMedia] = useState(false)
   
   // Form state for attributes
   const [attributes, setAttributes] = useState({
     imageType: "SI",
     purpose: "INT",
-    orientation: "PRI",
-    locationType: "URL",
+    orientation: "",
+    locationType: "",
     externalLocation: "",
     imageStyle: "",
     facing: "",
@@ -176,7 +257,7 @@ export function ImageUploadWizard({
     if (currentStep < 3) {
       setCurrentStep(currentStep + 1)
     } else {
-      setShowSuccess(true)
+      setShowProductMedia(true)
     }
   }
 
@@ -195,74 +276,276 @@ export function ImageUploadWizard({
     return {
       companyName: "KIBBLES N BITS",
       accountNumber: "125103335555",
-      selectionCode: selCode ? `${selCode.code} - ${selCode.description}` : "",
+      selectionCode: selCode?.code || "",
       description: selCode?.description || "",
       productId: product?.id || "",
       productDescription: product?.description || "",
-      gtin: product?.gtin || "",
-      colorCode: color ? `${color.code} - ${color.name}` : "",
+      gtins: product?.gtins || [],
+      colorCode: color?.code || "",
+      colorName: color?.name || "",
     }
   }
 
-  if (showSuccess) {
+  // Product Media Display View (after upload)
+  if (showProductMedia) {
+    const data = getAutoPopulatedData()
+    const currentDate = new Date().toLocaleDateString('en-US', { 
+      year: 'numeric', 
+      month: 'short', 
+      day: '2-digit' 
+    })
+    
     return (
-      <div className="flex flex-col gap-6">
+      <div className="flex flex-col gap-4">
         {/* Breadcrumb */}
         <div className="flex items-center gap-2 text-sm">
-          <span className="text-tg-link hover:underline cursor-pointer">Data Management</span>
+          <span className="text-tg-link hover:underline cursor-pointer">Selection Code List</span>
           <span className="text-muted-foreground">&gt;</span>
-          <span className="text-tg-link hover:underline cursor-pointer">Image Upload</span>
+          <span className="text-tg-link hover:underline cursor-pointer">Product List</span>
           <span className="text-muted-foreground">&gt;</span>
-          <span className="font-medium text-foreground">Upload Complete</span>
+          <span className="font-semibold text-foreground">Product Media</span>
         </div>
 
-        <div className="mx-auto flex max-w-lg flex-col items-center gap-6 rounded border border-border bg-card p-12 text-center">
-          <div className="flex size-16 items-center justify-center rounded-full bg-tg-success/20">
-            <Check className="size-8 text-tg-success" />
+        {/* Toolbar */}
+        <div className="flex items-center gap-1 border border-border bg-card p-1 w-fit">
+          <button className="p-1.5 hover:bg-muted border border-border" title="View">
+            <ZoomIn className="size-4 text-muted-foreground" />
+          </button>
+          <button className="p-1.5 hover:bg-muted border border-border" title="Download">
+            <Download className="size-4 text-muted-foreground" />
+          </button>
+          <button className="p-1.5 hover:bg-muted border border-border" title="Print">
+            <Printer className="size-4 text-muted-foreground" />
+          </button>
+        </div>
+
+        {/* Company Info Header */}
+        <div className="text-sm space-y-1">
+          <div className="flex gap-8">
+            <div>
+              <span className="font-semibold text-foreground">Company Name</span>
+              <span className="ml-4 text-foreground">{data.companyName}</span>
+            </div>
           </div>
-          <div>
-            <h2 className="text-xl font-semibold text-foreground">Upload Successful</h2>
-            <p className="mt-2 text-sm text-muted-foreground">
-              {uploadedFiles.length} image{uploadedFiles.length !== 1 ? "s" : ""} uploaded successfully to{" "}
-              <span className="font-medium text-foreground">{getAutoPopulatedData().productDescription}</span>
-            </p>
+          <div className="flex gap-8">
+            <div>
+              <span className="font-semibold text-foreground">Account Number</span>
+              <span className="ml-4 text-foreground">{data.accountNumber}</span>
+            </div>
           </div>
-          
-          <div className="w-full rounded border border-border bg-muted/30 p-4 text-left text-sm">
-            <div className="grid grid-cols-2 gap-2">
-              <span className="text-muted-foreground">Selection Code:</span>
-              <span className="text-foreground">{getAutoPopulatedData().selectionCode}</span>
-              <span className="text-muted-foreground">Product:</span>
-              <span className="text-foreground">{getAutoPopulatedData().productId}</span>
+          <div className="flex gap-8">
+            <div>
+              <span className="font-semibold text-foreground">Selection Code</span>
+              <span className="ml-4 text-foreground">{data.selectionCode}</span>
+            </div>
+          </div>
+          <div className="flex gap-8">
+            <div>
+              <span className="font-semibold text-foreground">Description</span>
+              <span className="ml-4 text-foreground">{data.description}</span>
+            </div>
+          </div>
+          <div className="flex gap-8">
+            <div>
+              <span className="font-semibold text-foreground text-tg-link">Product</span>
+              <span className="ml-4 text-tg-link">{data.productId}</span>
+            </div>
+          </div>
+          <div className="flex gap-8">
+            <div>
+              <span className="font-semibold text-foreground">Product Description</span>
+              <span className="ml-4 text-foreground">{data.productDescription}</span>
+            </div>
+          </div>
+          <div className="flex gap-8">
+            <div>
+              <span className="font-semibold text-foreground">Images</span>
+              <span className="ml-4 text-tg-link">{uploadedFiles.length}</span>
+            </div>
+          </div>
+        </div>
+
+        {/* Main Content - Two Panel Layout */}
+        <div className="grid grid-cols-2 gap-4">
+          {/* Left Panel - Image Attributes Table */}
+          <div className="border border-border bg-card">
+            {/* Panel Header */}
+            <div className="flex items-center gap-2 border-b border-border bg-muted/30 px-3 py-2">
+              <div className="flex items-center gap-1 border border-border bg-card p-0.5">
+                <button className="p-1 hover:bg-muted" title="Add">
+                  <Download className="size-3 text-muted-foreground" />
+                </button>
+                <button className="p-1 hover:bg-muted" title="Edit">
+                  <FileImage className="size-3 text-muted-foreground" />
+                </button>
+              </div>
+              <span className="text-sm font-medium text-tg-link">
+                {uploadLevel === "product" ? "Product Level Image" : "Product + Color Code Level Image"}
+              </span>
+            </div>
+
+            {/* Attributes Table */}
+            <div className="text-sm">
               {uploadLevel === "product-color" && (
-                <>
-                  <span className="text-muted-foreground">Color Code:</span>
-                  <span className="text-foreground">{getAutoPopulatedData().colorCode}</span>
-                </>
+                <div className="flex border-b border-border">
+                  <div className="w-40 bg-muted/20 px-3 py-2 font-medium text-foreground">Color Code:</div>
+                  <div className="flex-1 px-3 py-2 text-foreground">{data.colorCode}</div>
+                </div>
               )}
-              <span className="text-muted-foreground">Images:</span>
-              <span className="text-foreground">{uploadedFiles.length}</span>
+              <div className="flex border-b border-border">
+                <div className="w-40 bg-muted/20 px-3 py-2 font-medium text-foreground">File Name:</div>
+                <div className="flex-1 px-3 py-2 text-foreground">{uploadedFiles[0]?.name || "testMS.jpeg"}</div>
+              </div>
+              <div className="flex border-b border-border">
+                <div className="w-40 bg-muted/20 px-3 py-2 font-medium text-foreground">File Type:</div>
+                <div className="flex-1 px-3 py-2 text-foreground">JPG-JPEG</div>
+              </div>
+              <div className="flex border-b border-border">
+                <div className="w-40 bg-muted/20 px-3 py-2 font-medium text-tg-link">Image Type:</div>
+                <div className="flex-1 px-3 py-2 text-tg-link">
+                  {IMAGE_TYPE_OPTIONS.find(o => o.value === attributes.imageType)?.label || "SI-Still Shot"}
+                </div>
+              </div>
+              <div className="flex border-b border-border">
+                <div className="w-40 bg-muted/20 px-3 py-2 font-medium text-foreground">Purpose:</div>
+                <div className="flex-1 px-3 py-2 text-tg-link">
+                  {PURPOSE_OPTIONS.find(o => o.value === attributes.purpose)?.label || "INT-Internet"}
+                </div>
+              </div>
+              <div className="flex border-b border-border">
+                <div className="w-40 bg-muted/20 px-3 py-2 font-medium text-foreground">Orientation:</div>
+                <div className="flex-1 px-3 py-2 text-foreground">
+                  {ORIENTATION_OPTIONS.find(o => o.value === attributes.orientation)?.label || "SDR-Side Right"}
+                </div>
+              </div>
+              <div className="flex border-b border-border">
+                <div className="w-40 bg-muted/20 px-3 py-2 font-medium text-foreground">Location Type:</div>
+                <div className="flex-1 px-3 py-2 text-foreground">
+                  {LOCATION_TYPE_OPTIONS.find(o => o.value === attributes.locationType)?.label || "ACL"}
+                </div>
+              </div>
+              <div className="flex border-b border-border">
+                <div className="w-40 bg-muted/20 px-3 py-2 font-medium text-foreground">External Location:</div>
+                <div className="flex-1 px-3 py-2 text-foreground">{attributes.externalLocation || ""}</div>
+              </div>
+              <div className="flex border-b border-border">
+                <div className="w-40 bg-muted/20 px-3 py-2 font-medium text-foreground">File Size:</div>
+                <div className="flex-1 px-3 py-2 text-foreground">{uploadedFiles[0] ? formatFileSize(uploadedFiles[0].size) : ""}</div>
+              </div>
+              <div className="flex border-b border-border">
+                <div className="w-40 bg-muted/20 px-3 py-2 font-medium text-foreground">Pixel Density (DPI):</div>
+                <div className="flex-1 px-3 py-2 text-foreground">300</div>
+              </div>
+              <div className="flex border-b border-border">
+                <div className="w-40 bg-muted/20 px-3 py-2 font-medium text-foreground">Height:</div>
+                <div className="flex-1 px-3 py-2 text-foreground">1200</div>
+              </div>
+              <div className="flex border-b border-border">
+                <div className="w-40 bg-muted/20 px-3 py-2 font-medium text-foreground">Width:</div>
+                <div className="flex-1 px-3 py-2 text-foreground">800</div>
+              </div>
+              <div className="flex border-b border-border">
+                <div className="w-40 bg-muted/20 px-3 py-2 font-medium text-foreground">Image Style:</div>
+                <div className="flex-1 px-3 py-2 text-foreground">
+                  {IMAGE_STYLE_OPTIONS.find(o => o.value === attributes.imageStyle)?.label || ""}
+                </div>
+              </div>
+              <div className="flex border-b border-border">
+                <div className="w-40 bg-muted/20 px-3 py-2 font-medium text-foreground">Facing (GDSN):</div>
+                <div className="flex-1 px-3 py-2 text-foreground">
+                  {FACING_OPTIONS.find(o => o.value === attributes.facing)?.label || ""}
+                </div>
+              </div>
+              <div className="flex border-b border-border">
+                <div className="w-40 bg-muted/20 px-3 py-2 font-medium text-foreground">Angle:</div>
+                <div className="flex-1 px-3 py-2 text-foreground">
+                  {ANGLE_OPTIONS.find(o => o.value === attributes.angle)?.label || ""}
+                </div>
+              </div>
+              <div className="flex border-b border-border">
+                <div className="w-40 bg-muted/20 px-3 py-2 font-medium text-foreground">Clipping Path:</div>
+                <div className="flex-1 px-3 py-2 text-foreground">{attributes.clippingPath || ""}</div>
+              </div>
+              <div className="flex border-b border-border">
+                <div className="w-40 bg-muted/20 px-3 py-2 font-medium text-foreground">Image Description:</div>
+                <div className="flex-1 px-3 py-2 text-foreground">{attributes.imageDescription || ""}</div>
+              </div>
+              <div className="flex border-b border-border">
+                <div className="w-40 bg-muted/20 px-3 py-2 font-medium text-foreground">Create Date</div>
+                <div className="flex-1 px-3 py-2 text-foreground">{currentDate}</div>
+              </div>
+              <div className="flex">
+                <div className="w-40 bg-muted/20 px-3 py-2 font-medium text-foreground">Last Update Date</div>
+                <div className="flex-1 px-3 py-2 text-foreground">{currentDate}</div>
+              </div>
             </div>
           </div>
 
-          <div className="flex gap-3">
-            <Button 
-              variant="outline" 
-              onClick={() => {
-                setShowSuccess(false)
-                setCurrentStep(1)
-                setUploadedFiles([])
-                setSelectedSelectionCode("")
-                setSelectedProduct("")
-                setSelectedColorCode("")
-              }}
-            >
-              Upload More Images
-            </Button>
-            <Button onClick={onComplete}>
-              Return to Hub
-            </Button>
+          {/* Right Panel - Image Preview */}
+          <div className="border border-border bg-card">
+            {/* Panel Header */}
+            <div className="flex items-center gap-2 border-b border-border bg-muted/30 px-3 py-2">
+              <div className="flex items-center gap-1 border border-border bg-card p-0.5">
+                <button className="p-1 hover:bg-muted" title="Zoom In">
+                  <ZoomIn className="size-3 text-muted-foreground" />
+                </button>
+                <button className="p-1 hover:bg-muted" title="Download">
+                  <Download className="size-3 text-muted-foreground" />
+                </button>
+                <button className="p-1 hover:bg-muted" title="Edit">
+                  <FileImage className="size-3 text-muted-foreground" />
+                </button>
+              </div>
+            </div>
+
+            {/* Image Preview */}
+            <div className="flex items-center justify-center p-4 min-h-[400px] bg-white">
+              {uploadedFiles[0] ? (
+                <img 
+                  src={uploadedFiles[0].preview} 
+                  alt="Uploaded product" 
+                  className="max-w-full max-h-[380px] object-contain"
+                />
+              ) : (
+                <div className="flex flex-col items-center justify-center text-center p-8 border-2 border-dashed border-border rounded">
+                  <FileImage className="size-16 text-muted-foreground mb-4" />
+                  <p className="text-sm text-muted-foreground">Image Preview</p>
+                </div>
+              )}
+            </div>
           </div>
+        </div>
+
+        {/* Action Buttons */}
+        <div className="flex items-center justify-end gap-3 pt-4">
+          <Button 
+            variant="outline" 
+            onClick={() => {
+              setShowProductMedia(false)
+              setCurrentStep(1)
+              setUploadedFiles([])
+              setSelectedSelectionCode("")
+              setSelectedProduct("")
+              setSelectedColorCode("")
+              setAttributes({
+                imageType: "SI",
+                purpose: "INT",
+                orientation: "",
+                locationType: "",
+                externalLocation: "",
+                imageStyle: "",
+                facing: "",
+                angle: "",
+                clippingPath: "",
+                imageDescription: "",
+              })
+            }}
+          >
+            Upload More Images
+          </Button>
+          <Button onClick={onComplete}>
+            Return to Image Upload
+          </Button>
         </div>
       </div>
     )
@@ -376,7 +659,7 @@ export function ImageUploadWizard({
                 <div className="flex flex-col gap-1">
                   <span className="font-medium text-foreground">Product + Color Code Level</span>
                   <span className="text-sm text-muted-foreground">
-                    Image applies to a specific color variant of the product. 
+                    Image applies to a specific color variant (3-digit code) of the product. 
                     Required when showing color-specific product shots.
                   </span>
                 </div>
@@ -436,7 +719,7 @@ export function ImageUploadWizard({
               {uploadLevel === "product-color" && (
                 <div className="flex flex-col gap-2">
                   <Label className="text-sm font-medium">
-                    Color Code <span className="text-destructive">*</span>
+                    Color Code (3-digit) <span className="text-destructive">*</span>
                   </Label>
                   <Select value={selectedColorCode} onValueChange={setSelectedColorCode}>
                     <SelectTrigger className="w-full bg-background">
@@ -458,7 +741,7 @@ export function ImageUploadWizard({
             {selectedSelectionCode && selectedProduct && (
               <div className="rounded border border-border bg-tg-table-header p-3 text-sm">
                 <div className="mb-2 font-medium text-foreground">Auto-populated Information</div>
-                <div className="grid grid-cols-2 gap-x-8 gap-y-1 md:grid-cols-4">
+                <div className="grid grid-cols-2 gap-x-8 gap-y-2 md:grid-cols-3">
                   <div>
                     <span className="text-muted-foreground">Company:</span>{" "}
                     <span className="text-foreground">{getAutoPopulatedData().companyName}</span>
@@ -468,12 +751,12 @@ export function ImageUploadWizard({
                     <span className="text-foreground">{getAutoPopulatedData().accountNumber}</span>
                   </div>
                   <div>
-                    <span className="text-muted-foreground">GTIN:</span>{" "}
-                    <span className="text-foreground">{getAutoPopulatedData().gtin}</span>
-                  </div>
-                  <div>
                     <span className="text-muted-foreground">Description:</span>{" "}
                     <span className="text-foreground">{getAutoPopulatedData().productDescription}</span>
+                  </div>
+                  <div className="md:col-span-3">
+                    <span className="text-muted-foreground">GTINs ({getAutoPopulatedData().gtins.length}):</span>{" "}
+                    <span className="text-foreground">{getAutoPopulatedData().gtins.join(", ")}</span>
                   </div>
                 </div>
               </div>
@@ -633,10 +916,11 @@ export function ImageUploadWizard({
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="SI">SI - Still Shot</SelectItem>
-                    <SelectItem value="LI">LI - Lifestyle Image</SelectItem>
-                    <SelectItem value="SW">SW - Swatch</SelectItem>
-                    <SelectItem value="DT">DT - Detail Shot</SelectItem>
+                    {IMAGE_TYPE_OPTIONS.map((option) => (
+                      <SelectItem key={option.value} value={option.value}>
+                        {option.label}
+                      </SelectItem>
+                    ))}
                   </SelectContent>
                 </Select>
               </div>
@@ -653,10 +937,11 @@ export function ImageUploadWizard({
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="INT">INT - Internet</SelectItem>
-                    <SelectItem value="CAT">CAT - Catalog</SelectItem>
-                    <SelectItem value="PRT">PRT - Print</SelectItem>
-                    <SelectItem value="PKG">PKG - Packaging</SelectItem>
+                    {PURPOSE_OPTIONS.map((option) => (
+                      <SelectItem key={option.value} value={option.value}>
+                        {option.label}
+                      </SelectItem>
+                    ))}
                   </SelectContent>
                 </Select>
               </div>
@@ -670,14 +955,14 @@ export function ImageUploadWizard({
                   onValueChange={(value) => setAttributes({ ...attributes, orientation: value })}
                 >
                   <SelectTrigger className="w-full bg-background">
-                    <SelectValue />
+                    <SelectValue placeholder="Select orientation..." />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="PRI">PRI - Primary</SelectItem>
-                    <SelectItem value="FRO">FRO - Front</SelectItem>
-                    <SelectItem value="BAC">BAC - Back</SelectItem>
-                    <SelectItem value="SID">SID - Side</SelectItem>
-                    <SelectItem value="ANG">ANG - Angle</SelectItem>
+                    {ORIENTATION_OPTIONS.map((option) => (
+                      <SelectItem key={option.value} value={option.value}>
+                        {option.label}
+                      </SelectItem>
+                    ))}
                   </SelectContent>
                 </Select>
               </div>
@@ -691,16 +976,36 @@ export function ImageUploadWizard({
                   onValueChange={(value) => setAttributes({ ...attributes, locationType: value })}
                 >
                   <SelectTrigger className="w-full bg-background">
-                    <SelectValue />
+                    <SelectValue placeholder="Select location type..." />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="URL">URL</SelectItem>
-                    <SelectItem value="FTP">FTP</SelectItem>
-                    <SelectItem value="LOCAL">Local Storage</SelectItem>
+                    {LOCATION_TYPE_OPTIONS.map((option) => (
+                      <SelectItem key={option.value} value={option.value}>
+                        {option.label}
+                      </SelectItem>
+                    ))}
                   </SelectContent>
                 </Select>
               </div>
             </div>
+
+            {/* External Location - conditional */}
+            {(attributes.locationType === "FTP" || attributes.locationType === "URL") && (
+              <div className="flex flex-col gap-2">
+                <Label className="text-sm font-medium">
+                  External Location <span className="text-destructive">**</span>
+                </Label>
+                <Input
+                  value={attributes.externalLocation}
+                  onChange={(e) => setAttributes({ ...attributes, externalLocation: e.target.value })}
+                  placeholder={attributes.locationType === "FTP" ? "ftp://..." : "https://..."}
+                  className="bg-background"
+                />
+                <p className="text-xs text-muted-foreground">
+                  ** Required when Location Type is FTP or URL
+                </p>
+              </div>
+            )}
 
             {/* Auto-detected Metadata */}
             {uploadedFiles.length > 0 && (
@@ -743,18 +1048,6 @@ export function ImageUploadWizard({
               <CollapsibleContent>
                 <div className="mt-4 grid gap-4 rounded border border-border bg-background p-4 md:grid-cols-2">
                   <div className="flex flex-col gap-2">
-                    <Label className="text-sm font-medium">External Location</Label>
-                    <Input
-                      value={attributes.externalLocation}
-                      onChange={(e) =>
-                        setAttributes({ ...attributes, externalLocation: e.target.value })
-                      }
-                      placeholder="https://..."
-                      className="bg-background"
-                    />
-                  </div>
-
-                  <div className="flex flex-col gap-2">
                     <Label className="text-sm font-medium">Image Style</Label>
                     <Select
                       value={attributes.imageStyle}
@@ -764,10 +1057,11 @@ export function ImageUploadWizard({
                         <SelectValue placeholder="Select style..." />
                       </SelectTrigger>
                       <SelectContent>
-                        <SelectItem value="STD">Standard</SelectItem>
-                        <SelectItem value="EDI">Editorial</SelectItem>
-                        <SelectItem value="MOD">Model Shot</SelectItem>
-                        <SelectItem value="FLT">Flat Lay</SelectItem>
+                        {IMAGE_STYLE_OPTIONS.map((option) => (
+                          <SelectItem key={option.value} value={option.value}>
+                            {option.label}
+                          </SelectItem>
+                        ))}
                       </SelectContent>
                     </Select>
                   </div>
@@ -782,12 +1076,11 @@ export function ImageUploadWizard({
                         <SelectValue placeholder="Select facing..." />
                       </SelectTrigger>
                       <SelectContent>
-                        <SelectItem value="1">Front</SelectItem>
-                        <SelectItem value="2">Back</SelectItem>
-                        <SelectItem value="3">Left</SelectItem>
-                        <SelectItem value="4">Right</SelectItem>
-                        <SelectItem value="5">Top</SelectItem>
-                        <SelectItem value="6">Bottom</SelectItem>
+                        {FACING_OPTIONS.map((option) => (
+                          <SelectItem key={option.value} value={option.value}>
+                            {option.label}
+                          </SelectItem>
+                        ))}
                       </SelectContent>
                     </Select>
                   </div>
@@ -802,10 +1095,11 @@ export function ImageUploadWizard({
                         <SelectValue placeholder="Select angle..." />
                       </SelectTrigger>
                       <SelectContent>
-                        <SelectItem value="0">0 degrees</SelectItem>
-                        <SelectItem value="45">45 degrees</SelectItem>
-                        <SelectItem value="90">90 degrees</SelectItem>
-                        <SelectItem value="180">180 degrees</SelectItem>
+                        {ANGLE_OPTIONS.map((option) => (
+                          <SelectItem key={option.value} value={option.value}>
+                            {option.label}
+                          </SelectItem>
+                        ))}
                       </SelectContent>
                     </Select>
                   </div>

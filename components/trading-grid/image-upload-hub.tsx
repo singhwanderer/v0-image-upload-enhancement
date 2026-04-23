@@ -5,11 +5,11 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Card, CardContent } from "@/components/ui/card"
 
-interface ImageUploadHubProps {
+interface ImageUploadLandingProps {
   onUploadClick: () => void
 }
 
-export function ImageUploadHub({ onUploadClick }: ImageUploadHubProps) {
+export function ImageUploadLanding({ onUploadClick }: ImageUploadLandingProps) {
   return (
     <div className="flex flex-col gap-6">
       {/* Breadcrumb */}
@@ -24,7 +24,7 @@ export function ImageUploadHub({ onUploadClick }: ImageUploadHubProps) {
         <div>
           <h1 className="text-xl font-semibold text-foreground">Image Upload</h1>
           <p className="mt-1 text-sm text-muted-foreground">
-            Upload product images individually or in bulk. Choose your preferred upload method below.
+            Upload product images and assign them to products or product variants.
           </p>
         </div>
         {/* Toolbar Icons - matching Trading Grid style */}
@@ -79,7 +79,7 @@ export function ImageUploadHub({ onUploadClick }: ImageUploadHubProps) {
               </div>
               <div className="flex items-center gap-2">
                 <FileImage className="size-4 text-primary" />
-                <span>Single or batch upload</span>
+                <span>Multiple GTINs per product</span>
               </div>
               <div className="flex items-center gap-2">
                 <FileImage className="size-4 text-primary" />
@@ -107,12 +107,12 @@ export function ImageUploadHub({ onUploadClick }: ImageUploadHubProps) {
           <div className="flex items-center gap-2">
             <Search className="size-4 text-muted-foreground" />
             <span className="text-sm font-medium text-foreground">Quick Access</span>
-            <span className="text-xs text-muted-foreground">(Power User Shortcut)</span>
+            <span className="text-xs text-muted-foreground">(Jump to product by GTIN)</span>
           </div>
           <div className="flex gap-3">
             <div className="relative flex-1">
               <Input
-                placeholder="Search by GTIN, Product ID, or Selection Code..."
+                placeholder="Enter GTIN, Product ID, or Selection Code..."
                 className="h-9 pr-10"
               />
               <Search className="absolute right-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
@@ -127,7 +127,7 @@ export function ImageUploadHub({ onUploadClick }: ImageUploadHubProps) {
         </div>
       </div>
 
-      {/* Recent Activity / Stats (optional enhancement) */}
+      {/* Recent Activity / Stats */}
       <div className="grid grid-cols-3 gap-4">
         <div className="rounded border border-border bg-card p-4">
           <div className="text-2xl font-semibold text-foreground">156</div>

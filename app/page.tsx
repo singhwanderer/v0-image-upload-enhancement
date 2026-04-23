@@ -2,7 +2,7 @@
 
 import { useState } from "react"
 import { TradingGridLayout } from "@/components/trading-grid/layout"
-import { ImageUploadHub } from "@/components/trading-grid/image-upload-hub"
+import { ImageUploadLanding } from "@/components/trading-grid/image-upload-hub"
 import { ImageUploadWizard } from "@/components/trading-grid/image-upload-wizard"
 
 export default function ImageUploadPage() {
@@ -12,7 +12,7 @@ export default function ImageUploadPage() {
   return (
     <TradingGridLayout activeNav="image-upload">
       {!wizardOpen ? (
-        <ImageUploadHub onUploadClick={() => setWizardOpen(true)} />
+        <ImageUploadLanding onUploadClick={() => setWizardOpen(true)} />
       ) : (
         <ImageUploadWizard
           uploadLevel={uploadLevel}
