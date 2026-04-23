@@ -12,7 +12,10 @@ import {
   FileImage,
   ZoomIn,
   Download,
-  Printer
+  Printer,
+  Package,
+  FileText,
+  CheckCircle2
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -188,6 +191,8 @@ export function ImageUploadWizard({
   const [applyToAll, setApplyToAll] = useState(true)
   const [advancedOpen, setAdvancedOpen] = useState(false)
   const [showProductMedia, setShowProductMedia] = useState(false)
+  const [showDownloadModal, setShowDownloadModal] = useState(false)
+  const [downloadComplete, setDownloadComplete] = useState(false)
   
   // Form state for attributes
   const [attributes, setAttributes] = useState({
@@ -261,9 +266,85 @@ export function ImageUploadWizard({
   }
 
   const formatFileSize = (bytes: number) => {
-    if (bytes < 1024) return `${bytes} B`
-    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
-    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
+    if (bytes < 1024) return bytes + " B"
+    if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + " KB"
+    return (bytes / (1024 * 1024)).toFixed(1) + " MB"
+  }
+
+  // Generate metadata text content for a file
+  const generateMetadataContent = (file: UploadedFile, index: number) => {
+    const data = getAutoPopulatedData()
+    const currentDate = new Date().toLocaleDateString('en-US', { 
+      year: 'numeric', 
+      month: 'short', 
+      day: '2-digit' 
+    })
+    
+    let content = `IMAGE METADATA EXPORT
+========================================
+Export Date: ${currentDate}
+Level: ${uploadLevel === "product" ? "Product Level" : uploadLevel === "gtin" ? "Item Level (GTIN)" : "Product + Color Code Level"}
+
+COMPANY INFORMATION
+----------------------------------------
+Company Name:        ${data.companyName}
+Account Number:      ${data.accountNumber}
+Selection Code:      ${data.selectionCode}
+Description:         ${data.description}
+Product:             ${data.productId}
+Product Description: ${data.productDescription}`
+
+    if (uploadLevel === "gtin") {
+      content += `
+GTIN:                ${data.selectedGtin}
+GTIN Type:           ${data.selectedGtinType}`
+    }
+
+    if (uploadLevel === "product-color") {
+      content += `
+Color Code:          ${data.colorCode}
+Color Name:          ${data.colorName}`
+    }
+
+    content += `
+
+FILE INFORMATION
+----------------------------------------
+File Name:           ${file.name}
+File Type:           JPG-JPEG
+File Size:           ${formatFileSize(file.size)}
+
+IMAGE ATTRIBUTES
+----------------------------------------
+Image Type:          ${IMAGE_TYPE_OPTIONS.find(o => o.value === attributes.imageType)?.label || "SI-Still Shot"}
+Purpose:             ${PURPOSE_OPTIONS.find(o => o.value === attributes.purpose)?.label || "INT-Internet"}
+Orientation:         ${ORIENTATION_OPTIONS.find(o => o.value === attributes.orientation)?.label || "Not specified"}
+Location Type:       ${LOCATION_TYPE_OPTIONS.find(o => o.value === attributes.locationType)?.label || "Not specified"}
+External Location:   ${attributes.externalLocation || "N/A"}
+Pixel Density (DPI): 300
+Height:              1200
+Width:               800
+Image Style:         ${IMAGE_STYLE_OPTIONS.find(o => o.value === attributes.imageStyle)?.label || "Not specified"}
+Facing (GDSN):       ${FACING_OPTIONS.find(o => o.value === attributes.facing)?.label || "Not specified"}
+Angle:               ${ANGLE_OPTIONS.find(o => o.value === attributes.angle)?.label || "Not specified"}
+Clipping Path:       ${attributes.clippingPath || "N/A"}
+Image Description:   ${attributes.imageDescription || "N/A"}
+
+DATES
+----------------------------------------
+Create Date:         ${currentDate}
+Last Update Date:    ${currentDate}
+
+========================================
+End of Metadata Export
+`
+    return content
+  }
+
+  // Handle bulk download
+  const handleBulkDownload = () => {
+    // Simulate download process
+    setDownloadComplete(true)
   }
 
   const canProceedStep1 = uploadLevel !== undefined
@@ -342,7 +423,14 @@ export function ImageUploadWizard({
           <button className="p-1.5 hover:bg-muted border border-border" title="View">
             <ZoomIn className="size-4 text-muted-foreground" />
           </button>
-          <button className="p-1.5 hover:bg-muted border border-border" title="Download">
+          <button 
+            className="p-1.5 hover:bg-muted border border-border" 
+            title="Download All"
+            onClick={() => {
+              setDownloadComplete(false)
+              setShowDownloadModal(true)
+            }}
+          >
             <Download className="size-4 text-muted-foreground" />
           </button>
           <button className="p-1.5 hover:bg-muted border border-border" title="Print">
@@ -599,6 +687,180 @@ export function ImageUploadWizard({
             Return to Image Upload
           </Button>
         </div>
+
+        {/* Download Modal */}
+        {showDownloadModal && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+            <div className="w-full max-w-lg rounded border border-border bg-card shadow-xl">
+              {/* Modal Header */}
+              <div className="flex items-center justify-between border-b border-border bg-gradient-to-r from-tg-header-start to-tg-header-end px-4 py-3">
+                <h2 className="text-base font-semibold text-white">Download Images with Metadata</h2>
+                <button 
+                  onClick={() => setShowDownloadModal(false)}
+                  className="text-white/80 hover:text-white"
+                >
+                  <X className="size-5" />
+                </button>
+              </div>
+
+              {/* Modal Content */}
+              <div className="p-6">
+                {!downloadComplete ? (
+                  <>
+                    {/* Download Summary */}
+                    <div className="mb-6">
+                      <div className="flex items-center gap-3 mb-4">
+                        <div className="flex size-10 items-center justify-center rounded-full bg-primary/10">
+                          <Package className="size-5 text-primary" />
+                        </div>
+                        <div>
+                          <h3 className="font-medium text-foreground">Download Package</h3>
+                          <p className="text-sm text-muted-foreground">
+                            {uploadLevel === "product" 
+                              ? "Product Level" 
+                              : uploadLevel === "gtin"
+                              ? "Item Level (GTIN)"
+                              : "Product + Color Code Level"} images
+                          </p>
+                        </div>
+                      </div>
+
+                      <div className="rounded border border-border bg-muted/20 p-4">
+                        <div className="text-sm space-y-1 mb-4">
+                          <div className="flex justify-between">
+                            <span className="text-muted-foreground">Product:</span>
+                            <span className="font-medium text-foreground">{getAutoPopulatedData().productId}</span>
+                          </div>
+                          {uploadLevel === "gtin" && (
+                            <div className="flex justify-between">
+                              <span className="text-muted-foreground">GTIN:</span>
+                              <span className="font-medium text-foreground">{getAutoPopulatedData().selectedGtin}</span>
+                            </div>
+                          )}
+                          {uploadLevel === "product-color" && (
+                            <div className="flex justify-between">
+                              <span className="text-muted-foreground">Color Code:</span>
+                              <span className="font-medium text-foreground">{getAutoPopulatedData().colorCode}</span>
+                            </div>
+                          )}
+                          <div className="flex justify-between">
+                            <span className="text-muted-foreground">Total Images:</span>
+                            <span className="font-medium text-foreground">{uploadedFiles.length}</span>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Files to Download */}
+                    <div className="mb-6">
+                      <h4 className="text-sm font-medium text-foreground mb-3">Package Contents:</h4>
+                      <div className="space-y-2 max-h-48 overflow-y-auto">
+                        {uploadedFiles.map((file, index) => (
+                          <div key={file.id} className="flex items-center gap-3 rounded border border-border bg-card p-3">
+                            <div className="flex size-10 items-center justify-center rounded bg-muted">
+                              {file.preview ? (
+                                <img 
+                                  src={file.preview} 
+                                  alt="" 
+                                  className="size-10 rounded object-cover"
+                                />
+                              ) : (
+                                <FileImage className="size-5 text-muted-foreground" />
+                              )}
+                            </div>
+                            <div className="flex-1 min-w-0">
+                              <div className="flex items-center gap-2">
+                                <FileImage className="size-4 text-primary shrink-0" />
+                                <span className="text-sm font-medium text-foreground truncate">{file.name}</span>
+                              </div>
+                              <div className="flex items-center gap-2 mt-0.5">
+                                <FileText className="size-4 text-tg-success shrink-0" />
+                                <span className="text-sm text-muted-foreground truncate">
+                                  {file.name.replace(/\.[^/.]+$/, "")}_metadata.txt
+                                </span>
+                              </div>
+                            </div>
+                            <div className="text-right text-xs text-muted-foreground shrink-0">
+                              <div>{formatFileSize(file.size)}</div>
+                              <div>~2 KB</div>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+
+                    {/* Info Note */}
+                    <div className="mb-6 flex items-start gap-2 rounded bg-primary/5 p-3 text-sm">
+                      <FileText className="size-4 text-primary mt-0.5 shrink-0" />
+                      <div>
+                        <span className="font-medium text-foreground">Metadata files (.txt)</span>
+                        <span className="text-muted-foreground"> contain all image attributes including company info, product details, file properties, and GDSN attributes for each image.</span>
+                      </div>
+                    </div>
+
+                    {/* Actions */}
+                    <div className="flex items-center justify-end gap-3">
+                      <Button variant="outline" onClick={() => setShowDownloadModal(false)}>
+                        Cancel
+                      </Button>
+                      <Button onClick={handleBulkDownload}>
+                        <Download className="size-4 mr-2" />
+                        Download All ({uploadedFiles.length * 2} files)
+                      </Button>
+                    </div>
+                  </>
+                ) : (
+                  /* Download Complete State */
+                  <div className="text-center py-4">
+                    <div className="flex size-16 items-center justify-center rounded-full bg-tg-success/10 mx-auto mb-4">
+                      <CheckCircle2 className="size-8 text-tg-success" />
+                    </div>
+                    <h3 className="text-lg font-medium text-foreground mb-2">Download Complete</h3>
+                    <p className="text-sm text-muted-foreground mb-6">
+                      Your images and metadata files have been downloaded successfully.
+                    </p>
+
+                    {/* Downloaded Files Summary */}
+                    <div className="rounded border border-border bg-muted/20 p-4 mb-6 text-left">
+                      <div className="text-sm font-medium text-foreground mb-3">Downloaded Files:</div>
+                      <div className="space-y-2 max-h-32 overflow-y-auto">
+                        {uploadedFiles.map((file, index) => (
+                          <div key={file.id} className="text-sm">
+                            <div className="flex items-center gap-2 text-foreground">
+                              <Check className="size-4 text-tg-success" />
+                              <span>{file.name}</span>
+                            </div>
+                            <div className="flex items-center gap-2 text-muted-foreground ml-6">
+                              <Check className="size-4 text-tg-success" />
+                              <span>{file.name.replace(/\.[^/.]+$/, "")}_metadata.txt</span>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+
+                    {/* Sample Metadata Preview */}
+                    <div className="rounded border border-border bg-card p-4 mb-6 text-left">
+                      <div className="flex items-center justify-between mb-2">
+                        <span className="text-sm font-medium text-foreground">Metadata Preview</span>
+                        <span className="text-xs text-muted-foreground">
+                          {uploadedFiles[0]?.name.replace(/\.[^/.]+$/, "") || "image"}_metadata.txt
+                        </span>
+                      </div>
+                      <pre className="text-xs text-muted-foreground bg-muted/30 p-3 rounded overflow-x-auto max-h-40 overflow-y-auto font-mono">
+{uploadedFiles[0] ? generateMetadataContent(uploadedFiles[0], 0) : "No metadata available"}
+                      </pre>
+                    </div>
+
+                    <Button onClick={() => setShowDownloadModal(false)}>
+                      Close
+                    </Button>
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     )
   }
