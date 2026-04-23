@@ -34,8 +34,8 @@ import {
 import { cn } from "@/lib/utils"
 
 interface ImageUploadWizardProps {
-  uploadLevel: "product" | "product-color"
-  setUploadLevel: (level: "product" | "product-color") => void
+  uploadLevel: "product" | "product-color" | "gtin"
+  setUploadLevel: (level: "product" | "product-color" | "gtin") => void
   onCancel: () => void
   onComplete: () => void
 }
@@ -53,27 +53,44 @@ const MOCK_DATA = {
     { 
       id: "1TESTPROD1", 
       description: "1TESTPROD1 Desc", 
-      gtins: ["00123456789012", "00123456789022", "00123456789032"] 
+      gtins: [
+        { gtin: "574211012895", type: "UA" },
+        { gtin: "574211012901", type: "EA" },
+        { gtin: "574211012918", type: "CS" },
+      ] 
     },
     { 
       id: "TESTPROD2", 
       description: "Summer Floral Dress", 
-      gtins: ["00123456789013", "00123456789023"] 
+      gtins: [
+        { gtin: "00123456789013", type: "UA" },
+        { gtin: "00123456789023", type: "EA" },
+      ] 
     },
     { 
       id: "B11442", 
       description: "Boon DESERT Drying Rack", 
-      gtins: ["00123456789014"] 
+      gtins: [
+        { gtin: "00123456789014", type: "UA" },
+      ] 
     },
     { 
       id: "TESTPROD4", 
       description: "Classic Denim Jacket", 
-      gtins: ["00123456789015", "00123456789025", "00123456789035", "00123456789045"] 
+      gtins: [
+        { gtin: "00123456789015", type: "UA" },
+        { gtin: "00123456789025", type: "EA" },
+        { gtin: "00123456789035", type: "CS" },
+        { gtin: "00123456789045", type: "PK" },
+      ] 
     },
     { 
       id: "TESTPROD5", 
       description: "Cotton Blend Cardigan", 
-      gtins: ["00123456789016", "00123456789026"] 
+      gtins: [
+        { gtin: "00123456789016", type: "UA" },
+        { gtin: "00123456789026", type: "EA" },
+      ] 
     },
   ],
   // 3-digit color codes as per requirement
@@ -165,6 +182,7 @@ export function ImageUploadWizard({
   const [selectedSelectionCode, setSelectedSelectionCode] = useState("")
   const [selectedProduct, setSelectedProduct] = useState("")
   const [selectedColorCode, setSelectedColorCode] = useState("")
+  const [selectedGtin, setSelectedGtin] = useState("")
   const [uploadedFiles, setUploadedFiles] = useState<UploadedFile[]>([])
   const [isDragging, setIsDragging] = useState(false)
   const [applyToAll, setApplyToAll] = useState(true)
@@ -250,7 +268,9 @@ export function ImageUploadWizard({
 
   const canProceedStep1 = uploadLevel !== undefined
   const canProceedStep2 = selectedSelectionCode && selectedProduct && uploadedFiles.length > 0 && 
-    (uploadLevel === "product" || (uploadLevel === "product-color" && selectedColorCode))
+    (uploadLevel === "product" || 
+     (uploadLevel === "product-color" && selectedColorCode) ||
+     (uploadLevel === "gtin" && selectedGtin))
   const canProceedStep3 = attributes.imageType && attributes.purpose && attributes.orientation && attributes.locationType
 
   const handleNext = () => {
@@ -272,6 +292,7 @@ export function ImageUploadWizard({
     const selCode = MOCK_DATA.selectionCodes.find(s => s.code === selectedSelectionCode)
     const product = MOCK_DATA.products.find(p => p.id === selectedProduct)
     const color = MOCK_DATA.colorCodes.find(c => c.code === selectedColorCode)
+    const gtinEntry = product?.gtins.find(g => g.gtin === selectedGtin)
     
     return {
       companyName: "KIBBLES N BITS",
@@ -283,6 +304,8 @@ export function ImageUploadWizard({
       gtins: product?.gtins || [],
       colorCode: color?.code || "",
       colorName: color?.name || "",
+      selectedGtin: gtinEntry?.gtin || "",
+      selectedGtinType: gtinEntry?.type || "",
     }
   }
 
@@ -302,8 +325,16 @@ export function ImageUploadWizard({
           <span className="text-tg-link hover:underline cursor-pointer">Selection Code List</span>
           <span className="text-muted-foreground">&gt;</span>
           <span className="text-tg-link hover:underline cursor-pointer">Product List</span>
+          {uploadLevel === "gtin" && (
+            <>
+              <span className="text-muted-foreground">&gt;</span>
+              <span className="text-tg-link hover:underline cursor-pointer">GTIN List</span>
+            </>
+          )}
           <span className="text-muted-foreground">&gt;</span>
-          <span className="font-semibold text-foreground">Product Media</span>
+          <span className="font-semibold text-foreground">
+            {uploadLevel === "gtin" ? "Item Media" : "Product Media"}
+          </span>
         </div>
 
         {/* Toolbar */}
@@ -357,6 +388,22 @@ export function ImageUploadWizard({
               <span className="ml-4 text-foreground">{data.productDescription}</span>
             </div>
           </div>
+          {uploadLevel === "gtin" && (
+            <>
+              <div className="flex gap-8">
+                <div>
+                  <span className="font-semibold text-foreground">GTIN</span>
+                  <span className="ml-4 text-foreground">{data.selectedGtin}</span>
+                </div>
+              </div>
+              <div className="flex gap-8">
+                <div>
+                  <span className="font-semibold text-foreground">GTIN Type</span>
+                  <span className="ml-4 text-foreground">{data.selectedGtinType}</span>
+                </div>
+              </div>
+            </>
+          )}
           <div className="flex gap-8">
             <div>
               <span className="font-semibold text-foreground">Images</span>
@@ -380,7 +427,11 @@ export function ImageUploadWizard({
                 </button>
               </div>
               <span className="text-sm font-medium text-tg-link">
-                {uploadLevel === "product" ? "Product Level Image" : "Product + Color Code Level Image"}
+                {uploadLevel === "product" 
+                  ? "Product Level Image" 
+                  : uploadLevel === "gtin"
+                  ? "Item Level Image"
+                  : "Product + Color Code Level Image"}
               </span>
             </div>
 
@@ -527,6 +578,7 @@ export function ImageUploadWizard({
               setSelectedSelectionCode("")
               setSelectedProduct("")
               setSelectedColorCode("")
+              setSelectedGtin("")
               setAttributes({
                 imageType: "SI",
                 purpose: "INT",
@@ -620,13 +672,13 @@ export function ImageUploadWizard({
             <div>
               <h2 className="text-lg font-medium text-foreground">Select Upload Level</h2>
               <p className="mt-1 text-sm text-muted-foreground">
-                Choose whether to assign images at the Product level or the Product + Color Code level.
+                Choose whether to assign images at the Product, Product + Color Code, or individual Item (GTIN) level.
               </p>
             </div>
 
             <RadioGroup
               value={uploadLevel}
-              onValueChange={(value: "product" | "product-color") => setUploadLevel(value)}
+              onValueChange={(value: "product" | "product-color" | "gtin") => setUploadLevel(value)}
               className="gap-4"
             >
               <label
@@ -641,8 +693,8 @@ export function ImageUploadWizard({
                 <div className="flex flex-col gap-1">
                   <span className="font-medium text-foreground">Product Level</span>
                   <span className="text-sm text-muted-foreground">
-                    Image applies to the entire product across all color variants. 
-                    Best for product shots that don&apos;t vary by color.
+                    Image applies to the entire product across all color variants and GTINs. 
+                    Best for product shots that don&apos;t vary by color or pack size.
                   </span>
                 </div>
               </label>
@@ -661,6 +713,24 @@ export function ImageUploadWizard({
                   <span className="text-sm text-muted-foreground">
                     Image applies to a specific color variant (3-digit code) of the product. 
                     Required when showing color-specific product shots.
+                  </span>
+                </div>
+              </label>
+
+              <label
+                className={cn(
+                  "flex cursor-pointer items-start gap-4 rounded border p-4 transition-colors",
+                  uploadLevel === "gtin"
+                    ? "border-primary bg-primary/5"
+                    : "border-border hover:border-primary/50"
+                )}
+              >
+                <RadioGroupItem value="gtin" className="mt-1" />
+                <div className="flex flex-col gap-1">
+                  <span className="font-medium text-foreground">Item Level (GTIN)</span>
+                  <span className="text-sm text-muted-foreground">
+                    Image applies to a specific GTIN (trade item) — e.g., a particular pack size
+                    or configuration. Use when imagery differs by GTIN Type (UA, EA, CS, PK).
                   </span>
                 </div>
               </label>
@@ -702,7 +772,13 @@ export function ImageUploadWizard({
                 <Label className="text-sm font-medium">
                   Product <span className="text-destructive">*</span>
                 </Label>
-                <Select value={selectedProduct} onValueChange={setSelectedProduct}>
+                <Select 
+                  value={selectedProduct} 
+                  onValueChange={(value) => {
+                    setSelectedProduct(value)
+                    setSelectedGtin("")
+                  }}
+                >
                   <SelectTrigger className="w-full bg-background">
                     <SelectValue placeholder="Select product..." />
                   </SelectTrigger>
@@ -735,6 +811,32 @@ export function ImageUploadWizard({
                   </Select>
                 </div>
               )}
+
+              {uploadLevel === "gtin" && (
+                <div className="flex flex-col gap-2">
+                  <Label className="text-sm font-medium">
+                    GTIN <span className="text-destructive">*</span>
+                  </Label>
+                  <Select 
+                    value={selectedGtin} 
+                    onValueChange={setSelectedGtin}
+                    disabled={!selectedProduct}
+                  >
+                    <SelectTrigger className="w-full bg-background">
+                      <SelectValue placeholder={selectedProduct ? "Select GTIN..." : "Select product first"} />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {MOCK_DATA.products
+                        .find(p => p.id === selectedProduct)
+                        ?.gtins.map((g) => (
+                          <SelectItem key={g.gtin} value={g.gtin}>
+                            {g.gtin} ({g.type})
+                          </SelectItem>
+                        ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              )}
             </div>
 
             {/* Auto-populated Info */}
@@ -756,8 +858,18 @@ export function ImageUploadWizard({
                   </div>
                   <div className="md:col-span-3">
                     <span className="text-muted-foreground">GTINs ({getAutoPopulatedData().gtins.length}):</span>{" "}
-                    <span className="text-foreground">{getAutoPopulatedData().gtins.join(", ")}</span>
+                    <span className="text-foreground">
+                      {getAutoPopulatedData().gtins.map(g => `${g.gtin} (${g.type})`).join(", ")}
+                    </span>
                   </div>
+                  {uploadLevel === "gtin" && selectedGtin && (
+                    <div className="md:col-span-3">
+                      <span className="text-muted-foreground">Selected GTIN:</span>{" "}
+                      <span className="font-medium text-foreground">{getAutoPopulatedData().selectedGtin}</span>
+                      <span className="ml-2 text-muted-foreground">GTIN Type:</span>{" "}
+                      <span className="font-medium text-foreground">{getAutoPopulatedData().selectedGtinType}</span>
+                    </div>
+                  )}
                 </div>
               </div>
             )}
@@ -898,7 +1010,11 @@ export function ImageUploadWizard({
             <div className="inline-flex items-center gap-2 self-start rounded bg-primary/10 px-3 py-1.5 text-sm">
               <FileImage className="size-4 text-primary" />
               <span className="font-medium text-primary">
-                {uploadLevel === "product" ? "Product Level Image" : "Product + Color Code Level Image"}
+                {uploadLevel === "product" 
+                  ? "Product Level Image" 
+                  : uploadLevel === "gtin"
+                  ? "Item Level Image"
+                  : "Product + Color Code Level Image"}
               </span>
             </div>
 

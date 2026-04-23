@@ -7,7 +7,7 @@ import { ImageUploadWizard } from "@/components/trading-grid/image-upload-wizard
 
 export default function ImageUploadPage() {
   const [wizardOpen, setWizardOpen] = useState(false)
-  const [uploadLevel, setUploadLevel] = useState<"product" | "product-color">("product")
+  const [uploadLevel, setUploadLevel] = useState<"product" | "product-color" | "gtin">("product")
 
   return (
     <TradingGridLayout activeNav="image-upload">
