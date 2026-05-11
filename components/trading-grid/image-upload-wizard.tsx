@@ -193,6 +193,7 @@ export function ImageUploadWizard({
   const [showProductMedia, setShowProductMedia] = useState(false)
   const [showDownloadModal, setShowDownloadModal] = useState(false)
   const [downloadComplete, setDownloadComplete] = useState(false)
+  const [activeImageIndex, setActiveImageIndex] = useState(0)
   
   // Form state for attributes
   const [attributes, setAttributes] = useState({
@@ -207,12 +208,37 @@ export function ImageUploadWizard({
     clippingPath: "",
     imageDescription: "",
   })
+  
+  // Per-image attributes (when applyToAll is false)
+  const [attributesByImage, setAttributesByImage] = useState<{ [key: number]: typeof attributes }>({})
+  const [activeAttributeImageIndex, setActiveAttributeImageIndex] = useState(0)
 
   const steps = [
     { number: 1, title: "Upload Level", description: "Choose assignment level" },
     { number: 2, title: "Target & Files", description: "Select target and upload files" },
     { number: 3, title: "Attributes", description: "Set image attributes" },
   ]
+
+  // Helper function to get current attributes based on mode
+  const getCurrentAttributes = () => {
+    if (applyToAll) {
+      return attributes
+    } else {
+      return attributesByImage[activeAttributeImageIndex] || attributes
+    }
+  }
+
+  // Helper function to update current attributes
+  const updateCurrentAttributes = (newAttrs: typeof attributes) => {
+    if (applyToAll) {
+      setAttributes(newAttrs)
+    } else {
+      setAttributesByImage(prev => ({
+        ...prev,
+        [activeAttributeImageIndex]: newAttrs
+      }))
+    }
+  }
 
   const handleDragOver = useCallback((e: React.DragEvent) => {
     e.preventDefault()
@@ -533,7 +559,7 @@ End of Metadata Export
               )}
               <div className="flex border-b border-border">
                 <div className="w-40 bg-muted/20 px-3 py-2 font-medium text-foreground">File Name:</div>
-                <div className="flex-1 px-3 py-2 text-foreground">{uploadedFiles[0]?.name || "testMS.jpeg"}</div>
+                <div className="flex-1 px-3 py-2 text-foreground">{uploadedFiles[activeImageIndex]?.name || "testMS.jpeg"}</div>
               </div>
               <div className="flex border-b border-border">
                 <div className="w-40 bg-muted/20 px-3 py-2 font-medium text-foreground">File Type:</div>
@@ -569,7 +595,7 @@ End of Metadata Export
               </div>
               <div className="flex border-b border-border">
                 <div className="w-40 bg-muted/20 px-3 py-2 font-medium text-foreground">File Size:</div>
-                <div className="flex-1 px-3 py-2 text-foreground">{uploadedFiles[0] ? formatFileSize(uploadedFiles[0].size) : ""}</div>
+                <div className="flex-1 px-3 py-2 text-foreground">{uploadedFiles[activeImageIndex] ? formatFileSize(uploadedFiles[activeImageIndex].size) : ""}</div>
               </div>
               <div className="flex border-b border-border">
                 <div className="w-40 bg-muted/20 px-3 py-2 font-medium text-foreground">Pixel Density (DPI):</div>
@@ -621,30 +647,48 @@ End of Metadata Export
           </div>
 
           {/* Right Panel - Image Preview */}
-          <div className="border border-border bg-card">
+          <div className="border border-border bg-card flex flex-col">
             {/* Panel Header */}
             <div className="flex items-center gap-2 border-b border-border bg-muted/30 px-3 py-2">
               <div className="flex items-center gap-1 border border-border bg-card p-0.5">
                 <button className="p-1 hover:bg-muted" title="Zoom In">
                   <ZoomIn className="size-3 text-muted-foreground" />
                 </button>
-                <button className="p-1 hover:bg-muted" title="Download">
+                <button 
+                  onClick={() => {
+                    if (uploadedFiles[activeImageIndex]) {
+                      const link = document.createElement('a')
+                      link.href = uploadedFiles[activeImageIndex].preview
+                      link.download = uploadedFiles[activeImageIndex].name
+                      link.click()
+                    }
+                  }}
+                  className="p-1 hover:bg-muted" 
+                  title="Download current image"
+                >
                   <Download className="size-3 text-muted-foreground" />
                 </button>
                 <button className="p-1 hover:bg-muted" title="Edit">
                   <FileImage className="size-3 text-muted-foreground" />
                 </button>
               </div>
+              {uploadedFiles.length > 1 && (
+                <div className="ml-auto text-xs text-muted-foreground">
+                  {activeImageIndex + 1} / {uploadedFiles.length}
+                </div>
+              )}
             </div>
 
             {/* Image Preview */}
-            <div className="flex items-center justify-center p-4 min-h-[400px] bg-white">
-              {uploadedFiles[0] ? (
-                <img 
-                  src={uploadedFiles[0].preview} 
-                  alt="Uploaded product" 
-                  className="max-w-full max-h-[380px] object-contain"
-                />
+            <div className="flex-1 flex flex-col items-center justify-center p-4 min-h-[400px] bg-white">
+              {uploadedFiles[activeImageIndex] ? (
+                <div className="flex flex-col items-center justify-center gap-4 w-full h-full">
+                  <img 
+                    src={uploadedFiles[activeImageIndex].preview} 
+                    alt="Uploaded product" 
+                    className="max-w-full max-h-[320px] object-contain"
+                  />
+                </div>
               ) : (
                 <div className="flex flex-col items-center justify-center text-center p-8 border-2 border-dashed border-border rounded">
                   <FileImage className="size-16 text-muted-foreground mb-4" />
@@ -652,6 +696,32 @@ End of Metadata Export
                 </div>
               )}
             </div>
+
+            {/* Thumbnail Strip */}
+            {uploadedFiles.length > 1 && (
+              <div className="border-t border-border bg-muted/20 p-2">
+                <div className="flex gap-2 overflow-x-auto">
+                  {uploadedFiles.map((file, idx) => (
+                    <button
+                      key={file.id}
+                      onClick={() => setActiveImageIndex(idx)}
+                      className={cn(
+                        "flex-shrink-0 rounded border-2 overflow-hidden transition-all",
+                        activeImageIndex === idx 
+                          ? "border-primary" 
+                          : "border-border hover:border-primary/50"
+                      )}
+                    >
+                      <img
+                        src={file.preview}
+                        alt={`Image ${idx + 1}`}
+                        className="size-16 object-cover"
+                      />
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
         </div>
 
@@ -661,24 +731,7 @@ End of Metadata Export
             variant="outline" 
             onClick={() => {
               setShowProductMedia(false)
-              setCurrentStep(1)
-              setUploadedFiles([])
-              setSelectedSelectionCode("")
-              setSelectedProduct("")
-              setSelectedColorCode("")
-              setSelectedGtin("")
-              setAttributes({
-                imageType: "SI",
-                purpose: "INT",
-                orientation: "",
-                locationType: "",
-                externalLocation: "",
-                imageStyle: "",
-                facing: "",
-                angle: "",
-                clippingPath: "",
-                imageDescription: "",
-              })
+              setCurrentStep(2)
             }}
           >
             Upload More Images
@@ -1203,8 +1256,21 @@ End of Metadata Export
                       </div>
                       <div className="absolute inset-0 flex items-center justify-center gap-2 bg-black/50 opacity-0 transition-opacity group-hover:opacity-100">
                         <button
+                          onClick={() => {
+                            const link = document.createElement('a')
+                            link.href = file.preview
+                            link.download = file.name
+                            link.click()
+                          }}
+                          className="rounded bg-primary p-1.5 text-white hover:bg-primary/90"
+                          title="Download image"
+                        >
+                          <Download className="size-4" />
+                        </button>
+                        <button
                           onClick={() => removeFile(file.id)}
                           className="rounded bg-destructive p-1.5 text-white hover:bg-destructive/90"
+                          title="Delete image"
                         >
                           <Trash2 className="size-4" />
                         </button>
@@ -1261,12 +1327,35 @@ End of Metadata Export
               <Checkbox
                 id="apply-all"
                 checked={applyToAll}
-                onCheckedChange={(checked) => setApplyToAll(checked as boolean)}
+                onCheckedChange={(checked) => {
+                  setApplyToAll(checked as boolean)
+                  setActiveAttributeImageIndex(0)
+                }}
               />
               <label htmlFor="apply-all" className="text-sm font-medium text-foreground cursor-pointer">
                 Apply same attributes to all {uploadedFiles.length} images
               </label>
             </div>
+
+            {/* Per-Image Tabs (when not applying to all) */}
+            {!applyToAll && uploadedFiles.length > 1 && (
+              <div className="flex gap-2 border-b border-border overflow-x-auto">
+                {uploadedFiles.map((file, idx) => (
+                  <button
+                    key={file.id}
+                    onClick={() => setActiveAttributeImageIndex(idx)}
+                    className={cn(
+                      "px-3 py-2 text-sm font-medium border-b-2 transition-colors whitespace-nowrap",
+                      activeAttributeImageIndex === idx
+                        ? "border-primary text-primary"
+                        : "border-transparent text-muted-foreground hover:text-foreground"
+                    )}
+                  >
+                    Image {idx + 1}: {file.name.slice(0, 20)}
+                  </button>
+                ))}
+              </div>
+            )}
 
             {/* Upload Level Badge */}
             <div className="inline-flex items-center gap-2 self-start rounded bg-primary/10 px-3 py-1.5 text-sm">
@@ -1287,8 +1376,8 @@ End of Metadata Export
                   Image Type <span className="text-destructive">*</span>
                 </Label>
                 <Select
-                  value={attributes.imageType}
-                  onValueChange={(value) => setAttributes({ ...attributes, imageType: value })}
+                  value={getCurrentAttributes().imageType}
+                  onValueChange={(value) => updateCurrentAttributes({ ...getCurrentAttributes(), imageType: value })}
                 >
                   <SelectTrigger className="w-full bg-background">
                     <SelectValue />
@@ -1308,8 +1397,8 @@ End of Metadata Export
                   Purpose <span className="text-destructive">*</span>
                 </Label>
                 <Select
-                  value={attributes.purpose}
-                  onValueChange={(value) => setAttributes({ ...attributes, purpose: value })}
+                  value={getCurrentAttributes().purpose}
+                  onValueChange={(value) => updateCurrentAttributes({ ...getCurrentAttributes(), purpose: value })}
                 >
                   <SelectTrigger className="w-full bg-background">
                     <SelectValue />
@@ -1329,8 +1418,8 @@ End of Metadata Export
                   Orientation <span className="text-destructive">*</span>
                 </Label>
                 <Select
-                  value={attributes.orientation}
-                  onValueChange={(value) => setAttributes({ ...attributes, orientation: value })}
+                  value={getCurrentAttributes().orientation}
+                  onValueChange={(value) => updateCurrentAttributes({ ...getCurrentAttributes(), orientation: value })}
                 >
                   <SelectTrigger className="w-full bg-background">
                     <SelectValue placeholder="Select orientation..." />
@@ -1350,8 +1439,8 @@ End of Metadata Export
                   Location Type <span className="text-destructive">*</span>
                 </Label>
                 <Select
-                  value={attributes.locationType}
-                  onValueChange={(value) => setAttributes({ ...attributes, locationType: value })}
+                  value={getCurrentAttributes().locationType}
+                  onValueChange={(value) => updateCurrentAttributes({ ...getCurrentAttributes(), locationType: value })}
                 >
                   <SelectTrigger className="w-full bg-background">
                     <SelectValue placeholder="Select location type..." />
@@ -1368,15 +1457,15 @@ End of Metadata Export
             </div>
 
             {/* External Location - conditional */}
-            {(attributes.locationType === "FTP" || attributes.locationType === "URL") && (
+            {(getCurrentAttributes().locationType === "FTP" || getCurrentAttributes().locationType === "URL") && (
               <div className="flex flex-col gap-2">
                 <Label className="text-sm font-medium">
                   External Location <span className="text-destructive">**</span>
                 </Label>
                 <Input
-                  value={attributes.externalLocation}
-                  onChange={(e) => setAttributes({ ...attributes, externalLocation: e.target.value })}
-                  placeholder={attributes.locationType === "FTP" ? "ftp://..." : "https://..."}
+                  value={getCurrentAttributes().externalLocation}
+                  onChange={(e) => updateCurrentAttributes({ ...getCurrentAttributes(), externalLocation: e.target.value })}
+                  placeholder={getCurrentAttributes().locationType === "FTP" ? "ftp://..." : "https://..."}
                   className="bg-background"
                 />
                 <p className="text-xs text-muted-foreground">
@@ -1428,8 +1517,8 @@ End of Metadata Export
                   <div className="flex flex-col gap-2">
                     <Label className="text-sm font-medium">Image Style</Label>
                     <Select
-                      value={attributes.imageStyle}
-                      onValueChange={(value) => setAttributes({ ...attributes, imageStyle: value })}
+                      value={getCurrentAttributes().imageStyle}
+                      onValueChange={(value) => updateCurrentAttributes({ ...getCurrentAttributes(), imageStyle: value })}
                     >
                       <SelectTrigger className="w-full bg-background">
                         <SelectValue placeholder="Select style..." />
@@ -1447,8 +1536,8 @@ End of Metadata Export
                   <div className="flex flex-col gap-2">
                     <Label className="text-sm font-medium">Facing (GDSN)</Label>
                     <Select
-                      value={attributes.facing}
-                      onValueChange={(value) => setAttributes({ ...attributes, facing: value })}
+                      value={getCurrentAttributes().facing}
+                      onValueChange={(value) => updateCurrentAttributes({ ...getCurrentAttributes(), facing: value })}
                     >
                       <SelectTrigger className="w-full bg-background">
                         <SelectValue placeholder="Select facing..." />
@@ -1466,8 +1555,8 @@ End of Metadata Export
                   <div className="flex flex-col gap-2">
                     <Label className="text-sm font-medium">Angle</Label>
                     <Select
-                      value={attributes.angle}
-                      onValueChange={(value) => setAttributes({ ...attributes, angle: value })}
+                      value={getCurrentAttributes().angle}
+                      onValueChange={(value) => updateCurrentAttributes({ ...getCurrentAttributes(), angle: value })}
                     >
                       <SelectTrigger className="w-full bg-background">
                         <SelectValue placeholder="Select angle..." />
@@ -1485,9 +1574,9 @@ End of Metadata Export
                   <div className="flex flex-col gap-2">
                     <Label className="text-sm font-medium">Clipping Path</Label>
                     <Input
-                      value={attributes.clippingPath}
+                      value={getCurrentAttributes().clippingPath}
                       onChange={(e) =>
-                        setAttributes({ ...attributes, clippingPath: e.target.value })
+                        updateCurrentAttributes({ ...getCurrentAttributes(), clippingPath: e.target.value })
                       }
                       placeholder="Path name..."
                       className="bg-background"
@@ -1497,9 +1586,9 @@ End of Metadata Export
                   <div className="flex flex-col gap-2 md:col-span-2">
                     <Label className="text-sm font-medium">Image Description</Label>
                     <Input
-                      value={attributes.imageDescription}
+                      value={getCurrentAttributes().imageDescription}
                       onChange={(e) =>
-                        setAttributes({ ...attributes, imageDescription: e.target.value })
+                        updateCurrentAttributes({ ...getCurrentAttributes(), imageDescription: e.target.value })
                       }
                       placeholder="Enter description..."
                       className="bg-background"
