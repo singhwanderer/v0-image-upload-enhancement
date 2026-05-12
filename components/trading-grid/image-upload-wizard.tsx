@@ -387,11 +387,13 @@ End of Metadata Export
   }
 
   const canProceedStep1 = uploadLevel !== undefined
-  const canProceedStep2 = selectedSelectionCode && selectedProduct && uploadedFiles.length > 0 && 
+  const isRemoteLocation = attributes.locationType === "FTP" || attributes.locationType === "URL"
+  const canProceedStep2 = selectedSelectionCode && selectedProduct && attributes.locationType &&
+    (isRemoteLocation || uploadedFiles.length > 0) &&
     (uploadLevel === "product" || 
      (uploadLevel === "product-color" && selectedColorCode) ||
      (uploadLevel === "gtin" && selectedGtin))
-  const canProceedStep3 = attributes.imageType && attributes.purpose && attributes.orientation && attributes.locationType
+  const canProceedStep3 = attributes.imageType && attributes.purpose && attributes.orientation
 
   const handleNext = () => {
     if (currentStep < 3) {
@@ -578,14 +580,11 @@ End of Metadata Export
                     <div className="w-44 bg-muted/20 px-3 py-2 font-medium text-foreground">Image Level:</div>
                     <div className="flex-1 px-3 py-2 text-foreground">{imageLevelLabel}</div>
                   </div>
-                  {/* Color Code - shown for product-color and gtin levels (auto-populated) */}
-                  {(uploadLevel === "product-color" || uploadLevel === "gtin") && (
+                  {/* Color Code - only shown for product-color level */}
+                  {uploadLevel === "product-color" && (
                     <div className="flex border-b border-border">
                       <div className="w-44 bg-muted/20 px-3 py-2 font-medium text-foreground">Color Code:</div>
-                      <div className="flex-1 px-3 py-2 text-foreground">
-                        {uploadLevel === "product-color" ? data.colorCode : data.selectedGtin}
-                        <span className="ml-2 text-xs text-muted-foreground">(auto-populated)</span>
-                      </div>
+                      <div className="flex-1 px-3 py-2 text-foreground">{data.colorCode}</div>
                     </div>
                   )}
                   <div className="flex border-b border-border">
@@ -1222,51 +1221,97 @@ End of Metadata Export
               </div>
             )}
 
-            {/* File Upload Zone */}
-            <div className="flex flex-col gap-4">
+            {/* Location Type - must be chosen before showing upload zone */}
+            <div className="flex flex-col gap-2">
               <Label className="text-sm font-medium">
-                Upload Files <span className="text-destructive">*</span>
+                Location Type <span className="text-destructive">*</span>
               </Label>
-              <div
-                className={cn(
-                  "flex flex-col items-center justify-center gap-4 rounded-lg border-2 border-dashed p-8 transition-colors",
-                  isDragging
-                    ? "border-primary bg-primary/5"
-                    : "border-border bg-muted/20 hover:border-primary/50"
-                )}
-                onDragOver={handleDragOver}
-                onDragLeave={handleDragLeave}
-                onDrop={handleDrop}
-              >
-                <div className="flex size-12 items-center justify-center rounded-full bg-muted">
-                  <Upload className="size-6 text-muted-foreground" />
-                </div>
-                <div className="text-center">
-                  <p className="text-sm font-medium text-foreground">
-                    Drag and drop images here
-                  </p>
-                  <p className="mt-1 text-xs text-muted-foreground">
-                    or click to browse files
-                  </p>
-                </div>
-                <input
-                  type="file"
-                  accept="image/jpeg,image/png,image/tiff"
-                  multiple
-                  className="hidden"
-                  id="file-upload"
-                  onChange={handleFileSelect}
-                />
-                <label htmlFor="file-upload">
-                  <Button variant="outline" size="sm" asChild>
-                    <span className="cursor-pointer">Browse Files</span>
-                  </Button>
-                </label>
-                <p className="text-xs text-muted-foreground">
-                  JPG, PNG, TIFF - Max 10 MB each
-                </p>
+              <div className="grid gap-3 md:grid-cols-3">
+                {LOCATION_TYPE_OPTIONS.map((option) => (
+                  <button
+                    key={option.value}
+                    type="button"
+                    onClick={() => updateCurrentAttributes({ ...getCurrentAttributes(), locationType: option.value })}
+                    className={cn(
+                      "flex flex-col items-start gap-1 rounded border-2 p-3 text-left transition-colors",
+                      attributes.locationType === option.value
+                        ? "border-primary bg-primary/5"
+                        : "border-border bg-background hover:border-primary/40"
+                    )}
+                  >
+                    <span className="text-sm font-semibold text-foreground">{option.label}</span>
+                    <span className="text-xs text-muted-foreground">
+                      {option.value === "ACL" && "Upload files from your computer"}
+                      {option.value === "FTP" && "Images are on an FTP server"}
+                      {option.value === "URL" && "Images are at a web URL"}
+                    </span>
+                  </button>
+                ))}
               </div>
             </div>
+
+            {/* File Upload Zone — only shown for ACL (computer upload) */}
+            {attributes.locationType === "ACL" && (
+              <div className="flex flex-col gap-4">
+                <Label className="text-sm font-medium">
+                  Upload Files <span className="text-destructive">*</span>
+                </Label>
+                <div
+                  className={cn(
+                    "flex flex-col items-center justify-center gap-4 rounded-lg border-2 border-dashed p-8 transition-colors",
+                    isDragging
+                      ? "border-primary bg-primary/5"
+                      : "border-border bg-muted/20 hover:border-primary/50"
+                  )}
+                  onDragOver={handleDragOver}
+                  onDragLeave={handleDragLeave}
+                  onDrop={handleDrop}
+                >
+                  <div className="flex size-12 items-center justify-center rounded-full bg-muted">
+                    <Upload className="size-6 text-muted-foreground" />
+                  </div>
+                  <div className="text-center">
+                    <p className="text-sm font-medium text-foreground">
+                      Drag and drop images here
+                    </p>
+                    <p className="mt-1 text-xs text-muted-foreground">
+                      or click to browse files
+                    </p>
+                  </div>
+                  <input
+                    type="file"
+                    accept="image/jpeg,image/png,image/tiff"
+                    multiple
+                    className="hidden"
+                    id="file-upload"
+                    onChange={handleFileSelect}
+                  />
+                  <label htmlFor="file-upload">
+                    <Button variant="outline" size="sm" asChild>
+                      <span className="cursor-pointer">Browse Files</span>
+                    </Button>
+                  </label>
+                  <p className="text-xs text-muted-foreground">
+                    JPG, PNG, TIFF - Max 10 MB each
+                  </p>
+                </div>
+              </div>
+            )}
+
+            {/* Remote Location notice — shown for FTP and URL */}
+            {isRemoteLocation && (
+              <div className="flex items-start gap-3 rounded border border-border bg-muted/20 p-4 text-sm">
+                <FileText className="size-4 text-primary mt-0.5 shrink-0" />
+                <div>
+                  <p className="font-medium text-foreground">
+                    {attributes.locationType === "FTP" ? "FTP Location" : "URL Location"}
+                  </p>
+                  <p className="mt-0.5 text-muted-foreground">
+                    You will enter the {attributes.locationType === "FTP" ? "FTP path" : "external URL"} for each image in the next step under Attributes.
+                  </p>
+                </div>
+              </div>
+            )}
 
             {/* Uploaded Files Preview */}
             {uploadedFiles.length > 0 && (
@@ -1407,10 +1452,7 @@ End of Metadata Export
               <div className="grid gap-4 md:grid-cols-2">
                 {uploadLevel === "product-color" && (
                   <div className="flex flex-col gap-2">
-                    <Label className="text-sm font-medium">
-                      Color Code
-                      <span className="ml-2 text-xs font-normal text-muted-foreground">(auto-populated)</span>
-                    </Label>
+                    <Label className="text-sm font-medium">Color Code</Label>
                     <Input
                       value={getAutoPopulatedData().colorCode}
                       readOnly
@@ -1420,10 +1462,7 @@ End of Metadata Export
                 )}
                 {uploadLevel === "gtin" && (
                   <div className="flex flex-col gap-2">
-                    <Label className="text-sm font-medium">
-                      GTIN
-                      <span className="ml-2 text-xs font-normal text-muted-foreground">(auto-populated)</span>
-                    </Label>
+                    <Label className="text-sm font-medium">GTIN</Label>
                     <Input
                       value={getAutoPopulatedData().selectedGtin}
                       readOnly
@@ -1499,33 +1538,22 @@ End of Metadata Export
                 </Select>
               </div>
 
+              {/* Location Type shown read-only — set in Step 2 */}
               <div className="flex flex-col gap-2">
-                <Label className="text-sm font-medium">
-                  Location Type <span className="text-destructive">*</span>
-                </Label>
-                <Select
-                  value={getCurrentAttributes().locationType}
-                  onValueChange={(value) => updateCurrentAttributes({ ...getCurrentAttributes(), locationType: value })}
-                >
-                  <SelectTrigger className="w-full bg-background">
-                    <SelectValue placeholder="Select location type..." />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {LOCATION_TYPE_OPTIONS.map((option) => (
-                      <SelectItem key={option.value} value={option.value}>
-                        {option.label}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
+                <Label className="text-sm font-medium">Location Type</Label>
+                <Input
+                  value={LOCATION_TYPE_OPTIONS.find(o => o.value === getCurrentAttributes().locationType)?.label || ""}
+                  readOnly
+                  className="bg-muted/30 text-foreground cursor-default"
+                />
               </div>
             </div>
 
-            {/* External Location - conditional */}
+            {/* External Location - shown when FTP or URL */}
             {(getCurrentAttributes().locationType === "FTP" || getCurrentAttributes().locationType === "URL") && (
               <div className="flex flex-col gap-2">
                 <Label className="text-sm font-medium">
-                  External Location <span className="text-destructive">**</span>
+                  External Location <span className="text-destructive">*</span>
                 </Label>
                 <Input
                   value={getCurrentAttributes().externalLocation}
@@ -1533,9 +1561,6 @@ End of Metadata Export
                   placeholder={getCurrentAttributes().locationType === "FTP" ? "ftp://..." : "https://..."}
                   className="bg-background"
                 />
-                <p className="text-xs text-muted-foreground">
-                  ** Required when Location Type is FTP or URL
-                </p>
               </div>
             )}
 
