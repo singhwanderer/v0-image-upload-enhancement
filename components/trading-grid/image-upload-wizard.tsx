@@ -207,6 +207,9 @@ export function ImageUploadWizard({
     angle: "",
     clippingPath: "",
     imageDescription: "",
+    pixelDensity: "",
+    height: "",
+    width: "",
   })
   
   // Per-image attributes (when applyToAll is false)
@@ -332,29 +335,39 @@ Color Code:          ${data.colorCode}
 Color Name:          ${data.colorName}`
     }
 
+    // resolve per-image attrs if applicable
+    const fileAttrs = applyToAll ? attributes : (attributesByImage[index] || attributes)
+    const imageLevelLabel = uploadLevel === "product"
+      ? "Product Level"
+      : uploadLevel === "gtin"
+      ? "Item Level (GTIN)"
+      : "Product + Color Code Level"
+
     content += `
 
 FILE INFORMATION
 ----------------------------------------
 File Name:           ${file.name}
-File Type:           JPG-JPEG
+File Type:           ${file.type || "JPG-JPEG"}
 File Size:           ${formatFileSize(file.size)}
 
 IMAGE ATTRIBUTES
 ----------------------------------------
-Image Type:          ${IMAGE_TYPE_OPTIONS.find(o => o.value === attributes.imageType)?.label || "SI-Still Shot"}
-Purpose:             ${PURPOSE_OPTIONS.find(o => o.value === attributes.purpose)?.label || "INT-Internet"}
-Orientation:         ${ORIENTATION_OPTIONS.find(o => o.value === attributes.orientation)?.label || "Not specified"}
-Location Type:       ${LOCATION_TYPE_OPTIONS.find(o => o.value === attributes.locationType)?.label || "Not specified"}
-External Location:   ${attributes.externalLocation || "N/A"}
-Pixel Density (DPI): 300
-Height:              1200
-Width:               800
-Image Style:         ${IMAGE_STYLE_OPTIONS.find(o => o.value === attributes.imageStyle)?.label || "Not specified"}
-Facing (GDSN):       ${FACING_OPTIONS.find(o => o.value === attributes.facing)?.label || "Not specified"}
-Angle:               ${ANGLE_OPTIONS.find(o => o.value === attributes.angle)?.label || "Not specified"}
-Clipping Path:       ${attributes.clippingPath || "N/A"}
-Image Description:   ${attributes.imageDescription || "N/A"}
+Image Level:         ${imageLevelLabel}
+Color Code:          ${data.colorCode || (uploadLevel === "gtin" ? data.selectedGtin : "N/A")}
+Image Type:          ${IMAGE_TYPE_OPTIONS.find(o => o.value === fileAttrs.imageType)?.label || "SI-Still Shot"}
+Purpose:             ${PURPOSE_OPTIONS.find(o => o.value === fileAttrs.purpose)?.label || "INT-Internet"}
+Orientation:         ${ORIENTATION_OPTIONS.find(o => o.value === fileAttrs.orientation)?.label || "Not specified"}
+Location Type:       ${LOCATION_TYPE_OPTIONS.find(o => o.value === fileAttrs.locationType)?.label || "Not specified"}
+External Location:   ${fileAttrs.externalLocation || "N/A"}
+Pixel Density (DPI): ${fileAttrs.pixelDensity || "N/A"}
+Height:              ${fileAttrs.height || "N/A"}
+Width:               ${fileAttrs.width || "N/A"}
+Image Style:         ${IMAGE_STYLE_OPTIONS.find(o => o.value === fileAttrs.imageStyle)?.label || "Not specified"}
+Facing (GDSN):       ${FACING_OPTIONS.find(o => o.value === fileAttrs.facing)?.label || "Not specified"}
+Angle:               ${ANGLE_OPTIONS.find(o => o.value === fileAttrs.angle)?.label || "Not specified"}
+Clipping Path:       ${fileAttrs.clippingPath || "N/A"}
+Image Description:   ${fileAttrs.imageDescription || "N/A"}
 
 DATES
 ----------------------------------------
@@ -550,100 +563,120 @@ End of Metadata Export
             </div>
 
             {/* Attributes Table */}
-            <div className="text-sm">
-              {uploadLevel === "product-color" && (
-                <div className="flex border-b border-border">
-                  <div className="w-40 bg-muted/20 px-3 py-2 font-medium text-foreground">Color Code:</div>
-                  <div className="flex-1 px-3 py-2 text-foreground">{data.colorCode}</div>
+            {(() => {
+              const activeFile = uploadedFiles[activeImageIndex]
+              const activeAttrs = applyToAll ? attributes : (attributesByImage[activeImageIndex] || attributes)
+              const imageLevelLabel = uploadLevel === "product"
+                ? "Product Level"
+                : uploadLevel === "gtin"
+                ? "Item Level (GTIN)"
+                : "Product + Color Code Level"
+              return (
+                <div className="text-sm">
+                  {/* Image Level - always shown, read-only derived from upload level */}
+                  <div className="flex border-b border-border">
+                    <div className="w-44 bg-muted/20 px-3 py-2 font-medium text-foreground">Image Level:</div>
+                    <div className="flex-1 px-3 py-2 text-foreground">{imageLevelLabel}</div>
+                  </div>
+                  {/* Color Code - shown for product-color and gtin levels (auto-populated) */}
+                  {(uploadLevel === "product-color" || uploadLevel === "gtin") && (
+                    <div className="flex border-b border-border">
+                      <div className="w-44 bg-muted/20 px-3 py-2 font-medium text-foreground">Color Code:</div>
+                      <div className="flex-1 px-3 py-2 text-foreground">
+                        {uploadLevel === "product-color" ? data.colorCode : data.selectedGtin}
+                        <span className="ml-2 text-xs text-muted-foreground">(auto-populated)</span>
+                      </div>
+                    </div>
+                  )}
+                  <div className="flex border-b border-border">
+                    <div className="w-44 bg-muted/20 px-3 py-2 font-medium text-foreground">File Name:</div>
+                    <div className="flex-1 px-3 py-2 text-foreground">{activeFile?.name || ""}</div>
+                  </div>
+                  <div className="flex border-b border-border">
+                    <div className="w-44 bg-muted/20 px-3 py-2 font-medium text-foreground">File Type:</div>
+                    <div className="flex-1 px-3 py-2 text-foreground">{activeFile?.type || "JPG-JPEG"}</div>
+                  </div>
+                  <div className="flex border-b border-border">
+                    <div className="w-44 bg-muted/20 px-3 py-2 font-medium text-foreground">File Size:</div>
+                    <div className="flex-1 px-3 py-2 text-foreground">{activeFile ? formatFileSize(activeFile.size) : ""}</div>
+                  </div>
+                  <div className="flex border-b border-border">
+                    <div className="w-44 bg-muted/20 px-3 py-2 font-medium text-tg-link">Image Type:</div>
+                    <div className="flex-1 px-3 py-2 text-tg-link">
+                      {IMAGE_TYPE_OPTIONS.find(o => o.value === activeAttrs.imageType)?.label || ""}
+                    </div>
+                  </div>
+                  <div className="flex border-b border-border">
+                    <div className="w-44 bg-muted/20 px-3 py-2 font-medium text-foreground">Purpose:</div>
+                    <div className="flex-1 px-3 py-2 text-tg-link">
+                      {PURPOSE_OPTIONS.find(o => o.value === activeAttrs.purpose)?.label || ""}
+                    </div>
+                  </div>
+                  <div className="flex border-b border-border">
+                    <div className="w-44 bg-muted/20 px-3 py-2 font-medium text-foreground">Orientation:</div>
+                    <div className="flex-1 px-3 py-2 text-foreground">
+                      {ORIENTATION_OPTIONS.find(o => o.value === activeAttrs.orientation)?.label || ""}
+                    </div>
+                  </div>
+                  <div className="flex border-b border-border">
+                    <div className="w-44 bg-muted/20 px-3 py-2 font-medium text-foreground">Location Type:</div>
+                    <div className="flex-1 px-3 py-2 text-foreground">
+                      {LOCATION_TYPE_OPTIONS.find(o => o.value === activeAttrs.locationType)?.label || ""}
+                    </div>
+                  </div>
+                  <div className="flex border-b border-border">
+                    <div className="w-44 bg-muted/20 px-3 py-2 font-medium text-foreground">External Location:</div>
+                    <div className="flex-1 px-3 py-2 text-foreground">{activeAttrs.externalLocation || ""}</div>
+                  </div>
+                  <div className="flex border-b border-border">
+                    <div className="w-44 bg-muted/20 px-3 py-2 font-medium text-foreground">Pixel Density (DPI):</div>
+                    <div className="flex-1 px-3 py-2 text-foreground">{activeAttrs.pixelDensity || ""}</div>
+                  </div>
+                  <div className="flex border-b border-border">
+                    <div className="w-44 bg-muted/20 px-3 py-2 font-medium text-foreground">Height:</div>
+                    <div className="flex-1 px-3 py-2 text-foreground">{activeAttrs.height || ""}</div>
+                  </div>
+                  <div className="flex border-b border-border">
+                    <div className="w-44 bg-muted/20 px-3 py-2 font-medium text-foreground">Width:</div>
+                    <div className="flex-1 px-3 py-2 text-foreground">{activeAttrs.width || ""}</div>
+                  </div>
+                  <div className="flex border-b border-border">
+                    <div className="w-44 bg-muted/20 px-3 py-2 font-medium text-foreground">Image Style:</div>
+                    <div className="flex-1 px-3 py-2 text-foreground">
+                      {IMAGE_STYLE_OPTIONS.find(o => o.value === activeAttrs.imageStyle)?.label || ""}
+                    </div>
+                  </div>
+                  <div className="flex border-b border-border">
+                    <div className="w-44 bg-muted/20 px-3 py-2 font-medium text-foreground">Facing (GDSN):</div>
+                    <div className="flex-1 px-3 py-2 text-foreground">
+                      {FACING_OPTIONS.find(o => o.value === activeAttrs.facing)?.label || ""}
+                    </div>
+                  </div>
+                  <div className="flex border-b border-border">
+                    <div className="w-44 bg-muted/20 px-3 py-2 font-medium text-foreground">Angle:</div>
+                    <div className="flex-1 px-3 py-2 text-foreground">
+                      {ANGLE_OPTIONS.find(o => o.value === activeAttrs.angle)?.label || ""}
+                    </div>
+                  </div>
+                  <div className="flex border-b border-border">
+                    <div className="w-44 bg-muted/20 px-3 py-2 font-medium text-foreground">Clipping Path:</div>
+                    <div className="flex-1 px-3 py-2 text-foreground">{activeAttrs.clippingPath || ""}</div>
+                  </div>
+                  <div className="flex border-b border-border">
+                    <div className="w-44 bg-muted/20 px-3 py-2 font-medium text-foreground">Image Description:</div>
+                    <div className="flex-1 px-3 py-2 text-foreground">{activeAttrs.imageDescription || ""}</div>
+                  </div>
+                  <div className="flex border-b border-border">
+                    <div className="w-44 bg-muted/20 px-3 py-2 font-medium text-foreground">Create Date:</div>
+                    <div className="flex-1 px-3 py-2 text-foreground">{currentDate}</div>
+                  </div>
+                  <div className="flex">
+                    <div className="w-44 bg-muted/20 px-3 py-2 font-medium text-foreground">Last Update Date:</div>
+                    <div className="flex-1 px-3 py-2 text-foreground">{currentDate}</div>
+                  </div>
                 </div>
-              )}
-              <div className="flex border-b border-border">
-                <div className="w-40 bg-muted/20 px-3 py-2 font-medium text-foreground">File Name:</div>
-                <div className="flex-1 px-3 py-2 text-foreground">{uploadedFiles[activeImageIndex]?.name || "testMS.jpeg"}</div>
-              </div>
-              <div className="flex border-b border-border">
-                <div className="w-40 bg-muted/20 px-3 py-2 font-medium text-foreground">File Type:</div>
-                <div className="flex-1 px-3 py-2 text-foreground">JPG-JPEG</div>
-              </div>
-              <div className="flex border-b border-border">
-                <div className="w-40 bg-muted/20 px-3 py-2 font-medium text-tg-link">Image Type:</div>
-                <div className="flex-1 px-3 py-2 text-tg-link">
-                  {IMAGE_TYPE_OPTIONS.find(o => o.value === attributes.imageType)?.label || "SI-Still Shot"}
-                </div>
-              </div>
-              <div className="flex border-b border-border">
-                <div className="w-40 bg-muted/20 px-3 py-2 font-medium text-foreground">Purpose:</div>
-                <div className="flex-1 px-3 py-2 text-tg-link">
-                  {PURPOSE_OPTIONS.find(o => o.value === attributes.purpose)?.label || "INT-Internet"}
-                </div>
-              </div>
-              <div className="flex border-b border-border">
-                <div className="w-40 bg-muted/20 px-3 py-2 font-medium text-foreground">Orientation:</div>
-                <div className="flex-1 px-3 py-2 text-foreground">
-                  {ORIENTATION_OPTIONS.find(o => o.value === attributes.orientation)?.label || "SDR-Side Right"}
-                </div>
-              </div>
-              <div className="flex border-b border-border">
-                <div className="w-40 bg-muted/20 px-3 py-2 font-medium text-foreground">Location Type:</div>
-                <div className="flex-1 px-3 py-2 text-foreground">
-                  {LOCATION_TYPE_OPTIONS.find(o => o.value === attributes.locationType)?.label || "ACL"}
-                </div>
-              </div>
-              <div className="flex border-b border-border">
-                <div className="w-40 bg-muted/20 px-3 py-2 font-medium text-foreground">External Location:</div>
-                <div className="flex-1 px-3 py-2 text-foreground">{attributes.externalLocation || ""}</div>
-              </div>
-              <div className="flex border-b border-border">
-                <div className="w-40 bg-muted/20 px-3 py-2 font-medium text-foreground">File Size:</div>
-                <div className="flex-1 px-3 py-2 text-foreground">{uploadedFiles[activeImageIndex] ? formatFileSize(uploadedFiles[activeImageIndex].size) : ""}</div>
-              </div>
-              <div className="flex border-b border-border">
-                <div className="w-40 bg-muted/20 px-3 py-2 font-medium text-foreground">Pixel Density (DPI):</div>
-                <div className="flex-1 px-3 py-2 text-foreground">300</div>
-              </div>
-              <div className="flex border-b border-border">
-                <div className="w-40 bg-muted/20 px-3 py-2 font-medium text-foreground">Height:</div>
-                <div className="flex-1 px-3 py-2 text-foreground">1200</div>
-              </div>
-              <div className="flex border-b border-border">
-                <div className="w-40 bg-muted/20 px-3 py-2 font-medium text-foreground">Width:</div>
-                <div className="flex-1 px-3 py-2 text-foreground">800</div>
-              </div>
-              <div className="flex border-b border-border">
-                <div className="w-40 bg-muted/20 px-3 py-2 font-medium text-foreground">Image Style:</div>
-                <div className="flex-1 px-3 py-2 text-foreground">
-                  {IMAGE_STYLE_OPTIONS.find(o => o.value === attributes.imageStyle)?.label || ""}
-                </div>
-              </div>
-              <div className="flex border-b border-border">
-                <div className="w-40 bg-muted/20 px-3 py-2 font-medium text-foreground">Facing (GDSN):</div>
-                <div className="flex-1 px-3 py-2 text-foreground">
-                  {FACING_OPTIONS.find(o => o.value === attributes.facing)?.label || ""}
-                </div>
-              </div>
-              <div className="flex border-b border-border">
-                <div className="w-40 bg-muted/20 px-3 py-2 font-medium text-foreground">Angle:</div>
-                <div className="flex-1 px-3 py-2 text-foreground">
-                  {ANGLE_OPTIONS.find(o => o.value === attributes.angle)?.label || ""}
-                </div>
-              </div>
-              <div className="flex border-b border-border">
-                <div className="w-40 bg-muted/20 px-3 py-2 font-medium text-foreground">Clipping Path:</div>
-                <div className="flex-1 px-3 py-2 text-foreground">{attributes.clippingPath || ""}</div>
-              </div>
-              <div className="flex border-b border-border">
-                <div className="w-40 bg-muted/20 px-3 py-2 font-medium text-foreground">Image Description:</div>
-                <div className="flex-1 px-3 py-2 text-foreground">{attributes.imageDescription || ""}</div>
-              </div>
-              <div className="flex border-b border-border">
-                <div className="w-40 bg-muted/20 px-3 py-2 font-medium text-foreground">Create Date</div>
-                <div className="flex-1 px-3 py-2 text-foreground">{currentDate}</div>
-              </div>
-              <div className="flex">
-                <div className="w-40 bg-muted/20 px-3 py-2 font-medium text-foreground">Last Update Date</div>
-                <div className="flex-1 px-3 py-2 text-foreground">{currentDate}</div>
-              </div>
-            </div>
+              )
+            })()}
           </div>
 
           {/* Right Panel - Image Preview */}
@@ -1369,6 +1402,38 @@ End of Metadata Export
               </span>
             </div>
 
+            {/* Auto-populated fields (read-only) */}
+            {(uploadLevel === "product-color" || uploadLevel === "gtin") && (
+              <div className="grid gap-4 md:grid-cols-2">
+                {uploadLevel === "product-color" && (
+                  <div className="flex flex-col gap-2">
+                    <Label className="text-sm font-medium">
+                      Color Code
+                      <span className="ml-2 text-xs font-normal text-muted-foreground">(auto-populated)</span>
+                    </Label>
+                    <Input
+                      value={getAutoPopulatedData().colorCode}
+                      readOnly
+                      className="bg-muted/30 text-foreground cursor-default"
+                    />
+                  </div>
+                )}
+                {uploadLevel === "gtin" && (
+                  <div className="flex flex-col gap-2">
+                    <Label className="text-sm font-medium">
+                      GTIN
+                      <span className="ml-2 text-xs font-normal text-muted-foreground">(auto-populated)</span>
+                    </Label>
+                    <Input
+                      value={getAutoPopulatedData().selectedGtin}
+                      readOnly
+                      className="bg-muted/30 text-foreground cursor-default"
+                    />
+                  </div>
+                )}
+              </div>
+            )}
+
             {/* Required Attributes */}
             <div className="grid gap-4 md:grid-cols-2">
               <div className="flex flex-col gap-2">
@@ -1474,30 +1539,45 @@ End of Metadata Export
               </div>
             )}
 
-            {/* Auto-detected Metadata */}
-            {uploadedFiles.length > 0 && (
-              <div className="rounded border border-border bg-tg-table-header p-3 text-sm">
-                <div className="mb-2 font-medium text-foreground">Auto-detected from File</div>
-                <div className="grid grid-cols-2 gap-x-8 gap-y-1 md:grid-cols-4">
-                  <div>
-                    <span className="text-muted-foreground">File Type:</span>{" "}
-                    <span className="text-foreground">JPG-JPEG</span>
-                  </div>
-                  <div>
-                    <span className="text-muted-foreground">DPI:</span>{" "}
-                    <span className="text-foreground">300</span>
-                  </div>
-                  <div>
-                    <span className="text-muted-foreground">Height:</span>{" "}
-                    <span className="text-foreground">1200px</span>
-                  </div>
-                  <div>
-                    <span className="text-muted-foreground">Width:</span>{" "}
-                    <span className="text-foreground">800px</span>
-                  </div>
+            {/* File Dimensions & Density */}
+            <div className="flex flex-col gap-2">
+              <Label className="text-sm font-medium">File Dimensions &amp; Density</Label>
+              <div className="grid gap-4 md:grid-cols-3">
+                <div className="flex flex-col gap-2">
+                  <Label className="text-xs text-muted-foreground">Pixel Density (DPI)</Label>
+                  <Input
+                    value={getCurrentAttributes().pixelDensity}
+                    onChange={(e) => updateCurrentAttributes({ ...getCurrentAttributes(), pixelDensity: e.target.value })}
+                    placeholder="e.g. 300"
+                    className="bg-background"
+                    type="number"
+                    min="1"
+                  />
+                </div>
+                <div className="flex flex-col gap-2">
+                  <Label className="text-xs text-muted-foreground">Height (px)</Label>
+                  <Input
+                    value={getCurrentAttributes().height}
+                    onChange={(e) => updateCurrentAttributes({ ...getCurrentAttributes(), height: e.target.value })}
+                    placeholder="e.g. 1200"
+                    className="bg-background"
+                    type="number"
+                    min="1"
+                  />
+                </div>
+                <div className="flex flex-col gap-2">
+                  <Label className="text-xs text-muted-foreground">Width (px)</Label>
+                  <Input
+                    value={getCurrentAttributes().width}
+                    onChange={(e) => updateCurrentAttributes({ ...getCurrentAttributes(), width: e.target.value })}
+                    placeholder="e.g. 800"
+                    className="bg-background"
+                    type="number"
+                    min="1"
+                  />
                 </div>
               </div>
-            )}
+            </div>
 
             {/* Advanced Attributes (Collapsible) */}
             <Collapsible open={advancedOpen} onOpenChange={setAdvancedOpen}>
