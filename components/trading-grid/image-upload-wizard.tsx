@@ -193,6 +193,7 @@ export function ImageUploadWizard({
   const [showProductMedia, setShowProductMedia] = useState(false)
   const [showDownloadModal, setShowDownloadModal] = useState(false)
   const [downloadComplete, setDownloadComplete] = useState(false)
+  const [activeImageIndex, setActiveImageIndex] = useState(0)
   
   // Form state for attributes
   const [attributes, setAttributes] = useState({
@@ -206,13 +207,41 @@ export function ImageUploadWizard({
     angle: "",
     clippingPath: "",
     imageDescription: "",
+    pixelDensity: "",
+    height: "",
+    width: "",
   })
+  
+  // Per-image attributes (when applyToAll is false)
+  const [attributesByImage, setAttributesByImage] = useState<{ [key: number]: typeof attributes }>({})
+  const [activeAttributeImageIndex, setActiveAttributeImageIndex] = useState(0)
 
   const steps = [
     { number: 1, title: "Upload Level", description: "Choose assignment level" },
     { number: 2, title: "Target & Files", description: "Select target and upload files" },
     { number: 3, title: "Attributes", description: "Set image attributes" },
   ]
+
+  // Helper function to get current attributes based on mode
+  const getCurrentAttributes = () => {
+    if (applyToAll) {
+      return attributes
+    } else {
+      return attributesByImage[activeAttributeImageIndex] || attributes
+    }
+  }
+
+  // Helper function to update current attributes
+  const updateCurrentAttributes = (newAttrs: typeof attributes) => {
+    if (applyToAll) {
+      setAttributes(newAttrs)
+    } else {
+      setAttributesByImage(prev => ({
+        ...prev,
+        [activeAttributeImageIndex]: newAttrs
+      }))
+    }
+  }
 
   const handleDragOver = useCallback((e: React.DragEvent) => {
     e.preventDefault()
@@ -306,29 +335,39 @@ Color Code:          ${data.colorCode}
 Color Name:          ${data.colorName}`
     }
 
+    // resolve per-image attrs if applicable
+    const fileAttrs = applyToAll ? attributes : (attributesByImage[index] || attributes)
+    const imageLevelLabel = uploadLevel === "product"
+      ? "Product Level"
+      : uploadLevel === "gtin"
+      ? "Item Level (GTIN)"
+      : "Product + Color Code Level"
+
     content += `
 
 FILE INFORMATION
 ----------------------------------------
 File Name:           ${file.name}
-File Type:           JPG-JPEG
+File Type:           ${file.type || "JPG-JPEG"}
 File Size:           ${formatFileSize(file.size)}
 
 IMAGE ATTRIBUTES
 ----------------------------------------
-Image Type:          ${IMAGE_TYPE_OPTIONS.find(o => o.value === attributes.imageType)?.label || "SI-Still Shot"}
-Purpose:             ${PURPOSE_OPTIONS.find(o => o.value === attributes.purpose)?.label || "INT-Internet"}
-Orientation:         ${ORIENTATION_OPTIONS.find(o => o.value === attributes.orientation)?.label || "Not specified"}
-Location Type:       ${LOCATION_TYPE_OPTIONS.find(o => o.value === attributes.locationType)?.label || "Not specified"}
-External Location:   ${attributes.externalLocation || "N/A"}
-Pixel Density (DPI): 300
-Height:              1200
-Width:               800
-Image Style:         ${IMAGE_STYLE_OPTIONS.find(o => o.value === attributes.imageStyle)?.label || "Not specified"}
-Facing (GDSN):       ${FACING_OPTIONS.find(o => o.value === attributes.facing)?.label || "Not specified"}
-Angle:               ${ANGLE_OPTIONS.find(o => o.value === attributes.angle)?.label || "Not specified"}
-Clipping Path:       ${attributes.clippingPath || "N/A"}
-Image Description:   ${attributes.imageDescription || "N/A"}
+Image Level:         ${imageLevelLabel}
+Color Code:          ${data.colorCode || (uploadLevel === "gtin" ? data.selectedGtin : "N/A")}
+Image Type:          ${IMAGE_TYPE_OPTIONS.find(o => o.value === fileAttrs.imageType)?.label || "SI-Still Shot"}
+Purpose:             ${PURPOSE_OPTIONS.find(o => o.value === fileAttrs.purpose)?.label || "INT-Internet"}
+Orientation:         ${ORIENTATION_OPTIONS.find(o => o.value === fileAttrs.orientation)?.label || "Not specified"}
+Location Type:       ${LOCATION_TYPE_OPTIONS.find(o => o.value === fileAttrs.locationType)?.label || "Not specified"}
+External Location:   ${fileAttrs.externalLocation || "N/A"}
+Pixel Density (DPI): ${fileAttrs.pixelDensity || "N/A"}
+Height:              ${fileAttrs.height || "N/A"}
+Width:               ${fileAttrs.width || "N/A"}
+Image Style:         ${IMAGE_STYLE_OPTIONS.find(o => o.value === fileAttrs.imageStyle)?.label || "Not specified"}
+Facing (GDSN):       ${FACING_OPTIONS.find(o => o.value === fileAttrs.facing)?.label || "Not specified"}
+Angle:               ${ANGLE_OPTIONS.find(o => o.value === fileAttrs.angle)?.label || "Not specified"}
+Clipping Path:       ${fileAttrs.clippingPath || "N/A"}
+Image Description:   ${fileAttrs.imageDescription || "N/A"}
 
 DATES
 ----------------------------------------
@@ -348,11 +387,13 @@ End of Metadata Export
   }
 
   const canProceedStep1 = uploadLevel !== undefined
-  const canProceedStep2 = selectedSelectionCode && selectedProduct && uploadedFiles.length > 0 && 
+  const isRemoteLocation = attributes.locationType === "FTP" || attributes.locationType === "URL"
+  const canProceedStep2 = selectedSelectionCode && selectedProduct && attributes.locationType &&
+    (isRemoteLocation || uploadedFiles.length > 0) &&
     (uploadLevel === "product" || 
      (uploadLevel === "product-color" && selectedColorCode) ||
      (uploadLevel === "gtin" && selectedGtin))
-  const canProceedStep3 = attributes.imageType && attributes.purpose && attributes.orientation && attributes.locationType
+  const canProceedStep3 = attributes.imageType && attributes.purpose && attributes.orientation
 
   const handleNext = () => {
     if (currentStep < 3) {
@@ -524,127 +565,162 @@ End of Metadata Export
             </div>
 
             {/* Attributes Table */}
-            <div className="text-sm">
-              {uploadLevel === "product-color" && (
-                <div className="flex border-b border-border">
-                  <div className="w-40 bg-muted/20 px-3 py-2 font-medium text-foreground">Color Code:</div>
-                  <div className="flex-1 px-3 py-2 text-foreground">{data.colorCode}</div>
+            {(() => {
+              const activeFile = uploadedFiles[activeImageIndex]
+              const activeAttrs = applyToAll ? attributes : (attributesByImage[activeImageIndex] || attributes)
+              const imageLevelLabel = uploadLevel === "product"
+                ? "Product Level"
+                : uploadLevel === "gtin"
+                ? "Item Level (GTIN)"
+                : "Product + Color Code Level"
+              return (
+                <div className="text-sm">
+                  {/* Image Level - always shown, read-only derived from upload level */}
+                  <div className="flex border-b border-border">
+                    <div className="w-44 bg-muted/20 px-3 py-2 font-medium text-foreground">Image Level:</div>
+                    <div className="flex-1 px-3 py-2 text-foreground">{imageLevelLabel}</div>
+                  </div>
+                  {/* Color Code - only shown for product-color level */}
+                  {uploadLevel === "product-color" && (
+                    <div className="flex border-b border-border">
+                      <div className="w-44 bg-muted/20 px-3 py-2 font-medium text-foreground">Color Code:</div>
+                      <div className="flex-1 px-3 py-2 text-foreground">{data.colorCode}</div>
+                    </div>
+                  )}
+                  <div className="flex border-b border-border">
+                    <div className="w-44 bg-muted/20 px-3 py-2 font-medium text-foreground">File Name:</div>
+                    <div className="flex-1 px-3 py-2 text-foreground">{activeFile?.name || ""}</div>
+                  </div>
+                  <div className="flex border-b border-border">
+                    <div className="w-44 bg-muted/20 px-3 py-2 font-medium text-foreground">File Type:</div>
+                    <div className="flex-1 px-3 py-2 text-foreground">{activeFile?.type || "JPG-JPEG"}</div>
+                  </div>
+                  <div className="flex border-b border-border">
+                    <div className="w-44 bg-muted/20 px-3 py-2 font-medium text-foreground">File Size:</div>
+                    <div className="flex-1 px-3 py-2 text-foreground">{activeFile ? formatFileSize(activeFile.size) : ""}</div>
+                  </div>
+                  <div className="flex border-b border-border">
+                    <div className="w-44 bg-muted/20 px-3 py-2 font-medium text-tg-link">Image Type:</div>
+                    <div className="flex-1 px-3 py-2 text-tg-link">
+                      {IMAGE_TYPE_OPTIONS.find(o => o.value === activeAttrs.imageType)?.label || ""}
+                    </div>
+                  </div>
+                  <div className="flex border-b border-border">
+                    <div className="w-44 bg-muted/20 px-3 py-2 font-medium text-foreground">Purpose:</div>
+                    <div className="flex-1 px-3 py-2 text-tg-link">
+                      {PURPOSE_OPTIONS.find(o => o.value === activeAttrs.purpose)?.label || ""}
+                    </div>
+                  </div>
+                  <div className="flex border-b border-border">
+                    <div className="w-44 bg-muted/20 px-3 py-2 font-medium text-foreground">Orientation:</div>
+                    <div className="flex-1 px-3 py-2 text-foreground">
+                      {ORIENTATION_OPTIONS.find(o => o.value === activeAttrs.orientation)?.label || ""}
+                    </div>
+                  </div>
+                  <div className="flex border-b border-border">
+                    <div className="w-44 bg-muted/20 px-3 py-2 font-medium text-foreground">Location Type:</div>
+                    <div className="flex-1 px-3 py-2 text-foreground">
+                      {LOCATION_TYPE_OPTIONS.find(o => o.value === activeAttrs.locationType)?.label || ""}
+                    </div>
+                  </div>
+                  <div className="flex border-b border-border">
+                    <div className="w-44 bg-muted/20 px-3 py-2 font-medium text-foreground">External Location:</div>
+                    <div className="flex-1 px-3 py-2 text-foreground">{activeAttrs.externalLocation || ""}</div>
+                  </div>
+                  <div className="flex border-b border-border">
+                    <div className="w-44 bg-muted/20 px-3 py-2 font-medium text-foreground">Pixel Density (DPI):</div>
+                    <div className="flex-1 px-3 py-2 text-foreground">{activeAttrs.pixelDensity || ""}</div>
+                  </div>
+                  <div className="flex border-b border-border">
+                    <div className="w-44 bg-muted/20 px-3 py-2 font-medium text-foreground">Height:</div>
+                    <div className="flex-1 px-3 py-2 text-foreground">{activeAttrs.height || ""}</div>
+                  </div>
+                  <div className="flex border-b border-border">
+                    <div className="w-44 bg-muted/20 px-3 py-2 font-medium text-foreground">Width:</div>
+                    <div className="flex-1 px-3 py-2 text-foreground">{activeAttrs.width || ""}</div>
+                  </div>
+                  <div className="flex border-b border-border">
+                    <div className="w-44 bg-muted/20 px-3 py-2 font-medium text-foreground">Image Style:</div>
+                    <div className="flex-1 px-3 py-2 text-foreground">
+                      {IMAGE_STYLE_OPTIONS.find(o => o.value === activeAttrs.imageStyle)?.label || ""}
+                    </div>
+                  </div>
+                  <div className="flex border-b border-border">
+                    <div className="w-44 bg-muted/20 px-3 py-2 font-medium text-foreground">Facing (GDSN):</div>
+                    <div className="flex-1 px-3 py-2 text-foreground">
+                      {FACING_OPTIONS.find(o => o.value === activeAttrs.facing)?.label || ""}
+                    </div>
+                  </div>
+                  <div className="flex border-b border-border">
+                    <div className="w-44 bg-muted/20 px-3 py-2 font-medium text-foreground">Angle:</div>
+                    <div className="flex-1 px-3 py-2 text-foreground">
+                      {ANGLE_OPTIONS.find(o => o.value === activeAttrs.angle)?.label || ""}
+                    </div>
+                  </div>
+                  <div className="flex border-b border-border">
+                    <div className="w-44 bg-muted/20 px-3 py-2 font-medium text-foreground">Clipping Path:</div>
+                    <div className="flex-1 px-3 py-2 text-foreground">{activeAttrs.clippingPath || ""}</div>
+                  </div>
+                  <div className="flex border-b border-border">
+                    <div className="w-44 bg-muted/20 px-3 py-2 font-medium text-foreground">Image Description:</div>
+                    <div className="flex-1 px-3 py-2 text-foreground">{activeAttrs.imageDescription || ""}</div>
+                  </div>
+                  <div className="flex border-b border-border">
+                    <div className="w-44 bg-muted/20 px-3 py-2 font-medium text-foreground">Create Date:</div>
+                    <div className="flex-1 px-3 py-2 text-foreground">{currentDate}</div>
+                  </div>
+                  <div className="flex">
+                    <div className="w-44 bg-muted/20 px-3 py-2 font-medium text-foreground">Last Update Date:</div>
+                    <div className="flex-1 px-3 py-2 text-foreground">{currentDate}</div>
+                  </div>
                 </div>
-              )}
-              <div className="flex border-b border-border">
-                <div className="w-40 bg-muted/20 px-3 py-2 font-medium text-foreground">File Name:</div>
-                <div className="flex-1 px-3 py-2 text-foreground">{uploadedFiles[0]?.name || "testMS.jpeg"}</div>
-              </div>
-              <div className="flex border-b border-border">
-                <div className="w-40 bg-muted/20 px-3 py-2 font-medium text-foreground">File Type:</div>
-                <div className="flex-1 px-3 py-2 text-foreground">JPG-JPEG</div>
-              </div>
-              <div className="flex border-b border-border">
-                <div className="w-40 bg-muted/20 px-3 py-2 font-medium text-tg-link">Image Type:</div>
-                <div className="flex-1 px-3 py-2 text-tg-link">
-                  {IMAGE_TYPE_OPTIONS.find(o => o.value === attributes.imageType)?.label || "SI-Still Shot"}
-                </div>
-              </div>
-              <div className="flex border-b border-border">
-                <div className="w-40 bg-muted/20 px-3 py-2 font-medium text-foreground">Purpose:</div>
-                <div className="flex-1 px-3 py-2 text-tg-link">
-                  {PURPOSE_OPTIONS.find(o => o.value === attributes.purpose)?.label || "INT-Internet"}
-                </div>
-              </div>
-              <div className="flex border-b border-border">
-                <div className="w-40 bg-muted/20 px-3 py-2 font-medium text-foreground">Orientation:</div>
-                <div className="flex-1 px-3 py-2 text-foreground">
-                  {ORIENTATION_OPTIONS.find(o => o.value === attributes.orientation)?.label || "SDR-Side Right"}
-                </div>
-              </div>
-              <div className="flex border-b border-border">
-                <div className="w-40 bg-muted/20 px-3 py-2 font-medium text-foreground">Location Type:</div>
-                <div className="flex-1 px-3 py-2 text-foreground">
-                  {LOCATION_TYPE_OPTIONS.find(o => o.value === attributes.locationType)?.label || "ACL"}
-                </div>
-              </div>
-              <div className="flex border-b border-border">
-                <div className="w-40 bg-muted/20 px-3 py-2 font-medium text-foreground">External Location:</div>
-                <div className="flex-1 px-3 py-2 text-foreground">{attributes.externalLocation || ""}</div>
-              </div>
-              <div className="flex border-b border-border">
-                <div className="w-40 bg-muted/20 px-3 py-2 font-medium text-foreground">File Size:</div>
-                <div className="flex-1 px-3 py-2 text-foreground">{uploadedFiles[0] ? formatFileSize(uploadedFiles[0].size) : ""}</div>
-              </div>
-              <div className="flex border-b border-border">
-                <div className="w-40 bg-muted/20 px-3 py-2 font-medium text-foreground">Pixel Density (DPI):</div>
-                <div className="flex-1 px-3 py-2 text-foreground">300</div>
-              </div>
-              <div className="flex border-b border-border">
-                <div className="w-40 bg-muted/20 px-3 py-2 font-medium text-foreground">Height:</div>
-                <div className="flex-1 px-3 py-2 text-foreground">1200</div>
-              </div>
-              <div className="flex border-b border-border">
-                <div className="w-40 bg-muted/20 px-3 py-2 font-medium text-foreground">Width:</div>
-                <div className="flex-1 px-3 py-2 text-foreground">800</div>
-              </div>
-              <div className="flex border-b border-border">
-                <div className="w-40 bg-muted/20 px-3 py-2 font-medium text-foreground">Image Style:</div>
-                <div className="flex-1 px-3 py-2 text-foreground">
-                  {IMAGE_STYLE_OPTIONS.find(o => o.value === attributes.imageStyle)?.label || ""}
-                </div>
-              </div>
-              <div className="flex border-b border-border">
-                <div className="w-40 bg-muted/20 px-3 py-2 font-medium text-foreground">Facing (GDSN):</div>
-                <div className="flex-1 px-3 py-2 text-foreground">
-                  {FACING_OPTIONS.find(o => o.value === attributes.facing)?.label || ""}
-                </div>
-              </div>
-              <div className="flex border-b border-border">
-                <div className="w-40 bg-muted/20 px-3 py-2 font-medium text-foreground">Angle:</div>
-                <div className="flex-1 px-3 py-2 text-foreground">
-                  {ANGLE_OPTIONS.find(o => o.value === attributes.angle)?.label || ""}
-                </div>
-              </div>
-              <div className="flex border-b border-border">
-                <div className="w-40 bg-muted/20 px-3 py-2 font-medium text-foreground">Clipping Path:</div>
-                <div className="flex-1 px-3 py-2 text-foreground">{attributes.clippingPath || ""}</div>
-              </div>
-              <div className="flex border-b border-border">
-                <div className="w-40 bg-muted/20 px-3 py-2 font-medium text-foreground">Image Description:</div>
-                <div className="flex-1 px-3 py-2 text-foreground">{attributes.imageDescription || ""}</div>
-              </div>
-              <div className="flex border-b border-border">
-                <div className="w-40 bg-muted/20 px-3 py-2 font-medium text-foreground">Create Date</div>
-                <div className="flex-1 px-3 py-2 text-foreground">{currentDate}</div>
-              </div>
-              <div className="flex">
-                <div className="w-40 bg-muted/20 px-3 py-2 font-medium text-foreground">Last Update Date</div>
-                <div className="flex-1 px-3 py-2 text-foreground">{currentDate}</div>
-              </div>
-            </div>
+              )
+            })()}
           </div>
 
           {/* Right Panel - Image Preview */}
-          <div className="border border-border bg-card">
+          <div className="border border-border bg-card flex flex-col">
             {/* Panel Header */}
             <div className="flex items-center gap-2 border-b border-border bg-muted/30 px-3 py-2">
               <div className="flex items-center gap-1 border border-border bg-card p-0.5">
                 <button className="p-1 hover:bg-muted" title="Zoom In">
                   <ZoomIn className="size-3 text-muted-foreground" />
                 </button>
-                <button className="p-1 hover:bg-muted" title="Download">
+                <button 
+                  onClick={() => {
+                    if (uploadedFiles[activeImageIndex]) {
+                      const link = document.createElement('a')
+                      link.href = uploadedFiles[activeImageIndex].preview
+                      link.download = uploadedFiles[activeImageIndex].name
+                      link.click()
+                    }
+                  }}
+                  className="p-1 hover:bg-muted" 
+                  title="Download current image"
+                >
                   <Download className="size-3 text-muted-foreground" />
                 </button>
                 <button className="p-1 hover:bg-muted" title="Edit">
                   <FileImage className="size-3 text-muted-foreground" />
                 </button>
               </div>
+              {uploadedFiles.length > 1 && (
+                <div className="ml-auto text-xs text-muted-foreground">
+                  {activeImageIndex + 1} / {uploadedFiles.length}
+                </div>
+              )}
             </div>
 
             {/* Image Preview */}
-            <div className="flex items-center justify-center p-4 min-h-[400px] bg-white">
-              {uploadedFiles[0] ? (
-                <img 
-                  src={uploadedFiles[0].preview} 
-                  alt="Uploaded product" 
-                  className="max-w-full max-h-[380px] object-contain"
-                />
+            <div className="flex-1 flex flex-col items-center justify-center p-4 min-h-[400px] bg-white">
+              {uploadedFiles[activeImageIndex] ? (
+                <div className="flex flex-col items-center justify-center gap-4 w-full h-full">
+                  <img 
+                    src={uploadedFiles[activeImageIndex].preview} 
+                    alt="Uploaded product" 
+                    className="max-w-full max-h-[320px] object-contain"
+                  />
+                </div>
               ) : (
                 <div className="flex flex-col items-center justify-center text-center p-8 border-2 border-dashed border-border rounded">
                   <FileImage className="size-16 text-muted-foreground mb-4" />
@@ -652,6 +728,32 @@ End of Metadata Export
                 </div>
               )}
             </div>
+
+            {/* Thumbnail Strip */}
+            {uploadedFiles.length > 1 && (
+              <div className="border-t border-border bg-muted/20 p-2">
+                <div className="flex gap-2 overflow-x-auto">
+                  {uploadedFiles.map((file, idx) => (
+                    <button
+                      key={file.id}
+                      onClick={() => setActiveImageIndex(idx)}
+                      className={cn(
+                        "flex-shrink-0 rounded border-2 overflow-hidden transition-all",
+                        activeImageIndex === idx 
+                          ? "border-primary" 
+                          : "border-border hover:border-primary/50"
+                      )}
+                    >
+                      <img
+                        src={file.preview}
+                        alt={`Image ${idx + 1}`}
+                        className="size-16 object-cover"
+                      />
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
         </div>
 
@@ -661,24 +763,7 @@ End of Metadata Export
             variant="outline" 
             onClick={() => {
               setShowProductMedia(false)
-              setCurrentStep(1)
-              setUploadedFiles([])
-              setSelectedSelectionCode("")
-              setSelectedProduct("")
-              setSelectedColorCode("")
-              setSelectedGtin("")
-              setAttributes({
-                imageType: "SI",
-                purpose: "INT",
-                orientation: "",
-                locationType: "",
-                externalLocation: "",
-                imageStyle: "",
-                facing: "",
-                angle: "",
-                clippingPath: "",
-                imageDescription: "",
-              })
+              setCurrentStep(2)
             }}
           >
             Upload More Images
@@ -1136,51 +1221,97 @@ End of Metadata Export
               </div>
             )}
 
-            {/* File Upload Zone */}
-            <div className="flex flex-col gap-4">
+            {/* Location Type - must be chosen before showing upload zone */}
+            <div className="flex flex-col gap-2">
               <Label className="text-sm font-medium">
-                Upload Files <span className="text-destructive">*</span>
+                Location Type <span className="text-destructive">*</span>
               </Label>
-              <div
-                className={cn(
-                  "flex flex-col items-center justify-center gap-4 rounded-lg border-2 border-dashed p-8 transition-colors",
-                  isDragging
-                    ? "border-primary bg-primary/5"
-                    : "border-border bg-muted/20 hover:border-primary/50"
-                )}
-                onDragOver={handleDragOver}
-                onDragLeave={handleDragLeave}
-                onDrop={handleDrop}
-              >
-                <div className="flex size-12 items-center justify-center rounded-full bg-muted">
-                  <Upload className="size-6 text-muted-foreground" />
-                </div>
-                <div className="text-center">
-                  <p className="text-sm font-medium text-foreground">
-                    Drag and drop images here
-                  </p>
-                  <p className="mt-1 text-xs text-muted-foreground">
-                    or click to browse files
-                  </p>
-                </div>
-                <input
-                  type="file"
-                  accept="image/jpeg,image/png,image/tiff"
-                  multiple
-                  className="hidden"
-                  id="file-upload"
-                  onChange={handleFileSelect}
-                />
-                <label htmlFor="file-upload">
-                  <Button variant="outline" size="sm" asChild>
-                    <span className="cursor-pointer">Browse Files</span>
-                  </Button>
-                </label>
-                <p className="text-xs text-muted-foreground">
-                  JPG, PNG, TIFF - Max 10 MB each
-                </p>
+              <div className="grid gap-3 md:grid-cols-3">
+                {LOCATION_TYPE_OPTIONS.map((option) => (
+                  <button
+                    key={option.value}
+                    type="button"
+                    onClick={() => updateCurrentAttributes({ ...getCurrentAttributes(), locationType: option.value })}
+                    className={cn(
+                      "flex flex-col items-start gap-1 rounded border-2 p-3 text-left transition-colors",
+                      attributes.locationType === option.value
+                        ? "border-primary bg-primary/5"
+                        : "border-border bg-background hover:border-primary/40"
+                    )}
+                  >
+                    <span className="text-sm font-semibold text-foreground">{option.label}</span>
+                    <span className="text-xs text-muted-foreground">
+                      {option.value === "ACL" && "Upload files from your computer"}
+                      {option.value === "FTP" && "Images are on an FTP server"}
+                      {option.value === "URL" && "Images are at a web URL"}
+                    </span>
+                  </button>
+                ))}
               </div>
             </div>
+
+            {/* File Upload Zone — only shown for ACL (computer upload) */}
+            {attributes.locationType === "ACL" && (
+              <div className="flex flex-col gap-4">
+                <Label className="text-sm font-medium">
+                  Upload Files <span className="text-destructive">*</span>
+                </Label>
+                <div
+                  className={cn(
+                    "flex flex-col items-center justify-center gap-4 rounded-lg border-2 border-dashed p-8 transition-colors",
+                    isDragging
+                      ? "border-primary bg-primary/5"
+                      : "border-border bg-muted/20 hover:border-primary/50"
+                  )}
+                  onDragOver={handleDragOver}
+                  onDragLeave={handleDragLeave}
+                  onDrop={handleDrop}
+                >
+                  <div className="flex size-12 items-center justify-center rounded-full bg-muted">
+                    <Upload className="size-6 text-muted-foreground" />
+                  </div>
+                  <div className="text-center">
+                    <p className="text-sm font-medium text-foreground">
+                      Drag and drop images here
+                    </p>
+                    <p className="mt-1 text-xs text-muted-foreground">
+                      or click to browse files
+                    </p>
+                  </div>
+                  <input
+                    type="file"
+                    accept="image/jpeg,image/png,image/tiff"
+                    multiple
+                    className="hidden"
+                    id="file-upload"
+                    onChange={handleFileSelect}
+                  />
+                  <label htmlFor="file-upload">
+                    <Button variant="outline" size="sm" asChild>
+                      <span className="cursor-pointer">Browse Files</span>
+                    </Button>
+                  </label>
+                  <p className="text-xs text-muted-foreground">
+                    JPG, PNG, TIFF - Max 10 MB each
+                  </p>
+                </div>
+              </div>
+            )}
+
+            {/* Remote Location notice — shown for FTP and URL */}
+            {isRemoteLocation && (
+              <div className="flex items-start gap-3 rounded border border-border bg-muted/20 p-4 text-sm">
+                <FileText className="size-4 text-primary mt-0.5 shrink-0" />
+                <div>
+                  <p className="font-medium text-foreground">
+                    {attributes.locationType === "FTP" ? "FTP Location" : "URL Location"}
+                  </p>
+                  <p className="mt-0.5 text-muted-foreground">
+                    You will enter the {attributes.locationType === "FTP" ? "FTP path" : "external URL"} for each image in the next step under Attributes.
+                  </p>
+                </div>
+              </div>
+            )}
 
             {/* Uploaded Files Preview */}
             {uploadedFiles.length > 0 && (
@@ -1203,8 +1334,21 @@ End of Metadata Export
                       </div>
                       <div className="absolute inset-0 flex items-center justify-center gap-2 bg-black/50 opacity-0 transition-opacity group-hover:opacity-100">
                         <button
+                          onClick={() => {
+                            const link = document.createElement('a')
+                            link.href = file.preview
+                            link.download = file.name
+                            link.click()
+                          }}
+                          className="rounded bg-primary p-1.5 text-white hover:bg-primary/90"
+                          title="Download image"
+                        >
+                          <Download className="size-4" />
+                        </button>
+                        <button
                           onClick={() => removeFile(file.id)}
                           className="rounded bg-destructive p-1.5 text-white hover:bg-destructive/90"
+                          title="Delete image"
                         >
                           <Trash2 className="size-4" />
                         </button>
@@ -1261,12 +1405,35 @@ End of Metadata Export
               <Checkbox
                 id="apply-all"
                 checked={applyToAll}
-                onCheckedChange={(checked) => setApplyToAll(checked as boolean)}
+                onCheckedChange={(checked) => {
+                  setApplyToAll(checked as boolean)
+                  setActiveAttributeImageIndex(0)
+                }}
               />
               <label htmlFor="apply-all" className="text-sm font-medium text-foreground cursor-pointer">
                 Apply same attributes to all {uploadedFiles.length} images
               </label>
             </div>
+
+            {/* Per-Image Tabs (when not applying to all) */}
+            {!applyToAll && uploadedFiles.length > 1 && (
+              <div className="flex gap-2 border-b border-border overflow-x-auto">
+                {uploadedFiles.map((file, idx) => (
+                  <button
+                    key={file.id}
+                    onClick={() => setActiveAttributeImageIndex(idx)}
+                    className={cn(
+                      "px-3 py-2 text-sm font-medium border-b-2 transition-colors whitespace-nowrap",
+                      activeAttributeImageIndex === idx
+                        ? "border-primary text-primary"
+                        : "border-transparent text-muted-foreground hover:text-foreground"
+                    )}
+                  >
+                    Image {idx + 1}: {file.name.slice(0, 20)}
+                  </button>
+                ))}
+              </div>
+            )}
 
             {/* Upload Level Badge */}
             <div className="inline-flex items-center gap-2 self-start rounded bg-primary/10 px-3 py-1.5 text-sm">
@@ -1280,6 +1447,32 @@ End of Metadata Export
               </span>
             </div>
 
+            {/* Auto-populated fields (read-only) */}
+            {(uploadLevel === "product-color" || uploadLevel === "gtin") && (
+              <div className="grid gap-4 md:grid-cols-2">
+                {uploadLevel === "product-color" && (
+                  <div className="flex flex-col gap-2">
+                    <Label className="text-sm font-medium">Color Code</Label>
+                    <Input
+                      value={getAutoPopulatedData().colorCode}
+                      readOnly
+                      className="bg-muted/30 text-foreground cursor-default"
+                    />
+                  </div>
+                )}
+                {uploadLevel === "gtin" && (
+                  <div className="flex flex-col gap-2">
+                    <Label className="text-sm font-medium">GTIN</Label>
+                    <Input
+                      value={getAutoPopulatedData().selectedGtin}
+                      readOnly
+                      className="bg-muted/30 text-foreground cursor-default"
+                    />
+                  </div>
+                )}
+              </div>
+            )}
+
             {/* Required Attributes */}
             <div className="grid gap-4 md:grid-cols-2">
               <div className="flex flex-col gap-2">
@@ -1287,8 +1480,8 @@ End of Metadata Export
                   Image Type <span className="text-destructive">*</span>
                 </Label>
                 <Select
-                  value={attributes.imageType}
-                  onValueChange={(value) => setAttributes({ ...attributes, imageType: value })}
+                  value={getCurrentAttributes().imageType}
+                  onValueChange={(value) => updateCurrentAttributes({ ...getCurrentAttributes(), imageType: value })}
                 >
                   <SelectTrigger className="w-full bg-background">
                     <SelectValue />
@@ -1308,8 +1501,8 @@ End of Metadata Export
                   Purpose <span className="text-destructive">*</span>
                 </Label>
                 <Select
-                  value={attributes.purpose}
-                  onValueChange={(value) => setAttributes({ ...attributes, purpose: value })}
+                  value={getCurrentAttributes().purpose}
+                  onValueChange={(value) => updateCurrentAttributes({ ...getCurrentAttributes(), purpose: value })}
                 >
                   <SelectTrigger className="w-full bg-background">
                     <SelectValue />
@@ -1329,8 +1522,8 @@ End of Metadata Export
                   Orientation <span className="text-destructive">*</span>
                 </Label>
                 <Select
-                  value={attributes.orientation}
-                  onValueChange={(value) => setAttributes({ ...attributes, orientation: value })}
+                  value={getCurrentAttributes().orientation}
+                  onValueChange={(value) => updateCurrentAttributes({ ...getCurrentAttributes(), orientation: value })}
                 >
                   <SelectTrigger className="w-full bg-background">
                     <SelectValue placeholder="Select orientation..." />
@@ -1345,70 +1538,71 @@ End of Metadata Export
                 </Select>
               </div>
 
+              {/* Location Type shown read-only — set in Step 2 */}
               <div className="flex flex-col gap-2">
-                <Label className="text-sm font-medium">
-                  Location Type <span className="text-destructive">*</span>
-                </Label>
-                <Select
-                  value={attributes.locationType}
-                  onValueChange={(value) => setAttributes({ ...attributes, locationType: value })}
-                >
-                  <SelectTrigger className="w-full bg-background">
-                    <SelectValue placeholder="Select location type..." />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {LOCATION_TYPE_OPTIONS.map((option) => (
-                      <SelectItem key={option.value} value={option.value}>
-                        {option.label}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
+                <Label className="text-sm font-medium">Location Type</Label>
+                <Input
+                  value={LOCATION_TYPE_OPTIONS.find(o => o.value === getCurrentAttributes().locationType)?.label || ""}
+                  readOnly
+                  className="bg-muted/30 text-foreground cursor-default"
+                />
               </div>
             </div>
 
-            {/* External Location - conditional */}
-            {(attributes.locationType === "FTP" || attributes.locationType === "URL") && (
+            {/* External Location - shown when FTP or URL */}
+            {(getCurrentAttributes().locationType === "FTP" || getCurrentAttributes().locationType === "URL") && (
               <div className="flex flex-col gap-2">
                 <Label className="text-sm font-medium">
-                  External Location <span className="text-destructive">**</span>
+                  External Location <span className="text-destructive">*</span>
                 </Label>
                 <Input
-                  value={attributes.externalLocation}
-                  onChange={(e) => setAttributes({ ...attributes, externalLocation: e.target.value })}
-                  placeholder={attributes.locationType === "FTP" ? "ftp://..." : "https://..."}
+                  value={getCurrentAttributes().externalLocation}
+                  onChange={(e) => updateCurrentAttributes({ ...getCurrentAttributes(), externalLocation: e.target.value })}
+                  placeholder={getCurrentAttributes().locationType === "FTP" ? "ftp://..." : "https://..."}
                   className="bg-background"
                 />
-                <p className="text-xs text-muted-foreground">
-                  ** Required when Location Type is FTP or URL
-                </p>
               </div>
             )}
 
-            {/* Auto-detected Metadata */}
-            {uploadedFiles.length > 0 && (
-              <div className="rounded border border-border bg-tg-table-header p-3 text-sm">
-                <div className="mb-2 font-medium text-foreground">Auto-detected from File</div>
-                <div className="grid grid-cols-2 gap-x-8 gap-y-1 md:grid-cols-4">
-                  <div>
-                    <span className="text-muted-foreground">File Type:</span>{" "}
-                    <span className="text-foreground">JPG-JPEG</span>
-                  </div>
-                  <div>
-                    <span className="text-muted-foreground">DPI:</span>{" "}
-                    <span className="text-foreground">300</span>
-                  </div>
-                  <div>
-                    <span className="text-muted-foreground">Height:</span>{" "}
-                    <span className="text-foreground">1200px</span>
-                  </div>
-                  <div>
-                    <span className="text-muted-foreground">Width:</span>{" "}
-                    <span className="text-foreground">800px</span>
-                  </div>
+            {/* File Dimensions & Density */}
+            <div className="flex flex-col gap-2">
+              <Label className="text-sm font-medium">File Dimensions &amp; Density</Label>
+              <div className="grid gap-4 md:grid-cols-3">
+                <div className="flex flex-col gap-2">
+                  <Label className="text-xs text-muted-foreground">Pixel Density (DPI)</Label>
+                  <Input
+                    value={getCurrentAttributes().pixelDensity}
+                    onChange={(e) => updateCurrentAttributes({ ...getCurrentAttributes(), pixelDensity: e.target.value })}
+                    placeholder="e.g. 300"
+                    className="bg-background"
+                    type="number"
+                    min="1"
+                  />
+                </div>
+                <div className="flex flex-col gap-2">
+                  <Label className="text-xs text-muted-foreground">Height (px)</Label>
+                  <Input
+                    value={getCurrentAttributes().height}
+                    onChange={(e) => updateCurrentAttributes({ ...getCurrentAttributes(), height: e.target.value })}
+                    placeholder="e.g. 1200"
+                    className="bg-background"
+                    type="number"
+                    min="1"
+                  />
+                </div>
+                <div className="flex flex-col gap-2">
+                  <Label className="text-xs text-muted-foreground">Width (px)</Label>
+                  <Input
+                    value={getCurrentAttributes().width}
+                    onChange={(e) => updateCurrentAttributes({ ...getCurrentAttributes(), width: e.target.value })}
+                    placeholder="e.g. 800"
+                    className="bg-background"
+                    type="number"
+                    min="1"
+                  />
                 </div>
               </div>
-            )}
+            </div>
 
             {/* Advanced Attributes (Collapsible) */}
             <Collapsible open={advancedOpen} onOpenChange={setAdvancedOpen}>
@@ -1428,8 +1622,8 @@ End of Metadata Export
                   <div className="flex flex-col gap-2">
                     <Label className="text-sm font-medium">Image Style</Label>
                     <Select
-                      value={attributes.imageStyle}
-                      onValueChange={(value) => setAttributes({ ...attributes, imageStyle: value })}
+                      value={getCurrentAttributes().imageStyle}
+                      onValueChange={(value) => updateCurrentAttributes({ ...getCurrentAttributes(), imageStyle: value })}
                     >
                       <SelectTrigger className="w-full bg-background">
                         <SelectValue placeholder="Select style..." />
@@ -1447,8 +1641,8 @@ End of Metadata Export
                   <div className="flex flex-col gap-2">
                     <Label className="text-sm font-medium">Facing (GDSN)</Label>
                     <Select
-                      value={attributes.facing}
-                      onValueChange={(value) => setAttributes({ ...attributes, facing: value })}
+                      value={getCurrentAttributes().facing}
+                      onValueChange={(value) => updateCurrentAttributes({ ...getCurrentAttributes(), facing: value })}
                     >
                       <SelectTrigger className="w-full bg-background">
                         <SelectValue placeholder="Select facing..." />
@@ -1466,8 +1660,8 @@ End of Metadata Export
                   <div className="flex flex-col gap-2">
                     <Label className="text-sm font-medium">Angle</Label>
                     <Select
-                      value={attributes.angle}
-                      onValueChange={(value) => setAttributes({ ...attributes, angle: value })}
+                      value={getCurrentAttributes().angle}
+                      onValueChange={(value) => updateCurrentAttributes({ ...getCurrentAttributes(), angle: value })}
                     >
                       <SelectTrigger className="w-full bg-background">
                         <SelectValue placeholder="Select angle..." />
@@ -1485,9 +1679,9 @@ End of Metadata Export
                   <div className="flex flex-col gap-2">
                     <Label className="text-sm font-medium">Clipping Path</Label>
                     <Input
-                      value={attributes.clippingPath}
+                      value={getCurrentAttributes().clippingPath}
                       onChange={(e) =>
-                        setAttributes({ ...attributes, clippingPath: e.target.value })
+                        updateCurrentAttributes({ ...getCurrentAttributes(), clippingPath: e.target.value })
                       }
                       placeholder="Path name..."
                       className="bg-background"
@@ -1497,9 +1691,9 @@ End of Metadata Export
                   <div className="flex flex-col gap-2 md:col-span-2">
                     <Label className="text-sm font-medium">Image Description</Label>
                     <Input
-                      value={attributes.imageDescription}
+                      value={getCurrentAttributes().imageDescription}
                       onChange={(e) =>
-                        setAttributes({ ...attributes, imageDescription: e.target.value })
+                        updateCurrentAttributes({ ...getCurrentAttributes(), imageDescription: e.target.value })
                       }
                       placeholder="Enter description..."
                       className="bg-background"
