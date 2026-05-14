@@ -41,6 +41,7 @@ interface ImageUploadWizardProps {
   setUploadLevel: (level: "product" | "product-color" | "gtin") => void
   onCancel: () => void
   onComplete: () => void
+  portalType?: "supplier" | "retailer"
 }
 
 // Mock data with multiple GTINs per product and 3-digit color codes
@@ -180,6 +181,7 @@ export function ImageUploadWizard({
   setUploadLevel,
   onCancel,
   onComplete,
+  portalType = "supplier",
 }: ImageUploadWizardProps) {
   const [currentStep, setCurrentStep] = useState(1)
   const [selectedSelectionCode, setSelectedSelectionCode] = useState("")
