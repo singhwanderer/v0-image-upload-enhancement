@@ -1,7 +1,7 @@
 "use client"
 
 import { useState } from "react"
-import { Upload, Search, FileImage, ArrowRight, Info, ChevronDown, Filter, ZoomIn, Download, Printer } from "lucide-react"
+import { Upload, Search, FileImage, ArrowRight, Info, ChevronDown, Filter, ZoomIn, Download, Printer, Package, Palette, Barcode, CheckCircle2 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Card, CardContent } from "@/components/ui/card"
@@ -15,7 +15,7 @@ import {
 import { cn } from "@/lib/utils"
 
 interface ImageUploadLandingProps {
-  onUploadClick: () => void
+  onUploadClick: (level: "product" | "product-color" | "gtin") => void
 }
 
 // Mock vendor data for retailer portal
@@ -54,10 +54,9 @@ export function ImageUploadLanding({ onUploadClick }: ImageUploadLandingProps) {
         <div>
           <h1 className="text-xl font-semibold text-foreground">Image Upload</h1>
           <p className="mt-1 text-sm text-muted-foreground">
-            Upload product images and assign them to products or product variants.
+            Upload and assign product images to your catalog. Choose the assignment level that matches your needs.
           </p>
         </div>
-        {/* Toolbar Icons - matching Trading Grid style */}
         <div className="flex items-center gap-1 border border-border bg-card p-1">
           <button className="p-1.5 hover:bg-muted" title="Help">
             <Info className="size-4 text-muted-foreground" />
@@ -83,81 +82,188 @@ export function ImageUploadLanding({ onUploadClick }: ImageUploadLandingProps) {
         </div>
       </div>
 
-      {/* Main Upload Card */}
-      <Card className="border-2 border-primary/20 bg-card shadow-sm">
-        <CardContent className="p-0">
-          <div className="flex flex-col items-center justify-center gap-6 px-8 py-12">
-            {/* Icon */}
-            <div className="flex size-20 items-center justify-center rounded-full bg-primary/10">
-              <Upload className="size-10 text-primary" />
-            </div>
-
-            {/* Title and Description */}
-            <div className="text-center">
-              <h2 className="text-lg font-semibold text-foreground">Upload Images</h2>
-              <p className="mt-2 max-w-md text-sm text-muted-foreground">
-                Upload JPG, PNG, or TIFF image files with associated attributes. 
-                Assign images at the Product level or Product + Color Code level.
-              </p>
-            </div>
-
-            {/* Features List */}
-            <div className="flex flex-wrap justify-center gap-6 text-sm text-muted-foreground">
-              <div className="flex items-center gap-2">
-                <FileImage className="size-4 text-primary" />
-                <span>Drag and drop support</span>
-              </div>
-              <div className="flex items-center gap-2">
-                <FileImage className="size-4 text-primary" />
-                <span>Multiple GTINs per product</span>
-              </div>
-              <div className="flex items-center gap-2">
-                <FileImage className="size-4 text-primary" />
-                <span>Auto-detect metadata</span>
-              </div>
-            </div>
-
-            {/* CTA Button */}
-            <Button 
-              onClick={onUploadClick} 
-              size="lg" 
-              className="mt-2 gap-2 bg-primary px-8 text-primary-foreground hover:bg-primary/90"
-            >
-              <Upload className="size-4" />
-              Upload Images
-              <ArrowRight className="size-4" />
-            </Button>
-          </div>
-        </CardContent>
-      </Card>
-
-      {/* Quick Access Search */}
-      <div className="rounded border border-border bg-card p-4">
-        <div className="flex flex-col gap-3">
+      {/* Workflow Overview */}
+      <div className="rounded border border-border bg-tg-section-header p-4">
+        <h2 className="text-sm font-semibold text-foreground mb-3">How Image Upload Works</h2>
+        <div className="flex items-center gap-3 text-sm">
           <div className="flex items-center gap-2">
-            <Search className="size-4 text-muted-foreground" />
-            <span className="text-sm font-medium text-foreground">Quick Access</span>
-            <span className="text-xs text-muted-foreground">(Jump to product by GTIN)</span>
+            <span className="flex size-6 items-center justify-center rounded-full bg-primary text-xs font-medium text-primary-foreground">1</span>
+            <span className="text-foreground">Select Upload Level</span>
           </div>
-          <div className="flex gap-3">
-            <div className="relative flex-1">
-              <Input
-                placeholder="Enter GTIN, Product ID, or Selection Code..."
-                className="h-9 pr-10"
-              />
-              <Search className="absolute right-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
-            </div>
-            <Button variant="outline" size="default">
-              Go
-            </Button>
+          <ArrowRight className="size-4 text-muted-foreground" />
+          <div className="flex items-center gap-2">
+            <span className="flex size-6 items-center justify-center rounded-full bg-primary text-xs font-medium text-primary-foreground">2</span>
+            <span className="text-foreground">Choose Target &amp; Upload Files</span>
           </div>
-          <p className="text-xs text-muted-foreground">
-            Enter a GTIN or Product ID to jump directly to the upload wizard with the target pre-filled.
-          </p>
+          <ArrowRight className="size-4 text-muted-foreground" />
+          <div className="flex items-center gap-2">
+            <span className="flex size-6 items-center justify-center rounded-full bg-primary text-xs font-medium text-primary-foreground">3</span>
+            <span className="text-foreground">Set Image Attributes</span>
+          </div>
+          <ArrowRight className="size-4 text-muted-foreground" />
+          <div className="flex items-center gap-2">
+            <span className="flex size-6 items-center justify-center rounded-full bg-primary text-xs font-medium text-primary-foreground">4</span>
+            <span className="text-foreground">Review &amp; Submit</span>
+          </div>
         </div>
       </div>
 
-      {/* Recent Activity / Stats */}
+      {/* Upload Level Selection */}
+      <div>
+        <h2 className="text-base font-semibold text-foreground mb-1">Select Upload Level</h2>
+        <p className="text-sm text-muted-foreground mb-4">
+          Choose how you want to assign images. This determines which products or variants the images will be linked to.
+        </p>
+        
+        <div className="grid grid-cols-3 gap-4">
+          {/* Product Level */}
+          <Card 
+            className="border-2 border-border hover:border-primary/60 transition-colors cursor-pointer group"
+            onClick={() => onUploadClick("product")}
+          >
+            <CardContent className="p-5">
+              <div className="flex flex-col gap-4">
+                <div className="flex items-start justify-between">
+                  <div className="flex size-12 items-center justify-center rounded-lg bg-primary/10 group-hover:bg-primary/20 transition-colors">
+                    <Package className="size-6 text-primary" />
+                  </div>
+                  <ArrowRight className="size-5 text-muted-foreground group-hover:text-primary transition-colors" />
+                </div>
+                <div>
+                  <h3 className="font-semibold text-foreground">Product Level</h3>
+                  <p className="mt-1 text-sm text-muted-foreground">
+                    Assign images to the product itself. Best for products without color variations.
+                  </p>
+                </div>
+                <div className="flex flex-col gap-1.5 text-xs text-muted-foreground border-t border-border pt-3">
+                  <div className="flex items-center gap-2">
+                    <CheckCircle2 className="size-3.5 text-primary" />
+                    <span>One image set per product</span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <CheckCircle2 className="size-3.5 text-primary" />
+                    <span>Applies to all GTINs under product</span>
+                  </div>
+                </div>
+                <Button variant="outline" size="sm" className="w-full mt-2 group-hover:bg-primary group-hover:text-primary-foreground transition-colors">
+                  Start Upload
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
+
+          {/* Product + Color Code Level */}
+          <Card 
+            className="border-2 border-border hover:border-primary/60 transition-colors cursor-pointer group"
+            onClick={() => onUploadClick("product-color")}
+          >
+            <CardContent className="p-5">
+              <div className="flex flex-col gap-4">
+                <div className="flex items-start justify-between">
+                  <div className="flex size-12 items-center justify-center rounded-lg bg-primary/10 group-hover:bg-primary/20 transition-colors">
+                    <Palette className="size-6 text-primary" />
+                  </div>
+                  <ArrowRight className="size-5 text-muted-foreground group-hover:text-primary transition-colors" />
+                </div>
+                <div>
+                  <h3 className="font-semibold text-foreground">Product + Color Code</h3>
+                  <p className="mt-1 text-sm text-muted-foreground">
+                    Assign images to a specific color variant. Requires selecting a 3-digit color code.
+                  </p>
+                </div>
+                <div className="flex flex-col gap-1.5 text-xs text-muted-foreground border-t border-border pt-3">
+                  <div className="flex items-center gap-2">
+                    <CheckCircle2 className="size-3.5 text-primary" />
+                    <span>Different images per color</span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <CheckCircle2 className="size-3.5 text-primary" />
+                    <span>Color code selection required</span>
+                  </div>
+                </div>
+                <Button variant="outline" size="sm" className="w-full mt-2 group-hover:bg-primary group-hover:text-primary-foreground transition-colors">
+                  Start Upload
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
+
+          {/* GTIN Level */}
+          <Card 
+            className="border-2 border-border hover:border-primary/60 transition-colors cursor-pointer group"
+            onClick={() => onUploadClick("gtin")}
+          >
+            <CardContent className="p-5">
+              <div className="flex flex-col gap-4">
+                <div className="flex items-start justify-between">
+                  <div className="flex size-12 items-center justify-center rounded-lg bg-primary/10 group-hover:bg-primary/20 transition-colors">
+                    <Barcode className="size-6 text-primary" />
+                  </div>
+                  <ArrowRight className="size-5 text-muted-foreground group-hover:text-primary transition-colors" />
+                </div>
+                <div>
+                  <h3 className="font-semibold text-foreground">GTIN Level</h3>
+                  <p className="mt-1 text-sm text-muted-foreground">
+                    Assign images to a specific GTIN/UPC. Most granular level for item-specific images.
+                  </p>
+                </div>
+                <div className="flex flex-col gap-1.5 text-xs text-muted-foreground border-t border-border pt-3">
+                  <div className="flex items-center gap-2">
+                    <CheckCircle2 className="size-3.5 text-primary" />
+                    <span>Unique images per GTIN</span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <CheckCircle2 className="size-3.5 text-primary" />
+                    <span>GTIN selection required</span>
+                  </div>
+                </div>
+                <Button variant="outline" size="sm" className="w-full mt-2 group-hover:bg-primary group-hover:text-primary-foreground transition-colors">
+                  Start Upload
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
+        </div>
+      </div>
+
+      {/* Supported Formats */}
+      <div className="rounded border border-border bg-card p-4">
+        <div className="flex items-start gap-6">
+          <div className="flex-1">
+            <h3 className="text-sm font-semibold text-foreground mb-2">Supported File Formats</h3>
+            <div className="flex gap-4 text-sm text-muted-foreground">
+              <span className="flex items-center gap-1.5">
+                <FileImage className="size-4 text-primary" />
+                JPG / JPEG
+              </span>
+              <span className="flex items-center gap-1.5">
+                <FileImage className="size-4 text-primary" />
+                PNG
+              </span>
+              <span className="flex items-center gap-1.5">
+                <FileImage className="size-4 text-primary" />
+                TIFF
+              </span>
+            </div>
+          </div>
+          <div className="flex-1">
+            <h3 className="text-sm font-semibold text-foreground mb-2">Location Options</h3>
+            <div className="flex gap-4 text-sm text-muted-foreground">
+              <span>ACL (Upload from computer)</span>
+              <span>FTP (External server)</span>
+              <span>URL (Web location)</span>
+            </div>
+          </div>
+          <div className="flex-1">
+            <h3 className="text-sm font-semibold text-foreground mb-2">Max File Size</h3>
+            <div className="text-sm text-muted-foreground">
+              10 MB per image
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Quick Stats */}
       <div className="grid grid-cols-3 gap-4">
         <div className="rounded border border-border bg-card p-4">
           <div className="text-2xl font-semibold text-foreground">156</div>

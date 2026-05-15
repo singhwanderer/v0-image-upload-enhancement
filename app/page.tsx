@@ -19,7 +19,10 @@ export default function ImageUploadPage() {
       {portalType === "supplier" ? (
         // Supplier Portal: Upload flow
         !wizardOpen ? (
-          <ImageUploadLanding onUploadClick={() => setWizardOpen(true)} />
+          <ImageUploadLanding onUploadClick={(level) => {
+            setUploadLevel(level)
+            setWizardOpen(true)
+          }} />
         ) : (
           <ImageUploadWizard
             uploadLevel={uploadLevel}
