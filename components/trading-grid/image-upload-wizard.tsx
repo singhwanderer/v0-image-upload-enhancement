@@ -183,7 +183,7 @@ export function ImageUploadWizard({
   onComplete,
   portalType = "supplier",
 }: ImageUploadWizardProps) {
-  const [currentStep, setCurrentStep] = useState(2)
+  const [currentStep, setCurrentStep] = useState(1)
   const [selectedSelectionCode, setSelectedSelectionCode] = useState("")
   const [selectedProduct, setSelectedProduct] = useState("")
   const [selectedColorCode, setSelectedColorCode] = useState("")
@@ -221,6 +221,7 @@ export function ImageUploadWizard({
   const steps = [
     { number: 1, title: "Target & Files", description: "Select target and upload files" },
     { number: 2, title: "Attributes", description: "Set image attributes" },
+    { number: 3, title: "Review & Confirm", description: "Review and submit" },
   ]
 
   // Helper function to get current attributes based on mode
@@ -396,7 +397,7 @@ End of Metadata Export
   const canProceedStep3 = attributes.imageType && attributes.purpose && attributes.orientation
 
   const handleNext = () => {
-    if (currentStep < 2) {
+    if (currentStep < 3) {
       setCurrentStep(currentStep + 1)
     } else {
       setShowProductMedia(true)
@@ -404,7 +405,7 @@ End of Metadata Export
   }
 
   const handleBack = () => {
-    if (currentStep > 2) {
+    if (currentStep > 1) {
       setCurrentStep(currentStep - 1)
     } else {
       onCancel()
@@ -1016,7 +1017,7 @@ End of Metadata Export
       {/* Step Content */}
       <div className="rounded border border-border bg-card p-6">
         {/* Step 1: Target & Files */}
-        {currentStep === 2 && (
+        {currentStep === 1 && (
           <div className="flex flex-col gap-6">
             <div>
               <h2 className="text-lg font-medium text-foreground">Select Target & Upload Files</h2>
@@ -1339,7 +1340,7 @@ End of Metadata Export
         )}
 
         {/* Step 2: Attributes */}
-        {currentStep === 3 && (
+        {currentStep === 2 && (
           <div className="flex flex-col gap-6">
             <div>
               <h2 className="text-lg font-medium text-foreground">Set Image Attributes</h2>
@@ -1657,6 +1658,150 @@ End of Metadata Export
             </p>
           </div>
         )}
+
+        {/* Step 3: Review & Confirm */}
+        {currentStep === 3 && (
+          <div className="flex flex-col gap-6">
+            <div>
+              <h2 className="text-lg font-medium text-foreground">Review &amp; Confirm</h2>
+              <p className="mt-1 text-sm text-muted-foreground">
+                Review your upload details before submitting. Click &quot;Confirm &amp; Upload&quot; to proceed.
+              </p>
+            </div>
+
+            {/* Target Selection Summary */}
+            <div className="rounded border border-border bg-muted/30 p-4">
+              <h3 className="text-sm font-semibold text-foreground mb-3">Target Selection</h3>
+              <div className="grid grid-cols-2 gap-x-8 gap-y-2 text-sm">
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">Selection Code:</span>
+                  <span className="font-medium text-foreground">{selectedSelectionCode}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">Product:</span>
+                  <span className="font-medium text-foreground">{selectedProduct}</span>
+                </div>
+                {uploadLevel === "product-color" && selectedColorCode && (
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">Color Code:</span>
+                    <span className="font-medium text-foreground">{selectedColorCode}</span>
+                  </div>
+                )}
+                {uploadLevel === "gtin" && selectedGtin && (
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">GTIN:</span>
+                    <span className="font-medium text-foreground">{selectedGtin}</span>
+                  </div>
+                )}
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">Upload Level:</span>
+                  <span className="font-medium text-foreground">
+                    {uploadLevel === "product" ? "Product" : uploadLevel === "product-color" ? "Product + Color Code" : "GTIN"}
+                  </span>
+                </div>
+              </div>
+            </div>
+
+            {/* Files Summary */}
+            <div className="rounded border border-border bg-card p-4">
+              <div className="flex items-center justify-between mb-3">
+                <h3 className="text-sm font-semibold text-foreground">Files to Upload</h3>
+                <div className="text-sm text-muted-foreground">
+                  {uploadedFiles.length} file{uploadedFiles.length !== 1 ? "s" : ""} &bull; {(uploadedFiles.reduce((acc, f) => acc + f.size, 0) / 1024 / 1024).toFixed(2)} MB total
+                </div>
+              </div>
+              
+              {/* File thumbnail grid */}
+              <div className="grid grid-cols-4 gap-3">
+                {uploadedFiles.map((file, idx) => (
+                  <div key={idx} className="rounded border border-border bg-muted/20 p-2">
+                    <div className="aspect-square rounded bg-white mb-2 flex items-center justify-center overflow-hidden">
+                      {file.preview ? (
+                        <img src={file.preview} alt={file.name} className="object-contain w-full h-full" />
+                      ) : (
+                        <FileImage className="size-8 text-muted-foreground" />
+                      )}
+                    </div>
+                    <p className="text-xs font-medium text-foreground truncate" title={file.name}>{file.name}</p>
+                    <p className="text-xs text-muted-foreground">{(file.size / 1024).toFixed(1)} KB</p>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            {/* Attributes Summary */}
+            <div className="rounded border border-border bg-card p-4">
+              <h3 className="text-sm font-semibold text-foreground mb-3">
+                Image Attributes {applyToAll ? "(Applied to all)" : "(Per-image)"}
+              </h3>
+              
+              {applyToAll ? (
+                <div className="grid grid-cols-2 gap-x-8 gap-y-2 text-sm">
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">Image Type:</span>
+                    <span className="font-medium text-foreground">
+                      {IMAGE_TYPE_OPTIONS.find(o => o.value === attributes.imageType)?.label || attributes.imageType}
+                    </span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">Purpose:</span>
+                    <span className="font-medium text-foreground">
+                      {PURPOSE_OPTIONS.find(o => o.value === attributes.purpose)?.label || attributes.purpose}
+                    </span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">Orientation:</span>
+                    <span className="font-medium text-foreground">
+                      {ORIENTATION_OPTIONS.find(o => o.value === attributes.orientation)?.label || attributes.orientation}
+                    </span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">Location Type:</span>
+                    <span className="font-medium text-foreground">
+                      {attributes.locationType || "ACL"}
+                    </span>
+                  </div>
+                </div>
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm">
+                    <thead className="bg-muted/30">
+                      <tr>
+                        <th className="px-3 py-2 text-left font-medium text-foreground">File</th>
+                        <th className="px-3 py-2 text-left font-medium text-foreground">Image Type</th>
+                        <th className="px-3 py-2 text-left font-medium text-foreground">Purpose</th>
+                        <th className="px-3 py-2 text-left font-medium text-foreground">Orientation</th>
+                        <th className="px-3 py-2 text-left font-medium text-foreground">Location</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {uploadedFiles.map((file, idx) => {
+                        const imgAttrs = attributesByImage[idx] || attributes
+                        return (
+                          <tr key={idx} className="border-t border-border">
+                            <td className="px-3 py-2 text-foreground truncate max-w-[150px]" title={file.name}>{file.name}</td>
+                            <td className="px-3 py-2 text-foreground">
+                              {IMAGE_TYPE_OPTIONS.find(o => o.value === imgAttrs.imageType)?.label || imgAttrs.imageType}
+                            </td>
+                            <td className="px-3 py-2 text-foreground">
+                              {PURPOSE_OPTIONS.find(o => o.value === imgAttrs.purpose)?.label || imgAttrs.purpose}
+                            </td>
+                            <td className="px-3 py-2 text-foreground">
+                              {ORIENTATION_OPTIONS.find(o => o.value === imgAttrs.orientation)?.label || imgAttrs.orientation}
+                            </td>
+                            <td className="px-3 py-2 text-foreground">
+                              {imgAttrs.locationType || "ACL"}
+                            </td>
+                          </tr>
+                        )
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Footer Actions */}
@@ -1676,15 +1821,15 @@ End of Metadata Export
           <Button
             onClick={handleNext}
             disabled={
-              (currentStep === 2 && !canProceedStep2) ||
-              (currentStep === 3 && !canProceedStep3)
+              (currentStep === 1 && !canProceedStep2) ||
+              (currentStep === 2 && !canProceedStep3)
             }
             className="gap-1"
           >
             {currentStep === 3 ? (
               <>
                 <Upload className="size-4" />
-                Upload {uploadedFiles.length} Image{uploadedFiles.length !== 1 ? "s" : ""}
+                Confirm &amp; Upload
               </>
             ) : (
               <>
