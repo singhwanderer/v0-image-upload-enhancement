@@ -1210,7 +1210,7 @@ End of Metadata Export
                   </div>
                   <input
                     type="file"
-                    accept="image/jpeg,image/png,image/tiff"
+                    accept="image/jpeg,.jpg,.jpeg"
                     multiple
                     className="hidden"
                     id="file-upload"
@@ -1222,29 +1222,47 @@ End of Metadata Export
                     </Button>
                   </label>
                   <p className="text-xs text-muted-foreground">
-                    JPG, PNG, TIFF - Max 10 MB each
+                    JPG / JPEG - Max 10 MB each
                   </p>
                 </div>
               </div>
             )}
 
-            {/* Remote Location notice — shown for FTP and URL */}
+            {/* Remote Location input — shown for FTP and URL */}
             {isRemoteLocation && (
-              <div className="flex items-start gap-3 rounded border border-border bg-muted/20 p-4 text-sm">
-                <FileText className="size-4 text-primary mt-0.5 shrink-0" />
-                <div>
-                  <p className="font-medium text-foreground">
-                    {attributes.locationType === "FTP" ? "FTP Location" : "URL Location"}
-                  </p>
-                  <p className="mt-0.5 text-muted-foreground">
-                    You will enter the {attributes.locationType === "FTP" ? "FTP path" : "external URL"} for each image in the next step under Attributes.
+              <div className="flex flex-col gap-4 rounded border border-border bg-muted/20 p-4">
+                <div className="flex items-start gap-3 text-sm">
+                  <FileText className="size-4 text-primary mt-0.5 shrink-0" />
+                  <div>
+                    <p className="font-medium text-foreground">
+                      {attributes.locationType === "FTP" ? "FTP Location" : "URL Location"}
+                    </p>
+                    <p className="mt-0.5 text-muted-foreground">
+                      Enter the {attributes.locationType === "FTP" ? "FTP path" : "external URL"} where your image files are located.
+                    </p>
+                  </div>
+                </div>
+                <div className="flex flex-col gap-2">
+                  <Label className="text-sm font-medium">
+                    External Location <span className="text-destructive">*</span>
+                  </Label>
+                  <Input
+                    placeholder={attributes.locationType === "FTP" ? "ftp://server.example.com/images/product.jpg" : "https://example.com/images/product.jpg"}
+                    value={attributes.externalLocation}
+                    onChange={(e) => setAttributes({...attributes, externalLocation: e.target.value})}
+                    className="font-mono text-sm"
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    {attributes.locationType === "FTP" 
+                      ? "Enter the full FTP path including server and file path"
+                      : "Enter the full URL to the image file (must be publicly accessible)"}
                   </p>
                 </div>
               </div>
             )}
 
-            {/* Uploaded Files Preview */}
-            {uploadedFiles.length > 0 && (
+            {/* Uploaded Files Preview - only shown for ACL (local uploads), not for FTP/URL */}
+            {!isRemoteLocation && uploadedFiles.length > 0 && (
               <div className="flex flex-col gap-3">
                 <Label className="text-sm font-medium">
                   Uploaded Files ({uploadedFiles.length})
@@ -1307,7 +1325,7 @@ End of Metadata Export
                     <span className="text-xs text-muted-foreground">Add More</span>
                     <input
                       type="file"
-                      accept="image/jpeg,image/png,image/tiff"
+                      accept="image/jpeg,.jpg,.jpeg"
                       multiple
                       className="hidden"
                       id="file-upload-more"
