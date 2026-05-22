@@ -183,7 +183,7 @@ export function ImageUploadWizard({
   onComplete,
   portalType = "supplier",
 }: ImageUploadWizardProps) {
-  const [currentStep, setCurrentStep] = useState(1)
+  const [currentStep, setCurrentStep] = useState(2)
   const [selectedSelectionCode, setSelectedSelectionCode] = useState("")
   const [selectedProduct, setSelectedProduct] = useState("")
   const [selectedColorCode, setSelectedColorCode] = useState("")
@@ -219,9 +219,8 @@ export function ImageUploadWizard({
   const [activeAttributeImageIndex, setActiveAttributeImageIndex] = useState(0)
 
   const steps = [
-    { number: 1, title: "Upload Level", description: "Choose assignment level" },
-    { number: 2, title: "Target & Files", description: "Select target and upload files" },
-    { number: 3, title: "Attributes", description: "Set image attributes" },
+    { number: 1, title: "Target & Files", description: "Select target and upload files" },
+    { number: 2, title: "Attributes", description: "Set image attributes" },
   ]
 
   // Helper function to get current attributes based on mode
@@ -388,7 +387,6 @@ End of Metadata Export
     setDownloadComplete(true)
   }
 
-  const canProceedStep1 = uploadLevel !== undefined
   const isRemoteLocation = attributes.locationType === "FTP" || attributes.locationType === "URL"
   const canProceedStep2 = selectedSelectionCode && selectedProduct && attributes.locationType &&
     (isRemoteLocation || uploadedFiles.length > 0) &&
@@ -398,7 +396,7 @@ End of Metadata Export
   const canProceedStep3 = attributes.imageType && attributes.purpose && attributes.orientation
 
   const handleNext = () => {
-    if (currentStep < 3) {
+    if (currentStep < 2) {
       setCurrentStep(currentStep + 1)
     } else {
       setShowProductMedia(true)
@@ -406,8 +404,10 @@ End of Metadata Export
   }
 
   const handleBack = () => {
-    if (currentStep > 1) {
+    if (currentStep > 2) {
       setCurrentStep(currentStep - 1)
+    } else {
+      onCancel()
     }
   }
 
@@ -1015,79 +1015,7 @@ End of Metadata Export
 
       {/* Step Content */}
       <div className="rounded border border-border bg-card p-6">
-        {/* Step 1: Upload Level */}
-        {currentStep === 1 && (
-          <div className="flex flex-col gap-6">
-            <div>
-              <h2 className="text-lg font-medium text-foreground">Select Upload Level</h2>
-              <p className="mt-1 text-sm text-muted-foreground">
-                Choose whether to assign images at the Product, Product + Color Code, or individual Item (GTIN) level.
-              </p>
-            </div>
-
-            <RadioGroup
-              value={uploadLevel}
-              onValueChange={(value: "product" | "product-color" | "gtin") => setUploadLevel(value)}
-              className="gap-4"
-            >
-              <label
-                className={cn(
-                  "flex cursor-pointer items-start gap-4 rounded border p-4 transition-colors",
-                  uploadLevel === "product"
-                    ? "border-primary bg-primary/5"
-                    : "border-border hover:border-primary/50"
-                )}
-              >
-                <RadioGroupItem value="product" className="mt-1" />
-                <div className="flex flex-col gap-1">
-                  <span className="font-medium text-foreground">Product Level</span>
-                  <span className="text-sm text-muted-foreground">
-                    Image applies to the entire product across all color variants and GTINs. 
-                    Best for product shots that don&apos;t vary by color or pack size.
-                  </span>
-                </div>
-              </label>
-
-              <label
-                className={cn(
-                  "flex cursor-pointer items-start gap-4 rounded border p-4 transition-colors",
-                  uploadLevel === "product-color"
-                    ? "border-primary bg-primary/5"
-                    : "border-border hover:border-primary/50"
-                )}
-              >
-                <RadioGroupItem value="product-color" className="mt-1" />
-                <div className="flex flex-col gap-1">
-                  <span className="font-medium text-foreground">Product + Color Code Level</span>
-                  <span className="text-sm text-muted-foreground">
-                    Image applies to a specific color variant (3-digit code) of the product. 
-                    Required when showing color-specific product shots.
-                  </span>
-                </div>
-              </label>
-
-              <label
-                className={cn(
-                  "flex cursor-pointer items-start gap-4 rounded border p-4 transition-colors",
-                  uploadLevel === "gtin"
-                    ? "border-primary bg-primary/5"
-                    : "border-border hover:border-primary/50"
-                )}
-              >
-                <RadioGroupItem value="gtin" className="mt-1" />
-                <div className="flex flex-col gap-1">
-                  <span className="font-medium text-foreground">Item Level (GTIN)</span>
-                  <span className="text-sm text-muted-foreground">
-                    Image applies to a specific GTIN (trade item) — e.g., a particular pack size
-                    or configuration. Use when imagery differs by GTIN Type (UA, EA, CS, PK).
-                  </span>
-                </div>
-              </label>
-            </RadioGroup>
-          </div>
-        )}
-
-        {/* Step 2: Target & Files */}
+        {/* Step 1: Target & Files */}
         {currentStep === 2 && (
           <div className="flex flex-col gap-6">
             <div>
@@ -1392,7 +1320,7 @@ End of Metadata Export
           </div>
         )}
 
-        {/* Step 3: Attributes */}
+        {/* Step 2: Attributes */}
         {currentStep === 3 && (
           <div className="flex flex-col gap-6">
             <div>
@@ -1730,7 +1658,6 @@ End of Metadata Export
           <Button
             onClick={handleNext}
             disabled={
-              (currentStep === 1 && !canProceedStep1) ||
               (currentStep === 2 && !canProceedStep2) ||
               (currentStep === 3 && !canProceedStep3)
             }
