@@ -1,7 +1,7 @@
 "use client"
 
 import { useState } from "react"
-import { Upload, Search, FileImage, ArrowRight, Info, ChevronDown, Filter, ZoomIn, Download, Printer, Package, Palette, Barcode, CheckCircle2 } from "lucide-react"
+import { Upload, Search, FileImage, ArrowRight, Info, ChevronDown, Filter, ZoomIn, Download, Printer, Package, Palette, Barcode, CheckCircle2, X } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Card, CardContent } from "@/components/ui/card"
@@ -12,6 +12,14 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog"
+import { Label } from "@/components/ui/label"
+import { Checkbox } from "@/components/ui/checkbox"
 import { cn } from "@/lib/utils"
 
 interface ImageUploadLandingProps {
@@ -236,14 +244,6 @@ export function ImageUploadLanding({ onUploadClick }: ImageUploadLandingProps) {
                 <FileImage className="size-4 text-primary" />
                 JPG / JPEG
               </span>
-              <span className="flex items-center gap-1.5">
-                <FileImage className="size-4 text-primary" />
-                PNG
-              </span>
-              <span className="flex items-center gap-1.5">
-                <FileImage className="size-4 text-primary" />
-                TIFF
-              </span>
             </div>
           </div>
           <div className="flex-1">
@@ -271,11 +271,11 @@ export function ImageUploadLanding({ onUploadClick }: ImageUploadLandingProps) {
         </div>
         <div className="rounded border border-border bg-card p-4">
           <div className="text-2xl font-semibold text-foreground">23</div>
-          <div className="text-sm text-muted-foreground">Products pending images</div>
+          <div className="text-sm text-muted-foreground">Products with attributes but no images</div>
         </div>
         <div className="rounded border border-border bg-card p-4">
           <div className="text-2xl font-semibold text-foreground">98%</div>
-          <div className="text-sm text-muted-foreground">Image coverage rate</div>
+          <div className="text-sm text-muted-foreground">GTINs/Products with physical images</div>
         </div>
       </div>
     </div>
@@ -291,6 +291,12 @@ export function RetailerImageBrowser() {
   const [selectedSelectionCode, setSelectedSelectionCode] = useState<string | null>(null)
   const [selectedProduct, setSelectedProduct] = useState<typeof MOCK_PRODUCTS[0] | null>(null)
   const [activeImageIndex, setActiveImageIndex] = useState(0)
+  const [showDownloadModal, setShowDownloadModal] = useState(false)
+  const [downloadOptions, setDownloadOptions] = useState({
+    includeMetadata: true,
+    originalQuality: true,
+    allImages: false,
+  })
 
   const handleVendorSelect = (vendor: typeof MOCK_VENDORS[0]) => {
     setSelectedVendor(vendor)
@@ -579,7 +585,10 @@ export function RetailerImageBrowser() {
                   <td className="px-3 py-2">
                     <input type="checkbox" className="size-4" />
                   </td>
-                  <td className="px-3 py-2 text-tg-link hover:underline cursor-pointer">
+                  <td 
+                    className="px-3 py-2 text-tg-link hover:underline cursor-pointer"
+                    onClick={() => handleProductSelect(product)}
+                  >
                     {product.id}
                   </td>
                   <td className="px-3 py-2 text-foreground">{product.description}</td>
@@ -618,7 +627,7 @@ export function RetailerImageBrowser() {
           <button className="p-1.5 hover:bg-muted" title="Zoom">
             <ZoomIn className="size-4 text-muted-foreground" />
           </button>
-          <button className="p-1.5 hover:bg-muted" title="Download">
+          <button className="p-1.5 hover:bg-muted" title="Download" onClick={() => setShowDownloadModal(true)}>
             <Download className="size-4 text-muted-foreground" />
           </button>
           <button className="p-1.5 hover:bg-muted" title="Print">
@@ -720,6 +729,62 @@ export function RetailerImageBrowser() {
             )}
           </div>
         </div>
+
+        {/* Download Modal */}
+        <Dialog open={showDownloadModal} onOpenChange={setShowDownloadModal}>
+          <DialogContent className="max-w-md">
+            <DialogHeader>
+              <DialogTitle>Download Image</DialogTitle>
+            </DialogHeader>
+            <div className="flex flex-col gap-4 py-4">
+              <p className="text-sm text-muted-foreground">
+                Download {downloadOptions.allImages ? `all ${selectedProduct?.images} images` : `"${currentImage?.fileName}"`} for product {selectedProduct?.id}.
+              </p>
+              
+              <div className="flex flex-col gap-3">
+                <div className="flex items-center gap-2">
+                  <Checkbox 
+                    id="include-metadata"
+                    checked={downloadOptions.includeMetadata}
+                    onCheckedChange={(checked) => setDownloadOptions(prev => ({...prev, includeMetadata: !!checked}))}
+                  />
+                  <Label htmlFor="include-metadata" className="text-sm">Include metadata (attributes)</Label>
+                </div>
+                <div className="flex items-center gap-2">
+                  <Checkbox 
+                    id="original-quality"
+                    checked={downloadOptions.originalQuality}
+                    onCheckedChange={(checked) => setDownloadOptions(prev => ({...prev, originalQuality: !!checked}))}
+                  />
+                  <Label htmlFor="original-quality" className="text-sm">Original quality</Label>
+                </div>
+                {(selectedProduct?.images ?? 0) > 1 && (
+                  <div className="flex items-center gap-2">
+                    <Checkbox 
+                      id="all-images"
+                      checked={downloadOptions.allImages}
+                      onCheckedChange={(checked) => setDownloadOptions(prev => ({...prev, allImages: !!checked}))}
+                    />
+                    <Label htmlFor="all-images" className="text-sm">Download all images ({selectedProduct?.images})</Label>
+                  </div>
+                )}
+              </div>
+
+              <div className="flex justify-end gap-2 pt-2">
+                <Button variant="outline" onClick={() => setShowDownloadModal(false)}>
+                  Cancel
+                </Button>
+                <Button onClick={() => {
+                  // Simulate download
+                  setShowDownloadModal(false)
+                }}>
+                  <Download className="size-4 mr-2" />
+                  Download
+                </Button>
+              </div>
+            </div>
+          </DialogContent>
+        </Dialog>
       </div>
     )
   }
