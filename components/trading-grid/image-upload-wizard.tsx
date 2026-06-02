@@ -15,13 +15,18 @@ import {
   Printer,
   Package,
   FileText,
-  CheckCircle2
+  CheckCircle2,
+  Info,
+  Pencil,
+  RefreshCw,
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group"
 import { Checkbox } from "@/components/ui/checkbox"
+import { Badge } from "@/components/ui/badge"
+import { Card, CardContent } from "@/components/ui/card"
 import {
   Select,
   SelectContent,
@@ -34,7 +39,14 @@ import {
   CollapsibleContent,
   CollapsibleTrigger,
 } from "@/components/ui/collapsible"
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog"
 import { cn } from "@/lib/utils"
+import { validateImageBatch, type ValidationError } from "./upload-validation"
 
 interface ImageUploadWizardProps {
   uploadLevel: "product" | "product-color" | "gtin"
@@ -176,6 +188,163 @@ type UploadedFile = {
   status: "uploading" | "complete" | "error"
 }
 
+// Extracted attribute form used in Step 2 and Edit-attributes dialog (Change 3 / Change 7)
+type StepTwoFormProps = {
+  currentAttrs: {
+    imageType: string; purpose: string; orientation: string; locationType: string;
+    externalLocation: string; imageStyle: string; facing: string; angle: string;
+    clippingPath: string; imageDescription: string; pixelDensity: string; height: string; width: string;
+  }
+  updateAttrs: (a: StepTwoFormProps["currentAttrs"]) => void
+  advancedOpen: boolean
+  setAdvancedOpen: (v: boolean) => void
+  uploadLevel: "product" | "product-color" | "gtin"
+  autoData: { colorCode: string; selectedGtin: string }
+}
+
+function StepTwoForm({ currentAttrs, updateAttrs, advancedOpen, setAdvancedOpen, uploadLevel, autoData }: StepTwoFormProps) {
+  return (
+    <div className="flex flex-col gap-4">
+      {/* Auto-populated fields (read-only) */}
+      {(uploadLevel === "product-color" || uploadLevel === "gtin") && (
+        <div className="grid gap-4 md:grid-cols-2">
+          {uploadLevel === "product-color" && (
+            <div className="flex flex-col gap-2">
+              <Label className="text-sm font-medium">Color Code</Label>
+              <Input value={autoData.colorCode} readOnly className="bg-muted/30 text-foreground cursor-default" />
+            </div>
+          )}
+          {uploadLevel === "gtin" && (
+            <div className="flex flex-col gap-2">
+              <Label className="text-sm font-medium">GTIN</Label>
+              <Input value={autoData.selectedGtin} readOnly className="bg-muted/30 text-foreground cursor-default" />
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Required section header (Change 3a) */}
+      <div className="flex items-center gap-2">
+        <span className="text-xs font-semibold uppercase tracking-wide text-foreground">Required</span>
+        <span className="rounded bg-destructive/10 px-1.5 py-0.5 text-xs font-medium text-destructive">Required</span>
+      </div>
+
+      <div className="grid gap-4 md:grid-cols-2">
+        <div className="flex flex-col gap-2">
+          <Label className="text-sm font-medium">
+            Image Type <span className="text-destructive">*</span>
+          </Label>
+          <Select value={currentAttrs.imageType} onValueChange={(v) => updateAttrs({ ...currentAttrs, imageType: v })}>
+            <SelectTrigger className="w-full bg-background"><SelectValue /></SelectTrigger>
+            <SelectContent>
+              {IMAGE_TYPE_OPTIONS.map(o => <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>)}
+            </SelectContent>
+          </Select>
+        </div>
+
+        <div className="flex flex-col gap-2">
+          <Label className="text-sm font-medium">
+            Purpose <span className="text-destructive">*</span>
+          </Label>
+          <Select value={currentAttrs.purpose} onValueChange={(v) => updateAttrs({ ...currentAttrs, purpose: v })}>
+            <SelectTrigger className="w-full bg-background"><SelectValue /></SelectTrigger>
+            <SelectContent>
+              {PURPOSE_OPTIONS.map(o => <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>)}
+            </SelectContent>
+          </Select>
+        </div>
+
+        <div className="flex flex-col gap-2">
+          <Label className="text-sm font-medium">
+            Orientation <span className="text-destructive">*</span>
+          </Label>
+          <Select value={currentAttrs.orientation} onValueChange={(v) => updateAttrs({ ...currentAttrs, orientation: v })}>
+            <SelectTrigger className="w-full bg-background"><SelectValue placeholder="Select orientation..." /></SelectTrigger>
+            <SelectContent>
+              {ORIENTATION_OPTIONS.map(o => <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>)}
+            </SelectContent>
+          </Select>
+        </div>
+
+        {/* Location Type read-only */}
+        <div className="flex flex-col gap-2">
+          <Label className="text-sm font-medium">Location Type</Label>
+          <Input value={LOCATION_TYPE_OPTIONS.find(o => o.value === currentAttrs.locationType)?.label || ""} readOnly className="bg-muted/30 text-foreground cursor-default" />
+        </div>
+      </div>
+
+      {(currentAttrs.locationType === "FTP" || currentAttrs.locationType === "URL") && (
+        <div className="flex flex-col gap-2">
+          <Label className="text-sm font-medium">External Location <span className="text-destructive">*</span></Label>
+          <Input
+            value={currentAttrs.externalLocation}
+            onChange={(e) => updateAttrs({ ...currentAttrs, externalLocation: e.target.value })}
+            placeholder={currentAttrs.locationType === "FTP" ? "ftp://..." : "https://..."}
+            className="bg-background"
+          />
+        </div>
+      )}
+
+      <div className="border-t border-border" />
+
+      {/* Optional attributes disclosure (8 fields) (Change 3a) */}
+      <Collapsible open={advancedOpen} onOpenChange={setAdvancedOpen}>
+        <CollapsibleTrigger asChild>
+          <button className="flex w-full items-center gap-2 rounded border border-border bg-muted/30 px-4 py-3 text-left text-sm font-medium text-foreground hover:bg-muted/50">
+            <ChevronDown className={cn("size-4 transition-transform", advancedOpen && "rotate-180")} />
+            {advancedOpen ? "Optional attributes (8) — collapse" : "Optional attributes (8) — expand"}
+          </button>
+        </CollapsibleTrigger>
+        <CollapsibleContent>
+          <div className="mt-4 grid gap-4 rounded border border-border bg-background p-4 md:grid-cols-2">
+            <div className="flex flex-col gap-2">
+              <Label className="text-sm font-medium">Image Style</Label>
+              <Select value={currentAttrs.imageStyle} onValueChange={(v) => updateAttrs({ ...currentAttrs, imageStyle: v })}>
+                <SelectTrigger className="w-full bg-background"><SelectValue placeholder="Select style..." /></SelectTrigger>
+                <SelectContent>{IMAGE_STYLE_OPTIONS.map(o => <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>)}</SelectContent>
+              </Select>
+            </div>
+            <div className="flex flex-col gap-2">
+              <Label className="text-sm font-medium">Facing (GDSN)</Label>
+              <Select value={currentAttrs.facing} onValueChange={(v) => updateAttrs({ ...currentAttrs, facing: v })}>
+                <SelectTrigger className="w-full bg-background"><SelectValue placeholder="Select facing..." /></SelectTrigger>
+                <SelectContent>{FACING_OPTIONS.map(o => <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>)}</SelectContent>
+              </Select>
+            </div>
+            <div className="flex flex-col gap-2">
+              <Label className="text-sm font-medium">Angle</Label>
+              <Select value={currentAttrs.angle} onValueChange={(v) => updateAttrs({ ...currentAttrs, angle: v })}>
+                <SelectTrigger className="w-full bg-background"><SelectValue placeholder="Select angle..." /></SelectTrigger>
+                <SelectContent>{ANGLE_OPTIONS.map(o => <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>)}</SelectContent>
+              </Select>
+            </div>
+            <div className="flex flex-col gap-2">
+              <Label className="text-sm font-medium">Clipping Path</Label>
+              <Input value={currentAttrs.clippingPath} onChange={(e) => updateAttrs({ ...currentAttrs, clippingPath: e.target.value })} placeholder="Path name..." className="bg-background" />
+            </div>
+            <div className="flex flex-col gap-2 md:col-span-2">
+              <Label className="text-sm font-medium">Image Description</Label>
+              <Input value={currentAttrs.imageDescription} onChange={(e) => updateAttrs({ ...currentAttrs, imageDescription: e.target.value })} placeholder="Enter description..." className="bg-background" />
+            </div>
+            <div className="flex flex-col gap-2">
+              <Label className="text-xs text-muted-foreground">Pixel Density (DPI)</Label>
+              <Input value={currentAttrs.pixelDensity} onChange={(e) => updateAttrs({ ...currentAttrs, pixelDensity: e.target.value })} placeholder="e.g. 300" className="bg-background" type="number" min="1" />
+            </div>
+            <div className="flex flex-col gap-2">
+              <Label className="text-xs text-muted-foreground">Height (px)</Label>
+              <Input value={currentAttrs.height} onChange={(e) => updateAttrs({ ...currentAttrs, height: e.target.value })} placeholder="e.g. 2400" className="bg-background" type="number" min="1" />
+            </div>
+            <div className="flex flex-col gap-2">
+              <Label className="text-xs text-muted-foreground">Width (px)</Label>
+              <Input value={currentAttrs.width} onChange={(e) => updateAttrs({ ...currentAttrs, width: e.target.value })} placeholder="e.g. 2400" className="bg-background" type="number" min="1" />
+            </div>
+          </div>
+        </CollapsibleContent>
+      </Collapsible>
+    </div>
+  )
+}
+
 export function ImageUploadWizard({
   uploadLevel,
   setUploadLevel,
@@ -196,6 +365,16 @@ export function ImageUploadWizard({
   const [showDownloadModal, setShowDownloadModal] = useState(false)
   const [downloadComplete, setDownloadComplete] = useState(false)
   const [activeImageIndex, setActiveImageIndex] = useState(0)
+  // Inline validation errors from file drop/browse (Change 1)
+  const [validationErrors, setValidationErrors] = useState<ValidationError[]>([])
+  // Submission phase for progress card (Change 4)
+  const [submissionPhase, setSubmissionPhase] = useState<"idle" | "uploading" | "complete" | "partial-failure">("idle")
+  // Per-file submission status (Change 4)
+  const [fileStatuses, setFileStatuses] = useState<{ [id: string]: "queued" | "uploading" | "processing" | "complete" | "failed" }>({})
+  // Edit-attributes dialog state (Change 7)
+  const [editAttrDialog, setEditAttrDialog] = useState<{ open: boolean; fileIndex: number; draft: typeof attributes }>({ open: false, fileIndex: 0, draft: {} as typeof attributes })
+  // Replace-file dialog state (Change 7)
+  const [replaceFileDialog, setReplaceFileDialog] = useState<{ open: boolean; fileIndex: number; pendingFile: File | null; confirmed: boolean }>({ open: false, fileIndex: 0, pendingFile: null, confirmed: false })
   
   // Form state for attributes
   const [attributes, setAttributes] = useState({
@@ -255,15 +434,17 @@ export function ImageUploadWizard({
     setIsDragging(false)
   }, [])
 
-  const handleDrop = useCallback((e: React.DragEvent) => {
-    e.preventDefault()
-    setIsDragging(false)
-    
-    const files = Array.from(e.dataTransfer.files).filter(
-      file => file.type.startsWith("image/")
-    )
-    
-    const newFiles: UploadedFile[] = files.map((file, index) => ({
+  // Validates files and stages valid ones; appends errors for invalid ones
+  const processFiles = useCallback(async (rawFiles: File[]) => {
+    const { valid, errors } = await validateImageBatch(rawFiles)
+    if (errors.length > 0) {
+      setValidationErrors(prev => {
+        const newErrors = errors.filter(e => !prev.some(p => p.fileName === e.fileName))
+        return [...prev, ...newErrors]
+      })
+    }
+    if (valid.length === 0) return
+    const newFiles: UploadedFile[] = valid.map((file, index) => ({
       id: `file-${Date.now()}-${index}`,
       name: file.name,
       size: file.size,
@@ -271,25 +452,20 @@ export function ImageUploadWizard({
       preview: URL.createObjectURL(file),
       status: "complete" as const,
     }))
-    
     setUploadedFiles(prev => [...prev, ...newFiles])
   }, [])
 
+  const handleDrop = useCallback((e: React.DragEvent) => {
+    e.preventDefault()
+    setIsDragging(false)
+    const files = Array.from(e.dataTransfer.files)
+    processFiles(files)
+  }, [processFiles])
+
   const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const files = Array.from(e.target.files || []).filter(
-      file => file.type.startsWith("image/")
-    )
-    
-    const newFiles: UploadedFile[] = files.map((file, index) => ({
-      id: `file-${Date.now()}-${index}`,
-      name: file.name,
-      size: file.size,
-      type: file.type,
-      preview: URL.createObjectURL(file),
-      status: "complete" as const,
-    }))
-    
-    setUploadedFiles(prev => [...prev, ...newFiles])
+    const files = Array.from(e.target.files || [])
+    processFiles(files)
+    e.target.value = ""
   }
 
   const removeFile = (fileId: string) => {
@@ -388,19 +564,58 @@ End of Metadata Export
     setDownloadComplete(true)
   }
 
-  const isRemoteLocation = attributes.locationType === "FTP" || attributes.locationType === "URL"
-  const canProceedStep2 = selectedSelectionCode && selectedProduct && attributes.locationType &&
+  // Read locationType from the active record for consistency (Change 2b)
+  const isRemoteLocation = getCurrentAttributes().locationType === "FTP" || getCurrentAttributes().locationType === "URL"
+  const canProceedStep2 = selectedSelectionCode && selectedProduct && getCurrentAttributes().locationType &&
     (isRemoteLocation || uploadedFiles.length > 0) &&
     (uploadLevel === "product" || 
      (uploadLevel === "product-color" && selectedColorCode) ||
      (uploadLevel === "gtin" && selectedGtin))
-  const canProceedStep3 = attributes.imageType && attributes.purpose && attributes.orientation
+  // In per-image mode, require every file to have all required attrs set (Change 2a)
+  const missingAttrCount = (() => {
+    if (applyToAll) return 0
+    return uploadedFiles.filter((_, i) => {
+      const a = attributesByImage[i]
+      return !a?.imageType || !a?.purpose || !a?.orientation
+    }).length
+  })()
+  const canProceedStep3 = applyToAll
+    ? !!(getCurrentAttributes().imageType && getCurrentAttributes().purpose && getCurrentAttributes().orientation)
+    : missingAttrCount === 0 && uploadedFiles.length > 0
+
+  // Simulates per-file upload progression (Change 4)
+  const simulateSubmission = useCallback(() => {
+    const ids = uploadedFiles.map(f => f.id)
+    const failIndex = uploadedFiles.length >= 3 ? Math.floor(uploadedFiles.length / 2) : -1
+    const initial: typeof fileStatuses = {}
+    ids.forEach(id => { initial[id] = "queued" })
+    setFileStatuses(initial)
+    setSubmissionPhase("uploading")
+
+    ids.forEach((id, i) => {
+      const base = i * 800
+      setTimeout(() => setFileStatuses(prev => ({ ...prev, [id]: "uploading" })), base + 100)
+      setTimeout(() => setFileStatuses(prev => ({ ...prev, [id]: "processing" })), base + 400)
+      setTimeout(() => {
+        setFileStatuses(prev => ({ ...prev, [id]: i === failIndex ? "failed" : "complete" }))
+        if (i === ids.length - 1) {
+          setTimeout(() => {
+            const hasFailure = failIndex >= 0
+            setSubmissionPhase(hasFailure ? "partial-failure" : "complete")
+            if (!hasFailure) {
+              setTimeout(() => setShowProductMedia(true), 500)
+            }
+          }, 300)
+        }
+      }, base + 800)
+    })
+  }, [uploadedFiles])
 
   const handleNext = () => {
     if (currentStep < 3) {
       setCurrentStep(currentStep + 1)
     } else {
-      setShowProductMedia(true)
+      simulateSubmission()
     }
   }
 
@@ -480,6 +695,25 @@ End of Metadata Export
           <button className="p-1.5 hover:bg-muted border border-border" title="Print">
             <Printer className="size-4 text-muted-foreground" />
           </button>
+          {/* Edit attributes (Change 7) */}
+          <button
+            className="p-1.5 hover:bg-muted border border-border"
+            title="Edit attributes"
+            onClick={() => {
+              const curAttrs = applyToAll ? attributes : (attributesByImage[activeImageIndex] || attributes)
+              setEditAttrDialog({ open: true, fileIndex: activeImageIndex, draft: { ...curAttrs } })
+            }}
+          >
+            <Pencil className="size-4 text-muted-foreground" />
+          </button>
+          {/* Replace file (Change 7) */}
+          <button
+            className="p-1.5 hover:bg-muted border border-border"
+            title="Replace file"
+            onClick={() => setReplaceFileDialog({ open: true, fileIndex: activeImageIndex, pendingFile: null, confirmed: false })}
+          >
+            <RefreshCw className="size-4 text-muted-foreground" />
+          </button>
         </div>
 
         {/* Company Info Header */}
@@ -543,6 +777,19 @@ End of Metadata Export
             </div>
           </div>
         </div>
+
+        {/* Syndication info block — supplier post-submit only (Change 6) */}
+        {portalType === "supplier" && (
+          <div className="rounded border border-border bg-card p-3 flex items-start gap-3">
+            <Info className="size-4 text-primary mt-0.5 shrink-0" />
+            <div>
+              <p className="text-sm text-foreground">
+                Submitted to TGC &mdash; visible to retailers. 7 retailers currently access selection code {data.selectionCode} where Product {data.productId}/GTINs reside.
+              </p>
+              <p className="text-xs text-muted-foreground mt-0.5">Available to retailer subscribers on next sync.</p>
+            </div>
+          </div>
+        )}
 
         {/* Main Content - Two Panel Layout */}
         <div className="grid grid-cols-2 gap-4">
@@ -760,6 +1007,97 @@ End of Metadata Export
           </div>
         </div>
 
+        {/* Edit Attributes Dialog (Change 7) */}
+        <Dialog open={editAttrDialog.open} onOpenChange={(o) => setEditAttrDialog(prev => ({ ...prev, open: o }))}>
+          <DialogContent className="max-w-lg">
+            <DialogHeader>
+              <DialogTitle>Edit attributes &mdash; {uploadedFiles[editAttrDialog.fileIndex]?.name}</DialogTitle>
+            </DialogHeader>
+            <div className="flex flex-col gap-4 py-2">
+              <StepTwoForm
+                currentAttrs={editAttrDialog.draft}
+                updateAttrs={(newAttrs) => setEditAttrDialog(prev => ({ ...prev, draft: newAttrs }))}
+                advancedOpen={advancedOpen}
+                setAdvancedOpen={setAdvancedOpen}
+                uploadLevel={uploadLevel}
+                autoData={getAutoPopulatedData()}
+              />
+            </div>
+            <div className="flex justify-end gap-2 pt-2 border-t border-border">
+              <Button variant="outline" onClick={() => setEditAttrDialog(prev => ({ ...prev, open: false }))}>Cancel</Button>
+              <Button onClick={() => {
+                if (applyToAll) {
+                  setAttributes(editAttrDialog.draft)
+                } else {
+                  setAttributesByImage(prev => ({ ...prev, [editAttrDialog.fileIndex]: editAttrDialog.draft }))
+                }
+                setEditAttrDialog(prev => ({ ...prev, open: false }))
+              }}>Save</Button>
+            </div>
+          </DialogContent>
+        </Dialog>
+
+        {/* Replace File Dialog (Change 7) */}
+        <Dialog open={replaceFileDialog.open} onOpenChange={(o) => setReplaceFileDialog(prev => ({ ...prev, open: o, pendingFile: null, confirmed: false }))}>
+          <DialogContent className="max-w-md">
+            <DialogHeader>
+              <DialogTitle>Replace file</DialogTitle>
+            </DialogHeader>
+            <div className="py-2">
+              {!replaceFileDialog.pendingFile ? (
+                <div
+                  className="flex flex-col items-center justify-center gap-3 rounded border-2 border-dashed border-border p-8 cursor-pointer hover:border-primary/50"
+                  onDragOver={(e) => e.preventDefault()}
+                  onDrop={async (e) => {
+                    e.preventDefault()
+                    const f = e.dataTransfer.files[0]
+                    if (!f) return
+                    const { errors } = await validateImageBatch([f])
+                    if (errors.length) { setValidationErrors(prev => [...prev, ...errors]); return }
+                    setReplaceFileDialog(prev => ({ ...prev, pendingFile: f }))
+                  }}
+                >
+                  <Upload className="size-8 text-muted-foreground" />
+                  <p className="text-sm text-muted-foreground text-center">Drop a replacement file here</p>
+                  <label>
+                    <input type="file" accept="image/jpeg,.jpg,.jpeg" className="hidden" onChange={async (e) => {
+                      const f = e.target.files?.[0]
+                      if (!f) return
+                      const { errors } = await validateImageBatch([f])
+                      if (errors.length) { setValidationErrors(prev => [...prev, ...errors]); return }
+                      setReplaceFileDialog(prev => ({ ...prev, pendingFile: f }))
+                    }} />
+                    <Button variant="outline" size="sm" asChild><span className="cursor-pointer">Browse</span></Button>
+                  </label>
+                </div>
+              ) : (
+                <div className="flex flex-col gap-4">
+                  <p className="text-sm text-foreground">
+                    Replace <span className="font-medium">{uploadedFiles[replaceFileDialog.fileIndex]?.name}</span> with{" "}
+                    <span className="font-medium">{replaceFileDialog.pendingFile.name}</span>?
+                  </p>
+                  <div className="flex justify-end gap-2">
+                    <Button variant="outline" onClick={() => setReplaceFileDialog(prev => ({ ...prev, pendingFile: null }))}>Cancel</Button>
+                    <Button onClick={() => {
+                      const f = replaceFileDialog.pendingFile!
+                      const newFile: UploadedFile = {
+                        id: uploadedFiles[replaceFileDialog.fileIndex].id,
+                        name: f.name,
+                        size: f.size,
+                        type: f.type,
+                        preview: URL.createObjectURL(f),
+                        status: "complete",
+                      }
+                      setUploadedFiles(prev => prev.map((u, i) => i === replaceFileDialog.fileIndex ? newFile : u))
+                      setReplaceFileDialog({ open: false, fileIndex: 0, pendingFile: null, confirmed: false })
+                    }}>Replace</Button>
+                  </div>
+                </div>
+              )}
+            </div>
+          </DialogContent>
+        </Dialog>
+
         {/* Action Buttons */}
         <div className="flex items-center justify-end gap-3 pt-4">
           <Button 
@@ -949,6 +1287,94 @@ End of Metadata Export
             </div>
           </div>
         )}
+      </div>
+    )
+  }
+
+  // Submission progress card (Change 4)
+  if (submissionPhase === "uploading" || submissionPhase === "complete" || submissionPhase === "partial-failure") {
+    const completedCount = Object.values(fileStatuses).filter(s => s === "complete").length
+    const failedCount = Object.values(fileStatuses).filter(s => s === "failed").length
+    const STATUS_LABELS: Record<string, string> = {
+      queued: "Queued", uploading: "Uploading", processing: "Processing", complete: "Complete", failed: "Failed",
+    }
+    return (
+      <div className="flex flex-col gap-6">
+        <div className="flex items-center gap-2 text-sm">
+          <span className="text-tg-link hover:underline cursor-pointer">Data Management</span>
+          <span className="text-muted-foreground">&gt;</span>
+          <span className="font-medium text-foreground">Submitting</span>
+        </div>
+        <Card>
+          <CardContent className="p-6 flex flex-col gap-4">
+            <h2 className="text-base font-semibold text-foreground">Submitting images</h2>
+
+            {/* Per-file status list (Change 5 error surface included) */}
+            <div className="flex flex-col gap-2">
+              {uploadedFiles.map((file) => {
+                const status = fileStatuses[file.id] ?? "queued"
+                const isErr = status === "failed"
+                return (
+                  <div key={file.id} className="flex items-center gap-3 rounded border border-border px-3 py-2 text-sm">
+                    {isErr && <span className="size-2 rounded-full bg-red-600 shrink-0" />}
+                    <span className={cn("flex-1 truncate", isErr ? "text-destructive" : "text-foreground")}>{file.name}</span>
+                    {isErr && <span className="text-xs text-destructive mr-1">Upload failed</span>}
+                    <span className={cn(
+                      "text-xs font-medium px-2 py-0.5 rounded",
+                      status === "complete" ? "bg-tg-success/10 text-tg-success"
+                        : status === "failed" ? "bg-destructive/10 text-destructive"
+                        : "bg-muted text-muted-foreground"
+                    )}>
+                      {STATUS_LABELS[status]}
+                    </span>
+                    {isErr && (
+                      <Button variant="ghost" size="sm" className="h-6 text-xs px-2" onClick={() => {
+                        setFileStatuses(prev => ({ ...prev, [file.id]: "queued" }))
+                        setTimeout(() => setFileStatuses(prev => ({ ...prev, [file.id]: "uploading" })), 100)
+                        setTimeout(() => setFileStatuses(prev => ({ ...prev, [file.id]: "processing" })), 400)
+                        setTimeout(() => {
+                          setFileStatuses(prev => ({ ...prev, [file.id]: "complete" }))
+                          setSubmissionPhase(prev => prev === "partial-failure" ? "complete" : prev)
+                          setTimeout(() => setShowProductMedia(true), 500)
+                        }, 800)
+                      }}>Retry</Button>
+                    )}
+                  </div>
+                )
+              })}
+            </div>
+
+            {/* Retry-all summary (Change 5) */}
+            {failedCount > 0 && (
+              <div className="flex items-center gap-2 text-sm">
+                <span className="text-destructive">{failedCount} failed</span>
+                <button className="text-xs text-tg-link hover:underline" onClick={() => {
+                  uploadedFiles.forEach(file => {
+                    if (fileStatuses[file.id] === "failed") {
+                      setFileStatuses(prev => ({ ...prev, [file.id]: "queued" }))
+                      setTimeout(() => setFileStatuses(prev => ({ ...prev, [file.id]: "uploading" })), 100)
+                      setTimeout(() => setFileStatuses(prev => ({ ...prev, [file.id]: "processing" })), 400)
+                      setTimeout(() => setFileStatuses(prev => ({ ...prev, [file.id]: "complete" })), 800)
+                    }
+                  })
+                  setTimeout(() => {
+                    setSubmissionPhase("complete")
+                    setTimeout(() => setShowProductMedia(true), 500)
+                  }, 1000)
+                }}>retry all</button>
+              </div>
+            )}
+
+            <p className="text-xs text-muted-foreground">{completedCount} of {uploadedFiles.length} complete</p>
+
+            {/* Footer actions for partial-failure */}
+            {submissionPhase === "partial-failure" && (
+              <div className="flex items-center justify-end gap-2 pt-2 border-t border-border">
+                <Button onClick={() => setShowProductMedia(true)}>Skip failed and continue</Button>
+              </div>
+            )}
+          </CardContent>
+        </Card>
       </div>
     )
   }
@@ -1223,9 +1649,30 @@ End of Metadata Export
                     </Button>
                   </label>
                   <p className="text-xs text-muted-foreground">
-                    JPG / JPEG - Max 10 MB each
+                    JPG / JPEG &middot; Max 500 KB each &middot; 2400&ndash;4800 px &middot; 1:1 &middot; 300 ppi
                   </p>
                 </div>
+              </div>
+            )}
+
+            {/* Inline validation error list (Change 1) */}
+            {validationErrors.length > 0 && (
+              <div className="flex flex-col gap-1 rounded border border-destructive/40 bg-destructive/5 p-3">
+                <p className="text-xs font-semibold text-destructive mb-1">{validationErrors.length} file{validationErrors.length !== 1 ? "s" : ""} rejected</p>
+                {validationErrors.map((err, i) => (
+                  <div key={i} className="flex items-center gap-2 text-xs">
+                    <span className="text-red-600">&#8226;</span>
+                    <span className="font-medium text-foreground truncate max-w-[180px]" title={err.fileName}>{err.fileName}</span>
+                    <span className="text-muted-foreground">{err.observedValue}</span>
+                    <span className="text-destructive">&mdash; {err.ruleFailed}</span>
+                    <button
+                      className="ml-auto text-xs text-muted-foreground hover:text-destructive"
+                      onClick={() => setValidationErrors(prev => prev.filter((_, idx) => idx !== i))}
+                    >
+                      Remove
+                    </button>
+                  </div>
+                ))}
               </div>
             )}
 
@@ -1315,6 +1762,10 @@ End of Metadata Export
                           <Check className="size-3 text-white" />
                         </div>
                       )}
+                      {/* Error indicator (Change 5) */}
+                      {file.status === "error" && (
+                        <div className="absolute right-2 top-2 size-3 rounded-full bg-red-600" title="Upload error" />
+                      )}
                     </div>
                   ))}
                   {/* Add More Placeholder */}
@@ -1349,7 +1800,7 @@ End of Metadata Export
               </p>
             </div>
 
-            {/* Apply to All Checkbox */}
+            {/* Apply to All Checkbox with badge (Change 3b) */}
             <div className="flex items-center gap-2 rounded border border-border bg-muted/30 p-3">
               <Checkbox
                 id="apply-all"
@@ -1362,295 +1813,124 @@ End of Metadata Export
               <label htmlFor="apply-all" className="text-sm font-medium text-foreground cursor-pointer">
                 Apply same attributes to all {uploadedFiles.length} images
               </label>
-            </div>
-
-            {/* Per-Image Tabs (when not applying to all) */}
-            {!applyToAll && uploadedFiles.length > 1 && (
-              <div className="flex gap-2 border-b border-border overflow-x-auto">
-                {uploadedFiles.map((file, idx) => (
-                  <button
-                    key={file.id}
-                    onClick={() => setActiveAttributeImageIndex(idx)}
-                    className={cn(
-                      "px-3 py-2 text-sm font-medium border-b-2 transition-colors whitespace-nowrap",
-                      activeAttributeImageIndex === idx
-                        ? "border-primary text-primary"
-                        : "border-transparent text-muted-foreground hover:text-foreground"
-                    )}
-                  >
-                    Image {idx + 1}: {file.name.slice(0, 20)}
-                  </button>
-                ))}
-              </div>
-            )}
-
-            {/* Upload Level Badge */}
-            <div className="inline-flex items-center gap-2 self-start rounded bg-primary/10 px-3 py-1.5 text-sm">
-              <FileImage className="size-4 text-primary" />
-              <span className="font-medium text-primary">
-                {uploadLevel === "product" 
-                  ? "Product Level Image" 
-                  : uploadLevel === "gtin"
-                  ? "Item Level Image"
-                  : "Product + Color Code Level Image"}
+              <span className="ml-auto text-xs text-muted-foreground">
+                {applyToAll
+                  ? `Applied to ${uploadedFiles.length} images`
+                  : `Per-image — editing ${activeAttributeImageIndex + 1} of ${uploadedFiles.length}`}
               </span>
             </div>
 
-            {/* Auto-populated fields (read-only) */}
-            {(uploadLevel === "product-color" || uploadLevel === "gtin") && (
-              <div className="grid gap-4 md:grid-cols-2">
-                {uploadLevel === "product-color" && (
-                  <div className="flex flex-col gap-2">
-                    <Label className="text-sm font-medium">Color Code</Label>
-                    <Input
-                      value={getAutoPopulatedData().colorCode}
-                      readOnly
-                      className="bg-muted/30 text-foreground cursor-default"
-                    />
+            {/* Two-column per-image layout (Change 3b) — only when applyToAll=false and multiple files */}
+            {!applyToAll && uploadedFiles.length > 1 ? (
+              <div className="flex gap-4">
+                {/* Left column: thumbnail list ~25% */}
+                <div className="w-1/4 flex flex-col gap-1 border border-border rounded overflow-hidden">
+                  {uploadedFiles.map((file, idx) => (
+                    <button
+                      key={file.id}
+                      onClick={() => setActiveAttributeImageIndex(idx)}
+                      className={cn(
+                        "flex items-center gap-2 px-2 py-2 text-left text-xs transition-colors border-l-2",
+                        activeAttributeImageIndex === idx
+                          ? "border-l-primary bg-primary/5 text-foreground"
+                          : "border-l-transparent hover:bg-muted/40 text-muted-foreground"
+                      )}
+                    >
+                      <span className="shrink-0 text-muted-foreground w-4 text-right">{idx + 1}</span>
+                      <div className="size-10 shrink-0 rounded border border-border overflow-hidden bg-muted">
+                        {file.preview ? (
+                          <img src={file.preview} alt="" className="size-full object-cover" />
+                        ) : (
+                          <FileImage className="size-5 text-muted-foreground m-auto mt-2" />
+                        )}
+                      </div>
+                      <span className="truncate">{file.name.slice(0, 18)}</span>
+                    </button>
+                  ))}
+                </div>
+
+                {/* Right column: attribute form */}
+                <div className="flex-1 flex flex-col gap-4">
+                  {/* Inline preview (Change 3c) */}
+                  <div className="flex items-start gap-3">
+                    <div className="size-24 shrink-0 rounded border border-border overflow-hidden bg-muted flex items-center justify-center">
+                      {uploadedFiles[activeAttributeImageIndex]?.preview ? (
+                        <img src={uploadedFiles[activeAttributeImageIndex].preview} alt="" className="size-full object-cover" />
+                      ) : (
+                        <FileImage className="size-8 text-muted-foreground" />
+                      )}
+                    </div>
+                    {/* Copy from another image dropdown */}
+                    <div className="flex flex-col gap-1">
+                      <p className="text-xs text-muted-foreground">Copy attributes from image:</p>
+                      <Select
+                        onValueChange={(val) => {
+                          const srcIdx = parseInt(val)
+                          const srcAttrs = attributesByImage[srcIdx] || attributes
+                          setAttributesByImage(prev => ({ ...prev, [activeAttributeImageIndex]: { ...srcAttrs } }))
+                        }}
+                      >
+                        <SelectTrigger className="w-52 h-8 text-xs bg-background">
+                          <SelectValue placeholder="Select image..." />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {uploadedFiles.map((f, i) => i !== activeAttributeImageIndex && (
+                            <SelectItem key={i} value={String(i)}>
+                              Image {i + 1}: {f.name.slice(0, 20)}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  </div>
+
+                  {/* Required section */}
+                  <StepTwoForm
+                    currentAttrs={getCurrentAttributes()}
+                    updateAttrs={updateCurrentAttributes}
+                    advancedOpen={advancedOpen}
+                    setAdvancedOpen={setAdvancedOpen}
+                    uploadLevel={uploadLevel}
+                    autoData={getAutoPopulatedData()}
+                  />
+                </div>
+              </div>
+            ) : (
+              /* applyToAll or single file: standard layout */
+              <div className="flex flex-col gap-4">
+                {/* Inline preview (Change 3c) — shows first file */}
+                {uploadedFiles.length > 0 && (
+                  <div className="flex items-center gap-3">
+                    <div className="size-24 shrink-0 rounded border border-border overflow-hidden bg-muted flex items-center justify-center">
+                      {uploadedFiles[applyToAll ? 0 : activeAttributeImageIndex]?.preview ? (
+                        <img src={uploadedFiles[applyToAll ? 0 : activeAttributeImageIndex].preview} alt="" className="size-full object-cover" />
+                      ) : (
+                        <FileImage className="size-8 text-muted-foreground" />
+                      )}
+                    </div>
+                    <p className="text-xs text-muted-foreground">
+                      {applyToAll ? `Preview of first file — attributes apply to all ${uploadedFiles.length}` : `Editing: ${uploadedFiles[activeAttributeImageIndex]?.name}`}
+                    </p>
                   </div>
                 )}
-                {uploadLevel === "gtin" && (
-                  <div className="flex flex-col gap-2">
-                    <Label className="text-sm font-medium">GTIN</Label>
-                    <Input
-                      value={getAutoPopulatedData().selectedGtin}
-                      readOnly
-                      className="bg-muted/30 text-foreground cursor-default"
-                    />
-                  </div>
-                )}
-              </div>
-            )}
 
-            {/* Required Attributes */}
-            <div className="grid gap-4 md:grid-cols-2">
-              <div className="flex flex-col gap-2">
-                <Label className="text-sm font-medium">
-                  Image Type <span className="text-destructive">*</span>
-                </Label>
-                <Select
-                  value={getCurrentAttributes().imageType}
-                  onValueChange={(value) => updateCurrentAttributes({ ...getCurrentAttributes(), imageType: value })}
-                >
-                  <SelectTrigger className="w-full bg-background">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {IMAGE_TYPE_OPTIONS.map((option) => (
-                      <SelectItem key={option.value} value={option.value}>
-                        {option.label}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-
-              <div className="flex flex-col gap-2">
-                <Label className="text-sm font-medium">
-                  Purpose <span className="text-destructive">*</span>
-                </Label>
-                <Select
-                  value={getCurrentAttributes().purpose}
-                  onValueChange={(value) => updateCurrentAttributes({ ...getCurrentAttributes(), purpose: value })}
-                >
-                  <SelectTrigger className="w-full bg-background">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {PURPOSE_OPTIONS.map((option) => (
-                      <SelectItem key={option.value} value={option.value}>
-                        {option.label}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-
-              <div className="flex flex-col gap-2">
-                <Label className="text-sm font-medium">
-                  Orientation <span className="text-destructive">*</span>
-                </Label>
-                <Select
-                  value={getCurrentAttributes().orientation}
-                  onValueChange={(value) => updateCurrentAttributes({ ...getCurrentAttributes(), orientation: value })}
-                >
-                  <SelectTrigger className="w-full bg-background">
-                    <SelectValue placeholder="Select orientation..." />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {ORIENTATION_OPTIONS.map((option) => (
-                      <SelectItem key={option.value} value={option.value}>
-                        {option.label}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-
-              {/* Location Type shown read-only — set in Step 2 */}
-              <div className="flex flex-col gap-2">
-                <Label className="text-sm font-medium">Location Type</Label>
-                <Input
-                  value={LOCATION_TYPE_OPTIONS.find(o => o.value === getCurrentAttributes().locationType)?.label || ""}
-                  readOnly
-                  className="bg-muted/30 text-foreground cursor-default"
-                />
-              </div>
-            </div>
-
-            {/* External Location - shown when FTP or URL */}
-            {(getCurrentAttributes().locationType === "FTP" || getCurrentAttributes().locationType === "URL") && (
-              <div className="flex flex-col gap-2">
-                <Label className="text-sm font-medium">
-                  External Location <span className="text-destructive">*</span>
-                </Label>
-                <Input
-                  value={getCurrentAttributes().externalLocation}
-                  onChange={(e) => updateCurrentAttributes({ ...getCurrentAttributes(), externalLocation: e.target.value })}
-                  placeholder={getCurrentAttributes().locationType === "FTP" ? "ftp://..." : "https://..."}
-                  className="bg-background"
+                <StepTwoForm
+                  currentAttrs={getCurrentAttributes()}
+                  updateAttrs={updateCurrentAttributes}
+                  advancedOpen={advancedOpen}
+                  setAdvancedOpen={setAdvancedOpen}
+                  uploadLevel={uploadLevel}
+                  autoData={getAutoPopulatedData()}
                 />
               </div>
             )}
 
-            {/* File Dimensions & Density */}
-            <div className="flex flex-col gap-2">
-              <Label className="text-sm font-medium">File Dimensions &amp; Density</Label>
-              <div className="grid gap-4 md:grid-cols-3">
-                <div className="flex flex-col gap-2">
-                  <Label className="text-xs text-muted-foreground">Pixel Density (DPI)</Label>
-                  <Input
-                    value={getCurrentAttributes().pixelDensity}
-                    onChange={(e) => updateCurrentAttributes({ ...getCurrentAttributes(), pixelDensity: e.target.value })}
-                    placeholder="e.g. 300"
-                    className="bg-background"
-                    type="number"
-                    min="1"
-                  />
-                </div>
-                <div className="flex flex-col gap-2">
-                  <Label className="text-xs text-muted-foreground">Height (px)</Label>
-                  <Input
-                    value={getCurrentAttributes().height}
-                    onChange={(e) => updateCurrentAttributes({ ...getCurrentAttributes(), height: e.target.value })}
-                    placeholder="e.g. 1200"
-                    className="bg-background"
-                    type="number"
-                    min="1"
-                  />
-                </div>
-                <div className="flex flex-col gap-2">
-                  <Label className="text-xs text-muted-foreground">Width (px)</Label>
-                  <Input
-                    value={getCurrentAttributes().width}
-                    onChange={(e) => updateCurrentAttributes({ ...getCurrentAttributes(), width: e.target.value })}
-                    placeholder="e.g. 800"
-                    className="bg-background"
-                    type="number"
-                    min="1"
-                  />
-                </div>
-              </div>
-            </div>
-
-            {/* Advanced Attributes (Collapsible) */}
-            <Collapsible open={advancedOpen} onOpenChange={setAdvancedOpen}>
-              <CollapsibleTrigger asChild>
-                <button className="flex w-full items-center gap-2 rounded border border-border bg-muted/30 px-4 py-3 text-left text-sm font-medium text-foreground hover:bg-muted/50">
-                  <ChevronDown
-                    className={cn(
-                      "size-4 transition-transform",
-                      advancedOpen && "rotate-180"
-                    )}
-                  />
-                  Advanced Attributes (Optional)
-                </button>
-              </CollapsibleTrigger>
-              <CollapsibleContent>
-                <div className="mt-4 grid gap-4 rounded border border-border bg-background p-4 md:grid-cols-2">
-                  <div className="flex flex-col gap-2">
-                    <Label className="text-sm font-medium">Image Style</Label>
-                    <Select
-                      value={getCurrentAttributes().imageStyle}
-                      onValueChange={(value) => updateCurrentAttributes({ ...getCurrentAttributes(), imageStyle: value })}
-                    >
-                      <SelectTrigger className="w-full bg-background">
-                        <SelectValue placeholder="Select style..." />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {IMAGE_STYLE_OPTIONS.map((option) => (
-                          <SelectItem key={option.value} value={option.value}>
-                            {option.label}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </div>
-
-                  <div className="flex flex-col gap-2">
-                    <Label className="text-sm font-medium">Facing (GDSN)</Label>
-                    <Select
-                      value={getCurrentAttributes().facing}
-                      onValueChange={(value) => updateCurrentAttributes({ ...getCurrentAttributes(), facing: value })}
-                    >
-                      <SelectTrigger className="w-full bg-background">
-                        <SelectValue placeholder="Select facing..." />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {FACING_OPTIONS.map((option) => (
-                          <SelectItem key={option.value} value={option.value}>
-                            {option.label}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </div>
-
-                  <div className="flex flex-col gap-2">
-                    <Label className="text-sm font-medium">Angle</Label>
-                    <Select
-                      value={getCurrentAttributes().angle}
-                      onValueChange={(value) => updateCurrentAttributes({ ...getCurrentAttributes(), angle: value })}
-                    >
-                      <SelectTrigger className="w-full bg-background">
-                        <SelectValue placeholder="Select angle..." />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {ANGLE_OPTIONS.map((option) => (
-                          <SelectItem key={option.value} value={option.value}>
-                            {option.label}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </div>
-
-                  <div className="flex flex-col gap-2">
-                    <Label className="text-sm font-medium">Clipping Path</Label>
-                    <Input
-                      value={getCurrentAttributes().clippingPath}
-                      onChange={(e) =>
-                        updateCurrentAttributes({ ...getCurrentAttributes(), clippingPath: e.target.value })
-                      }
-                      placeholder="Path name..."
-                      className="bg-background"
-                    />
-                  </div>
-
-                  <div className="flex flex-col gap-2 md:col-span-2">
-                    <Label className="text-sm font-medium">Image Description</Label>
-                    <Input
-                      value={getCurrentAttributes().imageDescription}
-                      onChange={(e) =>
-                        updateCurrentAttributes({ ...getCurrentAttributes(), imageDescription: e.target.value })
-                      }
-                      placeholder="Enter description..."
-                      className="bg-background"
-                    />
-                  </div>
-                </div>
-              </CollapsibleContent>
-            </Collapsible>
+            {/* Per-image missing attributes hint (Change 2a) */}
+            {!applyToAll && missingAttrCount > 0 && (
+              <p className="text-xs text-destructive">
+                {missingAttrCount} of {uploadedFiles.length} images missing required attributes.
+              </p>
+            )}
 
             {/* Required Fields Note */}
             <p className="text-xs text-muted-foreground">
