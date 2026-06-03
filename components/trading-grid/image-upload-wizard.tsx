@@ -18,7 +18,6 @@ import {
   CheckCircle2,
   Info,
   Pencil,
-  RefreshCw,
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -371,10 +370,16 @@ export function ImageUploadWizard({
   const [submissionPhase, setSubmissionPhase] = useState<"idle" | "uploading" | "complete" | "partial-failure">("idle")
   // Per-file submission status (Change 4)
   const [fileStatuses, setFileStatuses] = useState<{ [id: string]: "queued" | "uploading" | "processing" | "complete" | "failed" }>({})
-  // Edit-attributes dialog state (Change 7)
+  // Edit dialog state — unified for attributes + replace image tabs (Task 1)
   const [editAttrDialog, setEditAttrDialog] = useState<{ open: boolean; fileIndex: number; draft: typeof attributes }>({ open: false, fileIndex: 0, draft: {} as typeof attributes })
-  // Replace-file dialog state (Change 7)
-  const [replaceFileDialog, setReplaceFileDialog] = useState<{ open: boolean; fileIndex: number; pendingFile: File | null; confirmed: boolean }>({ open: false, fileIndex: 0, pendingFile: null, confirmed: false })
+  // Active tab inside the unified edit dialog: "attributes" | "replace" (Task 1)
+  const [editDialogTab, setEditDialogTab] = useState<"attributes" | "replace">("attributes")
+  // Pending replacement file staged inside the Replace image tab (Task 1)
+  const [pendingReplaceFile, setPendingReplaceFile] = useState<File | null>(null)
+  // Inline save-confirmed flash shown after saving attributes (Task 2)
+  const [editSaveConfirmed, setEditSaveConfirmed] = useState(false)
+  // Syndication acknowledgement checkbox in Step 3 — resets on Back (Task 2)
+  const [syndicationAcknowledged, setSyndicationAcknowledged] = useState(false)
   
   // Form state for attributes
   const [attributes, setAttributes] = useState({
@@ -582,10 +587,9 @@ End of Metadata Export
     ? !!(getCurrentAttributes().imageType && getCurrentAttributes().purpose && getCurrentAttributes().orientation)
     : missingAttrCount === 0 && uploadedFiles.length > 0
 
-  // Simulates per-file upload progression (Change 4)
+  // Simulates per-file upload progression — no artificial failures (Task 3)
   const simulateSubmission = useCallback(() => {
     const ids = uploadedFiles.map(f => f.id)
-    const failIndex = uploadedFiles.length >= 3 ? Math.floor(uploadedFiles.length / 2) : -1
     const initial: typeof fileStatuses = {}
     ids.forEach(id => { initial[id] = "queued" })
     setFileStatuses(initial)
@@ -596,14 +600,12 @@ End of Metadata Export
       setTimeout(() => setFileStatuses(prev => ({ ...prev, [id]: "uploading" })), base + 100)
       setTimeout(() => setFileStatuses(prev => ({ ...prev, [id]: "processing" })), base + 400)
       setTimeout(() => {
-        setFileStatuses(prev => ({ ...prev, [id]: i === failIndex ? "failed" : "complete" }))
+        setFileStatuses(prev => ({ ...prev, [id]: "complete" }))
         if (i === ids.length - 1) {
           setTimeout(() => {
-            const hasFailure = failIndex >= 0
-            setSubmissionPhase(hasFailure ? "partial-failure" : "complete")
-            if (!hasFailure) {
-              setTimeout(() => setShowProductMedia(true), 500)
-            }
+            setSubmissionPhase("complete")
+            // 1.5s dwell on "Upload complete" state before advancing (Task 3)
+            setTimeout(() => setShowProductMedia(true), 1500)
           }, 300)
         }
       }, base + 800)
@@ -620,6 +622,7 @@ End of Metadata Export
 
   const handleBack = () => {
     if (currentStep > 1) {
+      if (currentStep === 3) setSyndicationAcknowledged(false)
       setCurrentStep(currentStep - 1)
     } else {
       onCancel()
@@ -694,24 +697,19 @@ End of Metadata Export
           <button className="p-1.5 hover:bg-muted border border-border" title="Print">
             <Printer className="size-4 text-muted-foreground" />
           </button>
-          {/* Edit attributes (Change 7) */}
+          {/* Edit attributes + Replace image — unified dialog (Task 1) */}
           <button
             className="p-1.5 hover:bg-muted border border-border"
-            title="Edit attributes"
+            title="Edit image"
             onClick={() => {
               const curAttrs = applyToAll ? attributes : (attributesByImage[activeImageIndex] || attributes)
               setEditAttrDialog({ open: true, fileIndex: activeImageIndex, draft: { ...curAttrs } })
+              setEditDialogTab("attributes")
+              setPendingReplaceFile(null)
+              setEditSaveConfirmed(false)
             }}
           >
             <Pencil className="size-4 text-muted-foreground" />
-          </button>
-          {/* Replace file (Change 7) */}
-          <button
-            className="p-1.5 hover:bg-muted border border-border"
-            title="Replace file"
-            onClick={() => setReplaceFileDialog({ open: true, fileIndex: activeImageIndex, pendingFile: null, confirmed: false })}
-          >
-            <RefreshCw className="size-4 text-muted-foreground" />
           </button>
         </div>
 
@@ -1006,94 +1004,154 @@ End of Metadata Export
           </div>
         </div>
 
-        {/* Edit Attributes Dialog (Change 7) */}
-        <Dialog open={editAttrDialog.open} onOpenChange={(o) => setEditAttrDialog(prev => ({ ...prev, open: o }))}>
+        {/* Unified Edit dialog — Attributes + Replace image tabs (Task 1) */}
+        <Dialog
+          open={editAttrDialog.open}
+          onOpenChange={(o) => {
+            setEditAttrDialog(prev => ({ ...prev, open: o }))
+            if (!o) { setPendingReplaceFile(null); setEditSaveConfirmed(false) }
+          }}
+        >
           <DialogContent className="max-w-lg">
             <DialogHeader>
-              <DialogTitle>Edit attributes &mdash; {uploadedFiles[editAttrDialog.fileIndex]?.name}</DialogTitle>
+              <DialogTitle>Edit image &mdash; {uploadedFiles[editAttrDialog.fileIndex]?.name}</DialogTitle>
             </DialogHeader>
-            <div className="flex flex-col gap-4 py-2">
-              <StepTwoForm
-                currentAttrs={editAttrDialog.draft}
-                updateAttrs={(newAttrs) => setEditAttrDialog(prev => ({ ...prev, draft: newAttrs }))}
-                advancedOpen={advancedOpen}
-                setAdvancedOpen={setAdvancedOpen}
-                uploadLevel={uploadLevel}
-                autoData={getAutoPopulatedData()}
-              />
-            </div>
-            <div className="flex justify-end gap-2 pt-2 border-t border-border">
-              <Button variant="outline" onClick={() => setEditAttrDialog(prev => ({ ...prev, open: false }))}>Cancel</Button>
-              <Button onClick={() => {
-                if (applyToAll) {
-                  setAttributes(editAttrDialog.draft)
-                } else {
-                  setAttributesByImage(prev => ({ ...prev, [editAttrDialog.fileIndex]: editAttrDialog.draft }))
-                }
-                setEditAttrDialog(prev => ({ ...prev, open: false }))
-              }}>Save</Button>
-            </div>
-          </DialogContent>
-        </Dialog>
 
-        {/* Replace File Dialog (Change 7) */}
-        <Dialog open={replaceFileDialog.open} onOpenChange={(o) => setReplaceFileDialog(prev => ({ ...prev, open: o, pendingFile: null, confirmed: false }))}>
-          <DialogContent className="max-w-md">
-            <DialogHeader>
-              <DialogTitle>Replace file</DialogTitle>
-            </DialogHeader>
-            <div className="py-2">
-              {!replaceFileDialog.pendingFile ? (
-                <div
-                  className="flex flex-col items-center justify-center gap-3 rounded border-2 border-dashed border-border p-8 cursor-pointer hover:border-primary/50"
-                  onDragOver={(e) => e.preventDefault()}
-                  onDrop={(e) => {
-                    e.preventDefault()
-                    const f = e.dataTransfer.files[0]
-                    if (!f) return
-                    const { errors } = validateImageBatch([f])
-                    if (errors.length) { setValidationErrors(prev => [...prev, ...errors]); return }
-                    setReplaceFileDialog(prev => ({ ...prev, pendingFile: f }))
-                  }}
-                >
-                  <Upload className="size-8 text-muted-foreground" />
-                  <p className="text-sm text-muted-foreground text-center">Drop a replacement file here</p>
-                  <label>
-                    <input type="file" accept="image/jpeg,.jpg,.jpeg" className="hidden" onChange={(e) => {
-                      const f = e.target.files?.[0]
+            {/* Tab bar */}
+            <div className="flex border-b border-border -mx-6 px-6">
+              <button
+                className={cn(
+                  "px-4 py-2 text-sm font-medium border-b-2 transition-colors",
+                  editDialogTab === "attributes"
+                    ? "border-primary text-foreground"
+                    : "border-transparent text-muted-foreground hover:text-foreground"
+                )}
+                onClick={() => setEditDialogTab("attributes")}
+              >
+                Attributes
+              </button>
+              <button
+                className={cn(
+                  "px-4 py-2 text-sm font-medium border-b-2 transition-colors",
+                  editDialogTab === "replace"
+                    ? "border-primary text-foreground"
+                    : "border-transparent text-muted-foreground hover:text-foreground"
+                )}
+                onClick={() => { setEditDialogTab("replace"); setPendingReplaceFile(null) }}
+              >
+                Replace image
+              </button>
+            </div>
+
+            {/* Tab A: Attributes */}
+            {editDialogTab === "attributes" && (
+              <>
+                <div className="flex flex-col gap-4 py-2 max-h-[60vh] overflow-y-auto pr-1">
+                  <StepTwoForm
+                    currentAttrs={editAttrDialog.draft}
+                    updateAttrs={(newAttrs) => setEditAttrDialog(prev => ({ ...prev, draft: newAttrs }))}
+                    advancedOpen={advancedOpen}
+                    setAdvancedOpen={setAdvancedOpen}
+                    uploadLevel={uploadLevel}
+                    autoData={getAutoPopulatedData()}
+                  />
+                  {/* Replace image anchor — below form, above Save (Task 1) */}
+                  <button
+                    className="text-sm text-tg-link hover:underline text-left"
+                    onClick={() => { setEditDialogTab("replace"); setPendingReplaceFile(null) }}
+                  >
+                    Replace image instead
+                  </button>
+                </div>
+                <div className="flex items-center justify-end gap-2 pt-2 border-t border-border">
+                  {editSaveConfirmed && (
+                    <span className="flex items-center gap-1 text-xs text-tg-success mr-auto">
+                      <CheckCircle2 className="size-3.5" />
+                      Saved
+                    </span>
+                  )}
+                  <Button variant="outline" onClick={() => setEditAttrDialog(prev => ({ ...prev, open: false }))}>Cancel</Button>
+                  <Button onClick={() => {
+                    if (applyToAll) {
+                      setAttributes(editAttrDialog.draft)
+                    } else {
+                      setAttributesByImage(prev => ({ ...prev, [editAttrDialog.fileIndex]: editAttrDialog.draft }))
+                    }
+                    setEditSaveConfirmed(true)
+                    setTimeout(() => {
+                      setEditAttrDialog(prev => ({ ...prev, open: false }))
+                      setEditSaveConfirmed(false)
+                    }, 1500)
+                  }}>Save</Button>
+                </div>
+              </>
+            )}
+
+            {/* Tab B: Replace image */}
+            {editDialogTab === "replace" && (
+              <div className="py-2 flex flex-col gap-4">
+                {!pendingReplaceFile ? (
+                  <div
+                    className="flex flex-col items-center justify-center gap-3 rounded border-2 border-dashed border-border p-8 cursor-pointer hover:border-primary/50 transition-colors"
+                    onDragOver={(e) => e.preventDefault()}
+                    onDrop={(e) => {
+                      e.preventDefault()
+                      const f = e.dataTransfer.files[0]
                       if (!f) return
                       const { errors } = validateImageBatch([f])
                       if (errors.length) { setValidationErrors(prev => [...prev, ...errors]); return }
-                      setReplaceFileDialog(prev => ({ ...prev, pendingFile: f }))
-                    }} />
-                    <Button variant="outline" size="sm" asChild><span className="cursor-pointer">Browse</span></Button>
-                  </label>
-                </div>
-              ) : (
-                <div className="flex flex-col gap-4">
-                  <p className="text-sm text-foreground">
-                    Replace <span className="font-medium">{uploadedFiles[replaceFileDialog.fileIndex]?.name}</span> with{" "}
-                    <span className="font-medium">{replaceFileDialog.pendingFile.name}</span>?
-                  </p>
-                  <div className="flex justify-end gap-2">
-                    <Button variant="outline" onClick={() => setReplaceFileDialog(prev => ({ ...prev, pendingFile: null }))}>Cancel</Button>
-                    <Button onClick={() => {
-                      const f = replaceFileDialog.pendingFile!
-                      const newFile: UploadedFile = {
-                        id: uploadedFiles[replaceFileDialog.fileIndex].id,
-                        name: f.name,
-                        size: f.size,
-                        type: f.type,
-                        preview: URL.createObjectURL(f),
-                        status: "complete",
-                      }
-                      setUploadedFiles(prev => prev.map((u, i) => i === replaceFileDialog.fileIndex ? newFile : u))
-                      setReplaceFileDialog({ open: false, fileIndex: 0, pendingFile: null, confirmed: false })
-                    }}>Replace</Button>
+                      setPendingReplaceFile(f)
+                    }}
+                  >
+                    <Upload className="size-8 text-muted-foreground" />
+                    <p className="text-sm text-muted-foreground text-center">Drop a replacement image here</p>
+                    <label>
+                      <input
+                        type="file"
+                        accept="image/jpeg,.jpg,.jpeg"
+                        className="hidden"
+                        onChange={(e) => {
+                          const f = e.target.files?.[0]
+                          if (!f) return
+                          const { errors } = validateImageBatch([f])
+                          if (errors.length) { setValidationErrors(prev => [...prev, ...errors]); return }
+                          setPendingReplaceFile(f)
+                        }}
+                      />
+                      <Button variant="outline" size="sm" asChild><span className="cursor-pointer">Browse</span></Button>
+                    </label>
+                    <p className="text-xs text-muted-foreground">Max 500 KB &middot; JPG/JPEG only</p>
                   </div>
-                </div>
-              )}
-            </div>
+                ) : (
+                  <div className="flex flex-col gap-4">
+                    <div className="flex items-center gap-3 rounded border border-border bg-muted/20 p-3 text-sm">
+                      <CheckCircle2 className="size-4 text-tg-success shrink-0" />
+                      <span className="text-foreground">
+                        Replace <span className="font-medium">{uploadedFiles[editAttrDialog.fileIndex]?.name}</span> with{" "}
+                        <span className="font-medium">{pendingReplaceFile.name}</span>?
+                      </span>
+                    </div>
+                    <div className="flex items-center justify-end gap-2">
+                      <Button variant="outline" onClick={() => setPendingReplaceFile(null)}>Choose different file</Button>
+                      <Button onClick={() => {
+                        const f = pendingReplaceFile
+                        const newFile: UploadedFile = {
+                          id: uploadedFiles[editAttrDialog.fileIndex].id,
+                          name: f.name,
+                          size: f.size,
+                          type: f.type,
+                          preview: URL.createObjectURL(f),
+                          status: "complete",
+                        }
+                        setUploadedFiles(prev => prev.map((u, i) => i === editAttrDialog.fileIndex ? newFile : u))
+                        setPendingReplaceFile(null)
+                        setEditAttrDialog(prev => ({ ...prev, open: false }))
+                      }}>Confirm replace</Button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
           </DialogContent>
         </Dialog>
 
@@ -1297,18 +1355,49 @@ End of Metadata Export
     const STATUS_LABELS: Record<string, string> = {
       queued: "Queued", uploading: "Uploading", processing: "Processing", complete: "Complete", failed: "Failed",
     }
+    const isComplete = submissionPhase === "complete"
+    const dwellData = getAutoPopulatedData()
+
     return (
       <div className="flex flex-col gap-6">
         <div className="flex items-center gap-2 text-sm">
           <span className="text-tg-link hover:underline cursor-pointer">Data Management</span>
           <span className="text-muted-foreground">&gt;</span>
-          <span className="font-medium text-foreground">Submitting</span>
+          <span className="font-medium text-foreground">{isComplete ? "Upload complete" : "Submitting"}</span>
         </div>
         <Card>
           <CardContent className="p-6 flex flex-col gap-4">
-            <h2 className="text-base font-semibold text-foreground">Submitting images</h2>
+            {/* Dynamic card header — Task 3 + Task 4 */}
+            <div className="flex items-center justify-between gap-3">
+              <div className="flex items-center gap-2">
+                {isComplete ? (
+                  <CheckCircle2 className="size-5 text-tg-success shrink-0" />
+                ) : null}
+                <h2 className={cn(
+                  "text-base font-semibold",
+                  isComplete ? "text-tg-success" : "text-foreground"
+                )}>
+                  {isComplete ? "Upload complete" : "Submitting images"}
+                </h2>
+              </div>
+              {/* Task 4: completedCount / total counter */}
+              <span className="text-sm text-muted-foreground shrink-0">
+                {isComplete ? "Complete" : `Uploading ${completedCount} of ${uploadedFiles.length}\u2026`}
+              </span>
+            </div>
 
-            {/* Per-file status list (Change 5 error surface included) */}
+            {/* Task 4: Progress bar */}
+            <div className="h-1.5 w-full rounded-full bg-muted overflow-hidden">
+              <div
+                className={cn(
+                  "h-full rounded-full transition-all duration-500",
+                  isComplete ? "bg-tg-success" : "bg-primary"
+                )}
+                style={{ width: `${uploadedFiles.length > 0 ? (completedCount / uploadedFiles.length) * 100 : 0}%` }}
+              />
+            </div>
+
+            {/* Per-file status list */}
             <div className="flex flex-col gap-2">
               {uploadedFiles.map((file) => {
                 const status = fileStatuses[file.id] ?? "queued"
@@ -1334,7 +1423,7 @@ End of Metadata Export
                         setTimeout(() => {
                           setFileStatuses(prev => ({ ...prev, [file.id]: "complete" }))
                           setSubmissionPhase(prev => prev === "partial-failure" ? "complete" : prev)
-                          setTimeout(() => setShowProductMedia(true), 500)
+                          setTimeout(() => setShowProductMedia(true), 1500)
                         }, 800)
                       }}>Retry</Button>
                     )}
@@ -1343,7 +1432,7 @@ End of Metadata Export
               })}
             </div>
 
-            {/* Retry-all summary (Change 5) */}
+            {/* Retry-all summary */}
             {failedCount > 0 && (
               <div className="flex items-center gap-2 text-sm">
                 <span className="text-destructive">{failedCount} failed</span>
@@ -1358,13 +1447,24 @@ End of Metadata Export
                   })
                   setTimeout(() => {
                     setSubmissionPhase("complete")
-                    setTimeout(() => setShowProductMedia(true), 500)
+                    setTimeout(() => setShowProductMedia(true), 1500)
                   }, 1000)
                 }}>retry all</button>
               </div>
             )}
 
-            <p className="text-xs text-muted-foreground">{completedCount} of {uploadedFiles.length} complete</p>
+            {/* Complete dwell state — syndication message (Task 3) */}
+            {isComplete && (
+              <div className="flex items-start gap-3 rounded border border-tg-success/30 bg-tg-success/5 p-3 mt-1">
+                <Info className="size-4 text-tg-success mt-0.5 shrink-0" />
+                <div>
+                  <p className="text-sm font-medium text-foreground">Images submitted to TGC and available to retailer subscribers.</p>
+                  <p className="text-sm text-foreground mt-0.5">
+                    7 retailers currently access selection code {dwellData.selectionCode} where Product {dwellData.productId}/GTINs reside. Images will be available on the next sync.
+                  </p>
+                </div>
+              </div>
+            )}
 
             {/* Footer actions for partial-failure */}
             {submissionPhase === "partial-failure" && (
@@ -2082,6 +2182,35 @@ End of Metadata Export
                 </div>
               )}
             </div>
+
+            {/* Syndication confirmation block — Task 2 */}
+            {(() => {
+              const d = getAutoPopulatedData()
+              return (
+                <div className="rounded border border-primary/30 bg-primary/5 p-4 flex flex-col gap-3">
+                  <div className="flex items-start gap-3">
+                    <Info className="size-4 text-primary mt-0.5 shrink-0" />
+                    <div className="flex flex-col gap-1">
+                      <p className="text-sm font-medium text-foreground">Submitting will share these images with retailer subscribers</p>
+                      <p className="text-sm text-foreground">
+                        7 retailers currently access selection code {d.selectionCode} where Product {d.productId}/GTINs reside. Confirming will make {uploadedFiles.length} image{uploadedFiles.length !== 1 ? "s" : ""} available to those retailers on the next sync.
+                      </p>
+                    </div>
+                  </div>
+                  <label className="flex items-start gap-2 cursor-pointer select-none">
+                    <Checkbox
+                      id="syndication-ack"
+                      checked={syndicationAcknowledged}
+                      onCheckedChange={(v) => setSyndicationAcknowledged(v as boolean)}
+                      className="mt-0.5 shrink-0"
+                    />
+                    <span className="text-sm text-foreground">
+                      I confirm I want to share these images with the 7 subscribing retailers on selection code {d.selectionCode}.
+                    </span>
+                  </label>
+                </div>
+              )
+            })()}
           </div>
         )}
       </div>
@@ -2104,7 +2233,8 @@ End of Metadata Export
             onClick={handleNext}
             disabled={
               (currentStep === 1 && !canProceedStep2) ||
-              (currentStep === 2 && !canProceedStep3)
+              (currentStep === 2 && !canProceedStep3) ||
+              (currentStep === 3 && !syndicationAcknowledged)
             }
             className="gap-1"
           >
