@@ -10,9 +10,7 @@ import {
   ChevronDown,
   Trash2,
   FileImage,
-  ZoomIn,
   Download,
-  Printer,
   Package,
   FileText,
   CheckCircle2,
@@ -362,7 +360,7 @@ export function ImageUploadWizard({
   const [advancedOpen, setAdvancedOpen] = useState(false)
   const [showProductMedia, setShowProductMedia] = useState(false)
   const [showDownloadModal, setShowDownloadModal] = useState(false)
-  const [downloadComplete, setDownloadComplete] = useState(false)
+  const [downloadPhase, setDownloadPhase] = useState<"select" | "preparing" | "complete">("select")
   const [activeImageIndex, setActiveImageIndex] = useState(0)
   // Inline validation errors from file drop/browse (Change 1)
   const [validationErrors, setValidationErrors] = useState<ValidationError[]>([])
@@ -372,8 +370,8 @@ export function ImageUploadWizard({
   const [fileStatuses, setFileStatuses] = useState<{ [id: string]: "queued" | "uploading" | "processing" | "complete" | "failed" }>({})
   // Edit dialog state — unified for attributes + replace image tabs (Task 1)
   const [editAttrDialog, setEditAttrDialog] = useState<{ open: boolean; fileIndex: number; draft: typeof attributes }>({ open: false, fileIndex: 0, draft: {} as typeof attributes })
-  // Active tab inside the unified edit dialog: "attributes" | "replace" (Task 1)
-  const [editDialogTab, setEditDialogTab] = useState<"attributes" | "replace">("attributes")
+  // Active tab inside the unified edit dialog: "attributes" | "replace" | "delete" (Task 1)
+  const [editDialogTab, setEditDialogTab] = useState<"attributes" | "replace" | "delete">("attributes")
   // Pending replacement file staged inside the Replace image tab (Task 1)
   const [pendingReplaceFile, setPendingReplaceFile] = useState<File | null>(null)
   // Inline save-confirmed flash shown after saving attributes (Task 2)
@@ -562,10 +560,13 @@ End of Metadata Export
     return content
   }
 
-  // Handle bulk download
+  // Handle bulk download with three-phase flow
   const handleBulkDownload = () => {
-    // Simulate download process
-    setDownloadComplete(true)
+    setDownloadPhase("preparing")
+    // Simulate preparation delay
+    setTimeout(() => {
+      setDownloadPhase("complete")
+    }, 1500)
   }
 
   // Read locationType from the active record for consistency (Change 2b)
@@ -604,8 +605,8 @@ End of Metadata Export
         if (i === ids.length - 1) {
           setTimeout(() => {
             setSubmissionPhase("complete")
-            // 1.5s dwell on "Upload complete" state before advancing (Task 3)
-            setTimeout(() => setShowProductMedia(true), 1500)
+            // 300ms dwell on "Upload complete" state before advancing
+            setTimeout(() => setShowProductMedia(true), 300)
           }, 300)
         }
       }, base + 800)
@@ -681,21 +682,15 @@ End of Metadata Export
 
         {/* Toolbar */}
         <div className="flex items-center gap-1 border border-border bg-card p-1 w-fit">
-          <button className="p-1.5 hover:bg-muted border border-border" title="View">
-            <ZoomIn className="size-4 text-muted-foreground" />
-          </button>
           <button 
             className="p-1.5 hover:bg-muted border border-border" 
             title="Download All"
             onClick={() => {
-              setDownloadComplete(false)
+              setDownloadPhase("select")
               setShowDownloadModal(true)
             }}
           >
             <Download className="size-4 text-muted-foreground" />
-          </button>
-          <button className="p-1.5 hover:bg-muted border border-border" title="Print">
-            <Printer className="size-4 text-muted-foreground" />
           </button>
           {/* Edit attributes + Replace image — unified dialog (Task 1) */}
           <button
@@ -929,11 +924,8 @@ End of Metadata Export
           <div className="border border-border bg-card flex flex-col">
             {/* Panel Header */}
             <div className="flex items-center gap-2 border-b border-border bg-muted/30 px-3 py-2">
-              <div className="flex items-center gap-1 border border-border bg-card p-0.5">
-                <button className="p-1 hover:bg-muted" title="Zoom In">
-                  <ZoomIn className="size-3 text-muted-foreground" />
-                </button>
-                <button 
+            <div className="flex items-center gap-1 border border-border bg-card p-0.5">
+              <button
                   onClick={() => {
                     if (uploadedFiles[activeImageIndex]) {
                       const link = document.createElement('a')
@@ -1040,6 +1032,17 @@ End of Metadata Export
                 onClick={() => { setEditDialogTab("replace"); setPendingReplaceFile(null) }}
               >
                 Replace image
+              </button>
+              <button
+                className={cn(
+                  "px-4 py-2 text-sm font-medium border-b-2 transition-colors",
+                  editDialogTab === "delete"
+                    ? "border-destructive text-destructive"
+                    : "border-transparent text-muted-foreground hover:text-destructive"
+                )}
+                onClick={() => setEditDialogTab("delete")}
+              >
+                Delete
               </button>
             </div>
 
@@ -1152,6 +1155,43 @@ End of Metadata Export
                 )}
               </div>
             )}
+
+            {/* Tab C: Delete image */}
+            {editDialogTab === "delete" && (
+              <div className="py-4 flex flex-col gap-4">
+                <div className="flex items-start gap-3 rounded border border-destructive/30 bg-destructive/5 p-4">
+                  <Trash2 className="size-5 text-destructive mt-0.5 shrink-0" />
+                  <div>
+                    <p className="text-sm font-medium text-foreground">
+                      Delete &ldquo;{uploadedFiles[editAttrDialog.fileIndex]?.name}&rdquo;?
+                    </p>
+                    <p className="text-sm text-muted-foreground mt-1">
+                      This action cannot be undone. The image will be permanently removed.
+                    </p>
+                  </div>
+                </div>
+                <div className="flex items-center justify-end gap-2">
+                  <Button variant="outline" onClick={() => setEditAttrDialog(prev => ({ ...prev, open: false }))}>
+                    Cancel
+                  </Button>
+                  <Button
+                    variant="destructive"
+                    onClick={() => {
+                      const idx = editAttrDialog.fileIndex
+                      setUploadedFiles(prev => prev.filter((_, i) => i !== idx))
+                      // Adjust activeImageIndex if needed
+                      if (activeImageIndex >= uploadedFiles.length - 1 && activeImageIndex > 0) {
+                        setActiveImageIndex(activeImageIndex - 1)
+                      }
+                      setEditAttrDialog(prev => ({ ...prev, open: false }))
+                    }}
+                  >
+                    <Trash2 className="size-4 mr-2" />
+                    Delete image
+                  </Button>
+                </div>
+              </div>
+            )}
           </DialogContent>
         </Dialog>
 
@@ -1171,13 +1211,17 @@ End of Metadata Export
           </Button>
         </div>
 
-        {/* Download Modal */}
+        {/* Download Modal — Three-phase: Select → Preparing → Complete */}
         {showDownloadModal && (
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
             <div className="w-full max-w-lg rounded border border-border bg-card shadow-xl">
               {/* Modal Header */}
               <div className="flex items-center justify-between border-b border-border bg-gradient-to-r from-tg-header-start to-tg-header-end px-4 py-3">
-                <h2 className="text-base font-semibold text-white">Download Images with Metadata</h2>
+                <h2 className="text-base font-semibold text-white">
+                  {downloadPhase === "select" && "Download Images with Metadata"}
+                  {downloadPhase === "preparing" && "Preparing Download"}
+                  {downloadPhase === "complete" && "Download Complete"}
+                </h2>
                 <button 
                   onClick={() => setShowDownloadModal(false)}
                   className="text-white/80 hover:text-white"
@@ -1188,7 +1232,8 @@ End of Metadata Export
 
               {/* Modal Content */}
               <div className="p-6">
-                {!downloadComplete ? (
+                {/* Phase 1: Select */}
+                {downloadPhase === "select" && (
                   <>
                     {/* Download Summary */}
                     <div className="mb-6">
@@ -1238,7 +1283,7 @@ End of Metadata Export
                     <div className="mb-6">
                       <h4 className="text-sm font-medium text-foreground mb-3">Package Contents:</h4>
                       <div className="space-y-2 max-h-48 overflow-y-auto">
-                        {uploadedFiles.map((file, index) => (
+                        {uploadedFiles.map((file) => (
                           <div key={file.id} className="flex items-center gap-3 rounded border border-border bg-card p-3">
                             <div className="flex size-10 items-center justify-center rounded bg-muted">
                               {file.preview ? (
@@ -1292,8 +1337,28 @@ End of Metadata Export
                       </Button>
                     </div>
                   </>
-                ) : (
-                  /* Download Complete State */
+                )}
+
+                {/* Phase 2: Preparing */}
+                {downloadPhase === "preparing" && (
+                  <div className="py-8 flex flex-col items-center justify-center gap-4">
+                    <div className="flex size-16 items-center justify-center rounded-full bg-primary/10">
+                      <Download className="size-8 text-primary animate-pulse" />
+                    </div>
+                    <div className="text-center">
+                      <h3 className="text-lg font-medium text-foreground">Preparing your download</h3>
+                      <p className="text-sm text-muted-foreground mt-1">
+                        Packaging {uploadedFiles.length} images with metadata...
+                      </p>
+                    </div>
+                    <div className="w-48 h-1.5 rounded-full bg-muted overflow-hidden">
+                      <div className="h-full bg-primary rounded-full animate-[progress_1.5s_ease-in-out_infinite]" style={{ width: "60%" }} />
+                    </div>
+                  </div>
+                )}
+
+                {/* Phase 3: Complete */}
+                {downloadPhase === "complete" && (
                   <div className="text-center py-4">
                     <div className="flex size-16 items-center justify-center rounded-full bg-tg-success/10 mx-auto mb-4">
                       <CheckCircle2 className="size-8 text-tg-success" />
@@ -1307,7 +1372,7 @@ End of Metadata Export
                     <div className="rounded border border-border bg-muted/20 p-4 mb-6 text-left">
                       <div className="text-sm font-medium text-foreground mb-3">Downloaded Files:</div>
                       <div className="space-y-2 max-h-32 overflow-y-auto">
-                        {uploadedFiles.map((file, index) => (
+                        {uploadedFiles.map((file) => (
                           <div key={file.id} className="text-sm">
                             <div className="flex items-center gap-2 text-foreground">
                               <Check className="size-4 text-tg-success" />
@@ -1450,19 +1515,6 @@ End of Metadata Export
                     setTimeout(() => setShowProductMedia(true), 1500)
                   }, 1000)
                 }}>retry all</button>
-              </div>
-            )}
-
-            {/* Complete dwell state — syndication message (Task 3) */}
-            {isComplete && (
-              <div className="flex items-start gap-3 rounded border border-tg-success/30 bg-tg-success/5 p-3 mt-1">
-                <Info className="size-4 text-tg-success mt-0.5 shrink-0" />
-                <div>
-                  <p className="text-sm font-medium text-foreground">Images submitted to TGC and available to retailer subscribers.</p>
-                  <p className="text-sm text-foreground mt-0.5">
-                    7 retailers currently access selection code {dwellData.selectionCode} where Product {dwellData.productId}/GTINs reside. Images will be available on the next sync.
-                  </p>
-                </div>
               </div>
             )}
 
