@@ -1,7 +1,7 @@
 "use client"
 
 import { useState } from "react"
-import { Upload, Search, FileImage, ArrowRight, Info, ChevronDown, Filter, ZoomIn, Download, Printer, Package, Palette, Barcode, CheckCircle2, X, BookOpen } from "lucide-react"
+import { Upload, Search, FileImage, ArrowRight, Info, ChevronDown, Filter, Download, Package, Palette, Barcode, CheckCircle2, X, BookOpen } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
 import {
@@ -294,6 +294,7 @@ export function RetailerImageBrowser() {
   const [selectedProduct, setSelectedProduct] = useState<typeof MOCK_PRODUCTS[0] | null>(null)
   const [activeImageIndex, setActiveImageIndex] = useState(0)
   const [showDownloadModal, setShowDownloadModal] = useState(false)
+  const [downloadPhase, setDownloadPhase] = useState<"select" | "preparing" | "complete">("select")
   const [downloadOptions, setDownloadOptions] = useState({
     includeMetadata: true,
     originalQuality: true,
@@ -499,9 +500,6 @@ export function RetailerImageBrowser() {
             <button className="p-1.5 hover:bg-muted" title="Export">
               <Download className="size-4 text-muted-foreground" />
             </button>
-            <button className="p-1.5 hover:bg-muted" title="Print">
-              <Printer className="size-4 text-muted-foreground" />
-            </button>
           </div>
         </div>
 
@@ -627,14 +625,11 @@ export function RetailerImageBrowser() {
         
         {/* Toolbar */}
         <div className="flex items-center gap-1 border border-border bg-card p-1 w-fit">
-          <button className="p-1.5 hover:bg-muted" title="Zoom">
-            <ZoomIn className="size-4 text-muted-foreground" />
-          </button>
-          <button className="p-1.5 hover:bg-muted" title="Download" onClick={() => setShowDownloadModal(true)}>
+          <button className="p-1.5 hover:bg-muted" title="Download" onClick={() => {
+            setDownloadPhase("select")
+            setShowDownloadModal(true)
+          }}>
             <Download className="size-4 text-muted-foreground" />
-          </button>
-          <button className="p-1.5 hover:bg-muted" title="Print">
-            <Printer className="size-4 text-muted-foreground" />
           </button>
 
         </div>
@@ -657,9 +652,6 @@ export function RetailerImageBrowser() {
             <div className="flex items-center gap-2 border-b border-border bg-muted/30 px-3 py-2">
               <button className="p-1 hover:bg-muted" title="Download">
                 <Download className="size-3 text-muted-foreground" />
-              </button>
-              <button className="p-1 hover:bg-muted" title="Print">
-                <Printer className="size-3 text-muted-foreground" />
               </button>
               <span className="text-sm font-medium text-tg-link">Product Level Image</span>
             </div>
@@ -698,9 +690,6 @@ export function RetailerImageBrowser() {
           {/* Right: Image Preview */}
           <div className="border border-border bg-white flex flex-col">
             <div className="flex items-center gap-1 border-b border-border bg-muted/30 px-3 py-2">
-              <button className="p-1 hover:bg-muted" title="Zoom">
-                <ZoomIn className="size-3 text-muted-foreground" />
-              </button>
             </div>
             <div className="flex-1 flex items-center justify-center p-4 min-h-[400px]">
               <div className="flex flex-col items-center justify-center text-center p-8 border-2 border-dashed border-border rounded">
@@ -736,58 +725,104 @@ export function RetailerImageBrowser() {
 
 
 
-        {/* Download Modal */}
+        {/* Download Modal — Three-phase: Select → Preparing → Complete */}
         <Dialog open={showDownloadModal} onOpenChange={setShowDownloadModal}>
           <DialogContent className="max-w-md">
             <DialogHeader>
-              <DialogTitle>Download Image</DialogTitle>
+              <DialogTitle>
+                {downloadPhase === "select" && "Download Image"}
+                {downloadPhase === "preparing" && "Preparing Download"}
+                {downloadPhase === "complete" && "Download Complete"}
+              </DialogTitle>
             </DialogHeader>
             <div className="flex flex-col gap-4 py-4">
-              <p className="text-sm text-muted-foreground">
-                Download {downloadOptions.allImages ? `all ${selectedProduct?.images} images` : `"${currentImage?.fileName}"`} for product {selectedProduct?.id}.
-              </p>
+              {/* Phase 1: Select */}
+              {downloadPhase === "select" && (
+                <>
+                  <p className="text-sm text-muted-foreground">
+                    Download {downloadOptions.allImages ? `all ${selectedProduct?.images} images` : `"${currentImage?.fileName}"`} for product {selectedProduct?.id}.
+                  </p>
               
-              <div className="flex flex-col gap-3">
-                <div className="flex items-center gap-2">
-                  <Checkbox 
-                    id="include-metadata"
-                    checked={downloadOptions.includeMetadata}
-                    onCheckedChange={(checked) => setDownloadOptions(prev => ({...prev, includeMetadata: !!checked}))}
-                  />
-                  <Label htmlFor="include-metadata" className="text-sm">Include metadata (attributes)</Label>
-                </div>
-                <div className="flex items-center gap-2">
-                  <Checkbox 
-                    id="original-quality"
-                    checked={downloadOptions.originalQuality}
-                    onCheckedChange={(checked) => setDownloadOptions(prev => ({...prev, originalQuality: !!checked}))}
-                  />
-                  <Label htmlFor="original-quality" className="text-sm">Original quality</Label>
-                </div>
-                {(selectedProduct?.images ?? 0) > 1 && (
-                  <div className="flex items-center gap-2">
-                    <Checkbox 
-                      id="all-images"
-                      checked={downloadOptions.allImages}
-                      onCheckedChange={(checked) => setDownloadOptions(prev => ({...prev, allImages: !!checked}))}
-                    />
-                    <Label htmlFor="all-images" className="text-sm">Download all images ({selectedProduct?.images})</Label>
+                  <div className="flex flex-col gap-3">
+                    <div className="flex items-center gap-2">
+                      <Checkbox 
+                        id="include-metadata"
+                        checked={downloadOptions.includeMetadata}
+                        onCheckedChange={(checked) => setDownloadOptions(prev => ({...prev, includeMetadata: !!checked}))}
+                      />
+                      <Label htmlFor="include-metadata" className="text-sm">Include metadata (attributes)</Label>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <Checkbox 
+                        id="original-quality"
+                        checked={downloadOptions.originalQuality}
+                        onCheckedChange={(checked) => setDownloadOptions(prev => ({...prev, originalQuality: !!checked}))}
+                      />
+                      <Label htmlFor="original-quality" className="text-sm">Original quality</Label>
+                    </div>
+                    {(selectedProduct?.images ?? 0) > 1 && (
+                      <div className="flex items-center gap-2">
+                        <Checkbox 
+                          id="all-images"
+                          checked={downloadOptions.allImages}
+                          onCheckedChange={(checked) => setDownloadOptions(prev => ({...prev, allImages: !!checked}))}
+                        />
+                        <Label htmlFor="all-images" className="text-sm">Download all images ({selectedProduct?.images})</Label>
+                      </div>
+                    )}
                   </div>
-                )}
-              </div>
 
-              <div className="flex justify-end gap-2 pt-2">
-                <Button variant="outline" onClick={() => setShowDownloadModal(false)}>
-                  Cancel
-                </Button>
-                <Button onClick={() => {
-                  // Simulate download
-                  setShowDownloadModal(false)
-                }}>
-                  <Download className="size-4 mr-2" />
-                  Download
-                </Button>
-              </div>
+                  <div className="flex justify-end gap-2 pt-2">
+                    <Button variant="outline" onClick={() => setShowDownloadModal(false)}>
+                      Cancel
+                    </Button>
+                    <Button onClick={() => {
+                      setDownloadPhase("preparing")
+                      // Simulate preparation delay
+                      setTimeout(() => {
+                        setDownloadPhase("complete")
+                      }, 1500)
+                    }}>
+                      <Download className="size-4 mr-2" />
+                      Download
+                    </Button>
+                  </div>
+                </>
+              )}
+
+              {/* Phase 2: Preparing */}
+              {downloadPhase === "preparing" && (
+                <div className="py-8 flex flex-col items-center justify-center gap-4">
+                  <div className="flex size-16 items-center justify-center rounded-full bg-primary/10">
+                    <Download className="size-8 text-primary animate-pulse" />
+                  </div>
+                  <div className="text-center">
+                    <h3 className="text-lg font-medium text-foreground">Preparing your download</h3>
+                    <p className="text-sm text-muted-foreground mt-1">
+                      Packaging {downloadOptions.allImages ? selectedProduct?.images : 1} image{downloadOptions.allImages && (selectedProduct?.images ?? 0) > 1 ? "s" : ""}{downloadOptions.includeMetadata ? " with metadata" : ""}...
+                    </p>
+                  </div>
+                  <div className="w-48 h-1.5 rounded-full bg-muted overflow-hidden">
+                    <div className="h-full bg-primary rounded-full animate-[progress_1.5s_ease-in-out_infinite]" style={{ width: "60%" }} />
+                  </div>
+                </div>
+              )}
+
+              {/* Phase 3: Complete */}
+              {downloadPhase === "complete" && (
+                <div className="text-center py-4">
+                  <div className="flex size-16 items-center justify-center rounded-full bg-tg-success/10 mx-auto mb-4">
+                    <CheckCircle2 className="size-8 text-tg-success" />
+                  </div>
+                  <h3 className="text-lg font-medium text-foreground mb-2">Download Complete</h3>
+                  <p className="text-sm text-muted-foreground mb-6">
+                    Your {downloadOptions.allImages ? `${selectedProduct?.images} images` : "image"}{downloadOptions.includeMetadata ? " and metadata" : ""} {downloadOptions.allImages && (selectedProduct?.images ?? 0) > 1 ? "have" : "has"} been downloaded successfully.
+                  </p>
+                  <Button onClick={() => setShowDownloadModal(false)}>
+                    Close
+                  </Button>
+                </div>
+              )}
             </div>
           </DialogContent>
         </Dialog>
