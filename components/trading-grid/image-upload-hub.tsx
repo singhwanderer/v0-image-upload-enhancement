@@ -1,9 +1,8 @@
 "use client"
 
 import { useState } from "react"
-import { Upload, Search, FileImage, ArrowRight, Info, ChevronDown, Filter, ZoomIn, Download, Printer, Package, Palette, Barcode, CheckCircle2, X, Pencil, RefreshCw, BookOpen } from "lucide-react"
+import { Upload, Search, FileImage, ArrowRight, Info, ChevronDown, Filter, ZoomIn, Download, Printer, Package, Palette, Barcode, CheckCircle2, X, BookOpen } from "lucide-react"
 import { Button } from "@/components/ui/button"
-import { Input } from "@/components/ui/input"
 import { Card, CardContent } from "@/components/ui/card"
 import {
   Select,
@@ -300,12 +299,7 @@ export function RetailerImageBrowser() {
     originalQuality: true,
     allImages: false,
   })
-  // In-memory attribute overrides per image index (Change 7)
-  const [attrOverrides, setAttrOverrides] = useState<{ [idx: number]: Partial<typeof MOCK_IMAGES[0]> }>({})
-  // Edit-attributes dialog (Change 7)
-  const [editAttrDialog, setEditAttrDialog] = useState<{ open: boolean; idx: number; draft: Partial<typeof MOCK_IMAGES[0]> }>({ open: false, idx: 0, draft: {} })
-  // Replace-file dialog (Change 7)
-  const [replaceFileDialog, setReplaceFileDialog] = useState<{ open: boolean; idx: number; pendingName: string | null }>({ open: false, idx: 0, pendingName: null })
+
 
   const handleVendorSelect = (vendor: typeof MOCK_VENDORS[0]) => {
     setSelectedVendor(vendor)
@@ -642,22 +636,7 @@ export function RetailerImageBrowser() {
           <button className="p-1.5 hover:bg-muted" title="Print">
             <Printer className="size-4 text-muted-foreground" />
           </button>
-          {/* Edit attributes (Change 7) */}
-          <button
-            className="p-1.5 hover:bg-muted"
-            title="Edit attributes"
-            onClick={() => setEditAttrDialog({ open: true, idx: activeImageIndex, draft: { ...(attrOverrides[activeImageIndex] || MOCK_IMAGES[activeImageIndex]) } })}
-          >
-            <Pencil className="size-4 text-muted-foreground" />
-          </button>
-          {/* Replace file (Change 7) */}
-          <button
-            className="p-1.5 hover:bg-muted"
-            title="Replace file"
-            onClick={() => setReplaceFileDialog({ open: true, idx: activeImageIndex, pendingName: null })}
-          >
-            <RefreshCw className="size-4 text-muted-foreground" />
-          </button>
+
         </div>
 
         {/* Context Info */}
@@ -755,74 +734,7 @@ export function RetailerImageBrowser() {
           </div>
         </div>
 
-        {/* Edit Attributes Dialog (Change 7) */}
-        <Dialog open={editAttrDialog.open} onOpenChange={(o) => setEditAttrDialog(prev => ({ ...prev, open: o }))}>
-          <DialogContent className="max-w-md">
-            <DialogHeader>
-              <DialogTitle>Edit attributes &mdash; {(attrOverrides[editAttrDialog.idx] || MOCK_IMAGES[editAttrDialog.idx])?.fileName}</DialogTitle>
-            </DialogHeader>
-            <div className="flex flex-col gap-4 py-2">
-              {[
-                { label: "Image Type", field: "imageType" as const },
-                { label: "Purpose", field: "purpose" as const },
-                { label: "Orientation", field: "orientation" as const },
-              ].map(({ label, field }) => (
-                <div key={field} className="flex flex-col gap-1">
-                  <Label className="text-sm font-medium">{label}</Label>
-                  <Input
-                    value={String(editAttrDialog.draft[field] ?? "")}
-                    onChange={(e) => setEditAttrDialog(prev => ({ ...prev, draft: { ...prev.draft, [field]: e.target.value } }))}
-                    className="bg-background"
-                  />
-                </div>
-              ))}
-            </div>
-            <div className="flex justify-end gap-2 pt-2 border-t border-border">
-              <Button variant="outline" onClick={() => setEditAttrDialog(prev => ({ ...prev, open: false }))}>Cancel</Button>
-              <Button onClick={() => {
-                setAttrOverrides(prev => ({ ...prev, [editAttrDialog.idx]: { ...(prev[editAttrDialog.idx] || MOCK_IMAGES[editAttrDialog.idx]), ...editAttrDialog.draft } }))
-                setEditAttrDialog(prev => ({ ...prev, open: false }))
-              }}>Save</Button>
-            </div>
-          </DialogContent>
-        </Dialog>
 
-        {/* Replace File Dialog (Change 7) */}
-        <Dialog open={replaceFileDialog.open} onOpenChange={(o) => setReplaceFileDialog(prev => ({ ...prev, open: o, pendingName: null }))}>
-          <DialogContent className="max-w-md">
-            <DialogHeader>
-              <DialogTitle>Replace file</DialogTitle>
-            </DialogHeader>
-            <div className="py-2">
-              {!replaceFileDialog.pendingName ? (
-                <div className="flex flex-col items-center gap-3 rounded border-2 border-dashed border-border p-8">
-                  <Upload className="size-8 text-muted-foreground" />
-                  <p className="text-sm text-muted-foreground">Drop a replacement file or browse</p>
-                  <label>
-                    <input type="file" accept="image/jpeg,.jpg,.jpeg" className="hidden" onChange={(e) => {
-                      const f = e.target.files?.[0]
-                      if (f) setReplaceFileDialog(prev => ({ ...prev, pendingName: f.name }))
-                    }} />
-                    <Button variant="outline" size="sm" asChild><span className="cursor-pointer">Browse</span></Button>
-                  </label>
-                </div>
-              ) : (
-                <div className="flex flex-col gap-4">
-                  <p className="text-sm text-foreground">
-                    Replace <span className="font-medium">{(attrOverrides[replaceFileDialog.idx] || MOCK_IMAGES[replaceFileDialog.idx])?.fileName}</span> with <span className="font-medium">{replaceFileDialog.pendingName}</span>?
-                  </p>
-                  <div className="flex justify-end gap-2">
-                    <Button variant="outline" onClick={() => setReplaceFileDialog(prev => ({ ...prev, pendingName: null }))}>Cancel</Button>
-                    <Button onClick={() => {
-                      setAttrOverrides(prev => ({ ...prev, [replaceFileDialog.idx]: { ...(prev[replaceFileDialog.idx] || MOCK_IMAGES[replaceFileDialog.idx]), fileName: replaceFileDialog.pendingName! } }))
-                      setReplaceFileDialog({ open: false, idx: 0, pendingName: null })
-                    }}>Replace</Button>
-                  </div>
-                </div>
-              )}
-            </div>
-          </DialogContent>
-        </Dialog>
 
         {/* Download Modal */}
         <Dialog open={showDownloadModal} onOpenChange={setShowDownloadModal}>
