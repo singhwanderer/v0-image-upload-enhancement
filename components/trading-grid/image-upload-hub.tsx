@@ -1,7 +1,7 @@
 "use client"
 
 import { useState } from "react"
-import { Upload, Search, FileImage, ArrowRight, Info, ChevronDown, Filter, Download, Package, Palette, Barcode, CheckCircle2, X, BookOpen } from "lucide-react"
+import { Upload, Search, FileImage, ArrowRight, Info, ChevronDown, Filter, Download, Package, Palette, Barcode, CheckCircle2, X, BookOpen, FileText, Check } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
 import {
@@ -295,11 +295,6 @@ export function RetailerImageBrowser() {
   const [activeImageIndex, setActiveImageIndex] = useState(0)
   const [showDownloadModal, setShowDownloadModal] = useState(false)
   const [downloadPhase, setDownloadPhase] = useState<"select" | "preparing" | "complete">("select")
-  const [downloadOptions, setDownloadOptions] = useState({
-    includeMetadata: true,
-    originalQuality: true,
-    allImages: false,
-  })
 
 
   const handleVendorSelect = (vendor: typeof MOCK_VENDORS[0]) => {
@@ -725,107 +720,200 @@ export function RetailerImageBrowser() {
 
 
 
-        {/* Download Modal — Three-phase: Select → Preparing → Complete */}
-        <Dialog open={showDownloadModal} onOpenChange={setShowDownloadModal}>
-          <DialogContent className="max-w-md">
-            <DialogHeader>
-              <DialogTitle>
-                {downloadPhase === "select" && "Download Image"}
-                {downloadPhase === "preparing" && "Preparing Download"}
-                {downloadPhase === "complete" && "Download Complete"}
-              </DialogTitle>
-            </DialogHeader>
-            <div className="flex flex-col gap-4 py-4">
-              {/* Phase 1: Select */}
-              {downloadPhase === "select" && (
-                <>
-                  <p className="text-sm text-muted-foreground">
-                    Download {downloadOptions.allImages ? `all ${selectedProduct?.images} images` : `"${currentImage?.fileName}"`} for product {selectedProduct?.id}.
-                  </p>
-              
-                  <div className="flex flex-col gap-3">
-                    <div className="flex items-center gap-2">
-                      <Checkbox 
-                        id="include-metadata"
-                        checked={downloadOptions.includeMetadata}
-                        onCheckedChange={(checked) => setDownloadOptions(prev => ({...prev, includeMetadata: !!checked}))}
-                      />
-                      <Label htmlFor="include-metadata" className="text-sm">Include metadata (attributes)</Label>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <Checkbox 
-                        id="original-quality"
-                        checked={downloadOptions.originalQuality}
-                        onCheckedChange={(checked) => setDownloadOptions(prev => ({...prev, originalQuality: !!checked}))}
-                      />
-                      <Label htmlFor="original-quality" className="text-sm">Original quality</Label>
-                    </div>
-                    {(selectedProduct?.images ?? 0) > 1 && (
-                      <div className="flex items-center gap-2">
-                        <Checkbox 
-                          id="all-images"
-                          checked={downloadOptions.allImages}
-                          onCheckedChange={(checked) => setDownloadOptions(prev => ({...prev, allImages: !!checked}))}
-                        />
-                        <Label htmlFor="all-images" className="text-sm">Download all images ({selectedProduct?.images})</Label>
+        {/* Download Modal — Three-phase: Select → Preparing → Complete (Step 3A parity with supplier) */}
+        {showDownloadModal && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+            <div className="w-full max-w-lg rounded border border-border bg-card shadow-xl">
+              {/* Modal Header */}
+              <div className="flex items-center justify-between border-b border-border bg-gradient-to-r from-tg-header-start to-tg-header-end px-4 py-3">
+                <h2 className="text-base font-semibold text-white">
+                  {downloadPhase === "select" && "Download Images with Metadata"}
+                  {downloadPhase === "preparing" && "Preparing Download"}
+                  {downloadPhase === "complete" && "Download Complete"}
+                </h2>
+                <button 
+                  onClick={() => setShowDownloadModal(false)}
+                  className="text-white/80 hover:text-white"
+                >
+                  <X className="size-5" />
+                </button>
+              </div>
+
+              {/* Modal Content */}
+              <div className="p-6">
+                {/* Phase 1: Select (Step 3A — full parity with supplier modal) */}
+                {downloadPhase === "select" && (
+                  <>
+                    {/* Download Summary */}
+                    <div className="mb-6">
+                      <div className="flex items-center gap-3 mb-4">
+                        <div className="flex size-10 items-center justify-center rounded-full bg-primary/10">
+                          <Package className="size-5 text-primary" />
+                        </div>
+                        <div>
+                          <h3 className="font-medium text-foreground">Download Package</h3>
+                          <p className="text-sm text-muted-foreground">Product Level images</p>
+                        </div>
                       </div>
-                    )}
-                  </div>
 
-                  <div className="flex justify-end gap-2 pt-2">
-                    <Button variant="outline" onClick={() => setShowDownloadModal(false)}>
-                      Cancel
-                    </Button>
-                    <Button onClick={() => {
-                      setDownloadPhase("preparing")
-                      // Simulate preparation delay
-                      setTimeout(() => {
-                        setDownloadPhase("complete")
-                      }, 1500)
-                    }}>
-                      <Download className="size-4 mr-2" />
-                      Download
-                    </Button>
-                  </div>
-                </>
-              )}
+                      <div className="rounded border border-border bg-muted/20 p-4">
+                        <div className="text-sm space-y-1 mb-4">
+                          <div className="flex justify-between">
+                            <span className="text-muted-foreground">Product:</span>
+                            <span className="font-medium text-foreground">{selectedProduct?.id}</span>
+                          </div>
+                          <div className="flex justify-between">
+                            <span className="text-muted-foreground">Total Images:</span>
+                            <span className="font-medium text-foreground">{MOCK_IMAGES.length}</span>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
 
-              {/* Phase 2: Preparing */}
-              {downloadPhase === "preparing" && (
-                <div className="py-8 flex flex-col items-center justify-center gap-4">
-                  <div className="flex size-16 items-center justify-center rounded-full bg-primary/10">
-                    <Download className="size-8 text-primary animate-pulse" />
+                    {/* Files to Download */}
+                    <div className="mb-6">
+                      <h4 className="text-sm font-medium text-foreground mb-3">Package Contents:</h4>
+                      <div className="space-y-2 max-h-48 overflow-y-auto">
+                        {MOCK_IMAGES.map((img, idx) => (
+                          <div key={idx} className="flex items-center gap-3 rounded border border-border bg-card p-3">
+                            <div className="flex size-10 items-center justify-center rounded bg-muted">
+                              <FileImage className="size-5 text-muted-foreground" />
+                            </div>
+                            <div className="flex-1 min-w-0">
+                              <div className="flex items-center gap-2">
+                                <FileImage className="size-4 text-primary shrink-0" />
+                                <span className="text-sm font-medium text-foreground truncate">{img.fileName}</span>
+                              </div>
+                              <div className="flex items-center gap-2 mt-0.5">
+                                <FileText className="size-4 text-tg-success shrink-0" />
+                                <span className="text-sm text-muted-foreground truncate">
+                                  {img.fileName.replace(/\.[^/.]+$/, "")}_metadata.txt
+                                </span>
+                              </div>
+                            </div>
+                            <div className="text-right text-xs text-muted-foreground shrink-0">
+                              <div>~450 KB</div>
+                              <div>~2 KB</div>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+
+                    {/* Info Note */}
+                    <div className="mb-6 flex items-start gap-2 rounded bg-primary/5 p-3 text-sm">
+                      <FileText className="size-4 text-primary mt-0.5 shrink-0" />
+                      <div>
+                        <span className="font-medium text-foreground">Metadata files (.txt)</span>
+                        <span className="text-muted-foreground"> contain all image attributes including company info, product details, file properties, and GDSN attributes for each image.</span>
+                      </div>
+                    </div>
+
+                    {/* Actions */}
+                    <div className="flex items-center justify-end gap-3">
+                      <Button variant="outline" onClick={() => setShowDownloadModal(false)}>
+                        Cancel
+                      </Button>
+                      <Button onClick={() => {
+                        setDownloadPhase("preparing")
+                        // Simulate preparation delay
+                        setTimeout(() => {
+                          setDownloadPhase("complete")
+                        }, 1500)
+                      }}>
+                        <Download className="size-4 mr-2" />
+                        Download All ({MOCK_IMAGES.length * 2} files)
+                      </Button>
+                    </div>
+                  </>
+                )}
+
+                {/* Phase 2: Preparing */}
+                {downloadPhase === "preparing" && (
+                  <div className="py-8 flex flex-col items-center justify-center gap-4">
+                    <div className="flex size-16 items-center justify-center rounded-full bg-primary/10">
+                      <Download className="size-8 text-primary animate-pulse" />
+                    </div>
+                    <div className="text-center">
+                      <h3 className="text-lg font-medium text-foreground">Preparing your download</h3>
+                      <p className="text-sm text-muted-foreground mt-1">
+                        Packaging {MOCK_IMAGES.length} images with metadata...
+                      </p>
+                    </div>
+                    <div className="w-48 h-1.5 rounded-full bg-muted overflow-hidden">
+                      <div className="h-full bg-primary rounded-full animate-[progress_1.5s_ease-in-out_infinite]" style={{ width: "60%" }} />
+                    </div>
                   </div>
-                  <div className="text-center">
-                    <h3 className="text-lg font-medium text-foreground">Preparing your download</h3>
-                    <p className="text-sm text-muted-foreground mt-1">
-                      Packaging {downloadOptions.allImages ? selectedProduct?.images : 1} image{downloadOptions.allImages && (selectedProduct?.images ?? 0) > 1 ? "s" : ""}{downloadOptions.includeMetadata ? " with metadata" : ""}...
+                )}
+
+                {/* Phase 3: Complete */}
+                {downloadPhase === "complete" && (
+                  <div className="text-center py-4">
+                    <div className="flex size-16 items-center justify-center rounded-full bg-tg-success/10 mx-auto mb-4">
+                      <CheckCircle2 className="size-8 text-tg-success" />
+                    </div>
+                    <h3 className="text-lg font-medium text-foreground mb-2">Download Complete</h3>
+                    <p className="text-sm text-muted-foreground mb-6">
+                      Your images and metadata files have been downloaded successfully.
                     </p>
-                  </div>
-                  <div className="w-48 h-1.5 rounded-full bg-muted overflow-hidden">
-                    <div className="h-full bg-primary rounded-full animate-[progress_1.5s_ease-in-out_infinite]" style={{ width: "60%" }} />
-                  </div>
-                </div>
-              )}
 
-              {/* Phase 3: Complete */}
-              {downloadPhase === "complete" && (
-                <div className="text-center py-4">
-                  <div className="flex size-16 items-center justify-center rounded-full bg-tg-success/10 mx-auto mb-4">
-                    <CheckCircle2 className="size-8 text-tg-success" />
+                    {/* Downloaded Files Summary */}
+                    <div className="rounded border border-border bg-muted/20 p-4 mb-6 text-left">
+                      <div className="text-sm font-medium text-foreground mb-3">Downloaded Files:</div>
+                      <div className="space-y-2 max-h-32 overflow-y-auto">
+                        {MOCK_IMAGES.map((img, idx) => (
+                          <div key={idx} className="text-sm">
+                            <div className="flex items-center gap-2 text-foreground">
+                              <Check className="size-4 text-tg-success" />
+                              <span>{img.fileName}</span>
+                            </div>
+                            <div className="flex items-center gap-2 text-muted-foreground ml-6">
+                              <Check className="size-4 text-tg-success" />
+                              <span>{img.fileName.replace(/\.[^/.]+$/, "")}_metadata.txt</span>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+
+                    {/* Metadata Preview */}
+                    <div className="rounded border border-border bg-card p-4 mb-6 text-left">
+                      <div className="flex items-center justify-between mb-2">
+                        <span className="text-sm font-medium text-foreground">Metadata Preview</span>
+                        <span className="text-xs text-muted-foreground">
+                          {MOCK_IMAGES[0]?.fileName.replace(/\.[^/.]+$/, "") || "image"}_metadata.txt
+                        </span>
+                      </div>
+                      <pre className="text-xs text-muted-foreground bg-muted/30 p-3 rounded overflow-x-auto max-h-40 overflow-y-auto font-mono">
+{`IMAGE METADATA EXPORT
+Export Date: ${new Date().toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}
+Level: Product Level
+
+COMPANY INFORMATION
+Company Name: KIBBLES N BITS
+Account Number: 125103335555
+
+PRODUCT INFORMATION
+Product ID: ${selectedProduct?.id || "TESTPROD2"}
+Selection Code: 002
+
+IMAGE DETAILS
+File Name: ${MOCK_IMAGES[0]?.fileName || "Image1.jpg"}
+Image Type: ${MOCK_IMAGES[0]?.imageType || "SI-Still Shot"}
+Purpose: ${MOCK_IMAGES[0]?.purpose || "INT-Internet"}
+Orientation: ${MOCK_IMAGES[0]?.orientation || "PRI-Primary"}`}
+                      </pre>
+                    </div>
+
+                    <Button onClick={() => setShowDownloadModal(false)}>
+                      Close
+                    </Button>
                   </div>
-                  <h3 className="text-lg font-medium text-foreground mb-2">Download Complete</h3>
-                  <p className="text-sm text-muted-foreground mb-6">
-                    Your {downloadOptions.allImages ? `${selectedProduct?.images} images` : "image"}{downloadOptions.includeMetadata ? " and metadata" : ""} {downloadOptions.allImages && (selectedProduct?.images ?? 0) > 1 ? "have" : "has"} been downloaded successfully.
-                  </p>
-                  <Button onClick={() => setShowDownloadModal(false)}>
-                    Close
-                  </Button>
-                </div>
-              )}
+                )}
+              </div>
             </div>
-          </DialogContent>
-        </Dialog>
+          </div>
+        )}
       </div>
     )
   }
