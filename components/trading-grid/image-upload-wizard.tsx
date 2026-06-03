@@ -435,8 +435,8 @@ export function ImageUploadWizard({
   }, [])
 
   // Validates files and stages valid ones; appends errors for invalid ones
-  const processFiles = useCallback(async (rawFiles: File[]) => {
-    const { valid, errors } = await validateImageBatch(rawFiles)
+  const processFiles = useCallback((rawFiles: File[]) => {
+    const { valid, errors } = validateImageBatch(rawFiles)
     if (errors.length > 0) {
       setValidationErrors(prev => {
         const newErrors = errors.filter(e => !prev.some(p => p.fileName === e.fileName))
@@ -458,8 +458,7 @@ export function ImageUploadWizard({
   const handleDrop = useCallback((e: React.DragEvent) => {
     e.preventDefault()
     setIsDragging(false)
-    const files = Array.from(e.dataTransfer.files)
-    processFiles(files)
+    processFiles(Array.from(e.dataTransfer.files))
   }, [processFiles])
 
   const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -1048,11 +1047,11 @@ End of Metadata Export
                 <div
                   className="flex flex-col items-center justify-center gap-3 rounded border-2 border-dashed border-border p-8 cursor-pointer hover:border-primary/50"
                   onDragOver={(e) => e.preventDefault()}
-                  onDrop={async (e) => {
+                  onDrop={(e) => {
                     e.preventDefault()
                     const f = e.dataTransfer.files[0]
                     if (!f) return
-                    const { errors } = await validateImageBatch([f])
+                    const { errors } = validateImageBatch([f])
                     if (errors.length) { setValidationErrors(prev => [...prev, ...errors]); return }
                     setReplaceFileDialog(prev => ({ ...prev, pendingFile: f }))
                   }}
@@ -1060,10 +1059,10 @@ End of Metadata Export
                   <Upload className="size-8 text-muted-foreground" />
                   <p className="text-sm text-muted-foreground text-center">Drop a replacement file here</p>
                   <label>
-                    <input type="file" accept="image/jpeg,.jpg,.jpeg" className="hidden" onChange={async (e) => {
+                    <input type="file" accept="image/jpeg,.jpg,.jpeg" className="hidden" onChange={(e) => {
                       const f = e.target.files?.[0]
                       if (!f) return
-                      const { errors } = await validateImageBatch([f])
+                      const { errors } = validateImageBatch([f])
                       if (errors.length) { setValidationErrors(prev => [...prev, ...errors]); return }
                       setReplaceFileDialog(prev => ({ ...prev, pendingFile: f }))
                     }} />
@@ -1649,7 +1648,10 @@ End of Metadata Export
                     </Button>
                   </label>
                   <p className="text-xs text-muted-foreground">
-                    JPG / JPEG &middot; Max 500 KB each &middot; 2400&ndash;4800 px &middot; 1:1 &middot; 300 ppi
+                    Max 500 KB each &middot; JPG/JPEG only &middot;{" "}
+                    <a href="#" className="text-tg-link hover:underline">
+                      View GS1 guidelines
+                    </a>
                   </p>
                 </div>
               </div>

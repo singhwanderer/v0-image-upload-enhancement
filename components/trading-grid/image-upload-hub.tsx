@@ -1,7 +1,7 @@
 "use client"
 
 import { useState } from "react"
-import { Upload, Search, FileImage, ArrowRight, Info, ChevronDown, Filter, ZoomIn, Download, Printer, Package, Palette, Barcode, CheckCircle2, X, Pencil, RefreshCw } from "lucide-react"
+import { Upload, Search, FileImage, ArrowRight, Info, ChevronDown, Filter, ZoomIn, Download, Printer, Package, Palette, Barcode, CheckCircle2, X, Pencil, RefreshCw, BookOpen } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Card, CardContent } from "@/components/ui/card"
@@ -234,7 +234,7 @@ export function ImageUploadLanding({ onUploadClick }: ImageUploadLandingProps) {
         </div>
       </div>
 
-      {/* Supported Formats */}
+      {/* Reference Card */}
       <div className="rounded border border-border bg-card p-4">
         <div className="flex items-start gap-6">
           <div className="flex-1">
@@ -246,19 +246,22 @@ export function ImageUploadLanding({ onUploadClick }: ImageUploadLandingProps) {
               </span>
             </div>
           </div>
-          <div className="flex-1">
-            <h3 className="text-sm font-semibold text-foreground mb-2">Location Options</h3>
-            <div className="flex gap-4 text-sm text-muted-foreground">
-              <span>ACL (Upload from computer)</span>
-              <span>FTP (External server)</span>
-              <span>URL (Web location)</span>
-            </div>
-          </div>
+          <div className="w-px self-stretch bg-border" />
           <div className="flex-1">
             <h3 className="text-sm font-semibold text-foreground mb-2">Max File Size</h3>
             <div className="text-sm text-muted-foreground">
-              500 KB per image, 2400&times;2400 to 4800&times;4800 px, 1:1 square, 300 ppi
+              500 KB per image
             </div>
+          </div>
+          <div className="w-px self-stretch bg-border" />
+          <div className="flex-1">
+            <h3 className="text-sm font-semibold text-foreground mb-2 flex items-center gap-1.5">
+              <BookOpen className="size-4 text-primary" />
+              Image best practices
+            </h3>
+            <a href="#" className="text-sm text-tg-link hover:underline">
+              View GS1 guidelines &rarr;
+            </a>
           </div>
         </div>
       </div>
