@@ -16,6 +16,7 @@ import {
   CheckCircle2,
   Info,
   Pencil,
+  AlertCircle,
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -1979,6 +1980,18 @@ End of Metadata Export
               <div className="flex gap-4">
                 {/* Left column: thumbnail list ~25% */}
                 <div className="w-1/4 flex flex-col gap-1 border border-border rounded overflow-hidden">
+                  {/* Summary count badge — directions: "Summary count badge" */}
+                  <div className="px-2 pt-2 pb-1">
+                    {missingAttrCount > 0 ? (
+                      <span className="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium bg-tg-warning/15 text-tg-warning">
+                        {missingAttrCount} of {uploadedFiles.length} incomplete
+                      </span>
+                    ) : (
+                      <span className="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium bg-tg-success/15 text-tg-success">
+                        All {uploadedFiles.length} images ready
+                      </span>
+                    )}
+                  </div>
                   {uploadedFiles.map((file, idx) => (
                     <button
                       key={file.id}
@@ -1999,6 +2012,14 @@ End of Metadata Export
                         )}
                       </div>
                       <span className="truncate">{file.name.slice(0, 18)}</span>
+                      {/* Per-row completion indicator — directions: "Per-row indicator" */}
+                      {(() => {
+                        const a = attributesByImage[idx]
+                        const complete = !!(a?.imageType && a?.purpose && a?.orientation)
+                        return complete
+                          ? <Check className="size-3.5 shrink-0 ml-auto text-tg-success" />
+                          : <AlertCircle className="size-3.5 shrink-0 ml-auto text-tg-warning" />
+                      })()}
                     </button>
                   ))}
                 </div>
