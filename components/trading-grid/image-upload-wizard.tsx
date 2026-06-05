@@ -362,7 +362,7 @@ export function ImageUploadWizard({
   const [showProductMedia, setShowProductMedia] = useState(false)
   const [showDownloadModal, setShowDownloadModal] = useState(false)
   const [downloadPhase, setDownloadPhase] = useState<"select" | "preparing" | "complete">("select")
-  const [activeImageIndex, setActiveImageIndex] = useState(0)
+  // activeImageIndex removed — supplier product-media uses stacked list (no active selection)
   // Inline validation errors from file drop/browse (Change 1)
   const [validationErrors, setValidationErrors] = useState<ValidationError[]>([])
   // Submission phase for progress card (Change 4)
@@ -371,12 +371,17 @@ export function ImageUploadWizard({
   const [fileStatuses, setFileStatuses] = useState<{ [id: string]: "queued" | "uploading" | "processing" | "complete" | "failed" }>({})
   // Edit dialog state — unified for attributes + replace image tabs (Task 1)
   const [editAttrDialog, setEditAttrDialog] = useState<{ open: boolean; fileIndex: number; draft: typeof attributes }>({ open: false, fileIndex: 0, draft: {} as typeof attributes })
-  // Active tab inside the unified edit dialog: "attributes" | "replace" | "delete" (Task 1)
-  const [editDialogTab, setEditDialogTab] = useState<"attributes" | "replace" | "delete">("attributes")
+  // editDialogTab removed — unified modal has no tabs (Task 3)
   // Pending replacement file staged inside the Replace image tab (Task 1)
   const [pendingReplaceFile, setPendingReplaceFile] = useState<File | null>(null)
   // Inline save-confirmed flash shown after saving attributes (Task 2)
   const [editSaveConfirmed, setEditSaveConfirmed] = useState(false)
+  // Delete confirmation step inside the unified edit modal (Task 3)
+  const [editDeleteConfirm, setEditDeleteConfirm] = useState(false)
+  // "Attributes are correct" checkbox shown when a replacement is staged (Task 3)
+  const [replacementAttrChecked, setReplacementAttrChecked] = useState(false)
+  // Snapshot of attributes at the time the edit dialog was opened — used for dirty-check (Task 3)
+  const [editAttrInitial, setEditAttrInitial] = useState<typeof attributes | null>(null)
   // Syndication acknowledgement checkbox in Step 3 — resets on Back (Task 2)
   const [syndicationAcknowledged, setSyndicationAcknowledged] = useState(false)
   
@@ -681,7 +686,7 @@ End of Metadata Export
           </span>
         </div>
 
-        {/* Toolbar */}
+        {/* Page-level toolbar — bulk download only; per-card Edit/Download are inline */}
         <div className="flex items-center gap-1 border border-border bg-card p-1 w-fit">
           <button 
             className="p-1.5 hover:bg-muted border border-border" 
@@ -692,20 +697,6 @@ End of Metadata Export
             }}
           >
             <Download className="size-4 text-muted-foreground" />
-          </button>
-          {/* Edit attributes + Replace image — unified dialog (Task 1) */}
-          <button
-            className="p-1.5 hover:bg-muted border border-border"
-            title="Edit image"
-            onClick={() => {
-              const curAttrs = applyToAll ? attributes : (attributesByImage[activeImageIndex] || attributes)
-              setEditAttrDialog({ open: true, fileIndex: activeImageIndex, draft: { ...curAttrs } })
-              setEditDialogTab("attributes")
-              setPendingReplaceFile(null)
-              setEditSaveConfirmed(false)
-            }}
-          >
-            <Pencil className="size-4 text-muted-foreground" />
           </button>
         </div>
 
@@ -784,431 +775,436 @@ End of Metadata Export
           </div>
         )}
 
-        {/* Main Content - Two Panel Layout */}
-        <div className="grid grid-cols-2 gap-4">
-          {/* Left Panel - Image Attributes Table */}
-          <div className="border border-border bg-card">
-            {/* Panel Header */}
-            <div className="flex items-center gap-2 border-b border-border bg-muted/30 px-3 py-2">
-              <div className="flex items-center gap-1 border border-border bg-card p-0.5">
-                <button className="p-1 hover:bg-muted" title="Add">
-                  <Download className="size-3 text-muted-foreground" />
-                </button>
-                <button className="p-1 hover:bg-muted" title="Edit">
-                  <FileImage className="size-3 text-muted-foreground" />
-                </button>
-              </div>
-              <span className="text-sm font-medium text-tg-link">
-                {uploadLevel === "product" 
-                  ? "Product Level Image" 
-                  : uploadLevel === "gtin"
-                  ? "Item Level Image"
-                  : "Product + Color Code Level Image"}
-              </span>
-            </div>
+        {/* Sticky jump-to thumbnail strip — hidden when only 1 image (Acceptance #9) */}
+        {uploadedFiles.length > 1 && (
+          <div className="sticky top-0 z-10 bg-card border border-border p-2 flex gap-2 overflow-x-auto shadow-sm">
+            {uploadedFiles.map((file, idx) => (
+              <button
+                key={file.id}
+                title={file.name}
+                onClick={() => {
+                  document.getElementById(`supplier-card-${idx}`)?.scrollIntoView({ behavior: "smooth", block: "start" })
+                }}
+                className="flex-shrink-0 rounded border-2 border-border hover:border-primary/60 overflow-hidden transition-all"
+              >
+                <img
+                  src={file.preview}
+                  alt={`Image ${idx + 1}`}
+                  className="size-14 object-cover"
+                />
+              </button>
+            ))}
+          </div>
+        )}
 
-            {/* Attributes Table */}
-            {(() => {
-              const activeFile = uploadedFiles[activeImageIndex]
-              const activeAttrs = applyToAll ? attributes : (attributesByImage[activeImageIndex] || attributes)
+        {/* Stacked image cards — one per uploaded file (Acceptance #1) */}
+        {uploadedFiles.length === 0 ? (
+          /* Empty state (Acceptance #10) */
+          <div className="flex flex-col items-center justify-center py-16 text-center border-2 border-dashed border-border rounded">
+            <FileImage className="size-16 text-muted-foreground/40 mb-4" />
+            <h3 className="text-base font-semibold text-foreground mb-1">No images on this product</h3>
+            <p className="text-sm text-muted-foreground mb-4">All images have been removed. Upload new images to make this product visible to retailers.</p>
+            <Button onClick={() => { setShowProductMedia(false); setCurrentStep(1) }}>Upload images</Button>
+          </div>
+        ) : (
+          <div className="flex flex-col gap-3">
+            {uploadedFiles.map((file, idx) => {
+              const cardAttrs = applyToAll ? attributes : (attributesByImage[idx] || attributes)
               const imageLevelLabel = uploadLevel === "product"
                 ? "Product Level"
                 : uploadLevel === "gtin"
                 ? "Item Level (GTIN)"
                 : "Product + Color Code Level"
+              const levelLabel = uploadLevel === "product"
+                ? "Product Level Image"
+                : uploadLevel === "gtin"
+                ? "Item Level Image"
+                : "Product + Color Code Level Image"
               return (
-                <div className="text-sm">
-                  {/* Image Level - always shown, read-only derived from upload level */}
-                  <div className="flex border-b border-border">
-                    <div className="w-44 bg-muted/20 px-3 py-2 font-medium text-foreground">Image Level:</div>
-                    <div className="flex-1 px-3 py-2 text-foreground">{imageLevelLabel}</div>
-                  </div>
-                  {/* Color Code - only shown for product-color level */}
-                  {uploadLevel === "product-color" && (
-                    <div className="flex border-b border-border">
-                      <div className="w-44 bg-muted/20 px-3 py-2 font-medium text-foreground">Color Code:</div>
-                      <div className="flex-1 px-3 py-2 text-foreground">{data.colorCode}</div>
-                    </div>
-                  )}
-                  <div className="flex border-b border-border">
-                    <div className="w-44 bg-muted/20 px-3 py-2 font-medium text-foreground">File Name:</div>
-                    <div className="flex-1 px-3 py-2 text-foreground">{activeFile?.name || ""}</div>
-                  </div>
-                  <div className="flex border-b border-border">
-                    <div className="w-44 bg-muted/20 px-3 py-2 font-medium text-foreground">File Type:</div>
-                    <div className="flex-1 px-3 py-2 text-foreground">{activeFile?.type || "JPG-JPEG"}</div>
-                  </div>
-                  <div className="flex border-b border-border">
-                    <div className="w-44 bg-muted/20 px-3 py-2 font-medium text-foreground">File Size:</div>
-                    <div className="flex-1 px-3 py-2 text-foreground">{activeFile ? formatFileSize(activeFile.size) : ""}</div>
-                  </div>
-                  <div className="flex border-b border-border">
-                    <div className="w-44 bg-muted/20 px-3 py-2 font-medium text-tg-link">Image Type:</div>
-                    <div className="flex-1 px-3 py-2 text-tg-link">
-                      {IMAGE_TYPE_OPTIONS.find(o => o.value === activeAttrs.imageType)?.label || ""}
-                    </div>
-                  </div>
-                  <div className="flex border-b border-border">
-                    <div className="w-44 bg-muted/20 px-3 py-2 font-medium text-foreground">Purpose:</div>
-                    <div className="flex-1 px-3 py-2 text-tg-link">
-                      {PURPOSE_OPTIONS.find(o => o.value === activeAttrs.purpose)?.label || ""}
+                <div key={file.id} id={`supplier-card-${idx}`} className="border border-border bg-card">
+                  {/* Card header */}
+                  <div className="flex items-center justify-between border-b border-border bg-muted/30 px-3 py-2">
+                    <span className="text-sm font-medium text-tg-link">{levelLabel}</span>
+                    {/* Per-card action toolbar: Edit pencil + per-card Download (Acceptance #1, #3) */}
+                    <div className="flex items-center gap-1">
+                      <button
+                        className="p-1.5 hover:bg-muted rounded"
+                        title="Download this image"
+                        onClick={() => {
+                          const link = document.createElement("a")
+                          link.href = file.preview
+                          link.download = file.name
+                          link.click()
+                        }}
+                      >
+                        <Download className="size-3.5 text-muted-foreground" />
+                      </button>
+                      <button
+                        className="p-1.5 hover:bg-muted rounded"
+                        title="Edit image"
+                        onClick={() => {
+                          const snap = { ...cardAttrs }
+                          setEditAttrDialog({ open: true, fileIndex: idx, draft: snap })
+                          setEditAttrInitial(snap)
+                          setPendingReplaceFile(null)
+                          setEditSaveConfirmed(false)
+                          setEditDeleteConfirm(false)
+                          setReplacementAttrChecked(false)
+                        }}
+                      >
+                        <Pencil className="size-3.5 text-muted-foreground" />
+                      </button>
                     </div>
                   </div>
-                  <div className="flex border-b border-border">
-                    <div className="w-44 bg-muted/20 px-3 py-2 font-medium text-foreground">Orientation:</div>
-                    <div className="flex-1 px-3 py-2 text-foreground">
-                      {ORIENTATION_OPTIONS.find(o => o.value === activeAttrs.orientation)?.label || ""}
-                    </div>
-                  </div>
-                  <div className="flex border-b border-border">
-                    <div className="w-44 bg-muted/20 px-3 py-2 font-medium text-foreground">Location Type:</div>
-                    <div className="flex-1 px-3 py-2 text-foreground">
-                      {LOCATION_TYPE_OPTIONS.find(o => o.value === activeAttrs.locationType)?.label || ""}
-                    </div>
-                  </div>
-                  <div className="flex border-b border-border">
-                    <div className="w-44 bg-muted/20 px-3 py-2 font-medium text-foreground">External Location:</div>
-                    <div className="flex-1 px-3 py-2 text-foreground">{activeAttrs.externalLocation || ""}</div>
-                  </div>
-                  <div className="flex border-b border-border">
-                    <div className="w-44 bg-muted/20 px-3 py-2 font-medium text-foreground">Pixel Density (DPI):</div>
-                    <div className="flex-1 px-3 py-2 text-foreground">{activeAttrs.pixelDensity || ""}</div>
-                  </div>
-                  <div className="flex border-b border-border">
-                    <div className="w-44 bg-muted/20 px-3 py-2 font-medium text-foreground">Height:</div>
-                    <div className="flex-1 px-3 py-2 text-foreground">{activeAttrs.height || ""}</div>
-                  </div>
-                  <div className="flex border-b border-border">
-                    <div className="w-44 bg-muted/20 px-3 py-2 font-medium text-foreground">Width:</div>
-                    <div className="flex-1 px-3 py-2 text-foreground">{activeAttrs.width || ""}</div>
-                  </div>
-                  <div className="flex border-b border-border">
-                    <div className="w-44 bg-muted/20 px-3 py-2 font-medium text-foreground">Image Style:</div>
-                    <div className="flex-1 px-3 py-2 text-foreground">
-                      {IMAGE_STYLE_OPTIONS.find(o => o.value === activeAttrs.imageStyle)?.label || ""}
-                    </div>
-                  </div>
-                  <div className="flex border-b border-border">
-                    <div className="w-44 bg-muted/20 px-3 py-2 font-medium text-foreground">Facing (GDSN):</div>
-                    <div className="flex-1 px-3 py-2 text-foreground">
-                      {FACING_OPTIONS.find(o => o.value === activeAttrs.facing)?.label || ""}
-                    </div>
-                  </div>
-                  <div className="flex border-b border-border">
-                    <div className="w-44 bg-muted/20 px-3 py-2 font-medium text-foreground">Angle:</div>
-                    <div className="flex-1 px-3 py-2 text-foreground">
-                      {ANGLE_OPTIONS.find(o => o.value === activeAttrs.angle)?.label || ""}
-                    </div>
-                  </div>
-                  <div className="flex border-b border-border">
-                    <div className="w-44 bg-muted/20 px-3 py-2 font-medium text-foreground">Clipping Path:</div>
-                    <div className="flex-1 px-3 py-2 text-foreground">{activeAttrs.clippingPath || ""}</div>
-                  </div>
-                  <div className="flex border-b border-border">
-                    <div className="w-44 bg-muted/20 px-3 py-2 font-medium text-foreground">Image Description:</div>
-                    <div className="flex-1 px-3 py-2 text-foreground">{activeAttrs.imageDescription || ""}</div>
-                  </div>
-                  <div className="flex border-b border-border">
-                    <div className="w-44 bg-muted/20 px-3 py-2 font-medium text-foreground">Create Date:</div>
-                    <div className="flex-1 px-3 py-2 text-foreground">{currentDate}</div>
-                  </div>
+                  {/* Card body: attributes 60% left, preview 40% right */}
                   <div className="flex">
-                    <div className="w-44 bg-muted/20 px-3 py-2 font-medium text-foreground">Last Update Date:</div>
-                    <div className="flex-1 px-3 py-2 text-foreground">{currentDate}</div>
+                    {/* Left: attribute table */}
+                    <div className="w-3/5 border-r border-border text-sm">
+                      <div className="flex border-b border-border">
+                        <div className="w-44 bg-muted/20 px-3 py-2 font-medium text-foreground shrink-0">Image Level:</div>
+                        <div className="flex-1 px-3 py-2 text-foreground">{imageLevelLabel}</div>
+                      </div>
+                      {uploadLevel === "product-color" && (
+                        <div className="flex border-b border-border">
+                          <div className="w-44 bg-muted/20 px-3 py-2 font-medium text-foreground shrink-0">Color Code:</div>
+                          <div className="flex-1 px-3 py-2 text-foreground">{data.colorCode}</div>
+                        </div>
+                      )}
+                      <div className="flex border-b border-border">
+                        <div className="w-44 bg-muted/20 px-3 py-2 font-medium text-foreground shrink-0">File Name:</div>
+                        <div className="flex-1 px-3 py-2 text-foreground truncate">{file.name}</div>
+                      </div>
+                      <div className="flex border-b border-border">
+                        <div className="w-44 bg-muted/20 px-3 py-2 font-medium text-foreground shrink-0">File Type:</div>
+                        <div className="flex-1 px-3 py-2 text-foreground">{file.type || "JPG-JPEG"}</div>
+                      </div>
+                      <div className="flex border-b border-border">
+                        <div className="w-44 bg-muted/20 px-3 py-2 font-medium text-tg-link shrink-0">Image Type:</div>
+                        <div className="flex-1 px-3 py-2 text-tg-link">{IMAGE_TYPE_OPTIONS.find(o => o.value === cardAttrs.imageType)?.label || ""}</div>
+                      </div>
+                      <div className="flex border-b border-border">
+                        <div className="w-44 bg-muted/20 px-3 py-2 font-medium text-foreground shrink-0">Purpose:</div>
+                        <div className="flex-1 px-3 py-2 text-tg-link">{PURPOSE_OPTIONS.find(o => o.value === cardAttrs.purpose)?.label || ""}</div>
+                      </div>
+                      <div className="flex border-b border-border">
+                        <div className="w-44 bg-muted/20 px-3 py-2 font-medium text-foreground shrink-0">Orientation:</div>
+                        <div className="flex-1 px-3 py-2 text-foreground">{ORIENTATION_OPTIONS.find(o => o.value === cardAttrs.orientation)?.label || ""}</div>
+                      </div>
+                      <div className="flex border-b border-border">
+                        <div className="w-44 bg-muted/20 px-3 py-2 font-medium text-foreground shrink-0">Location Type:</div>
+                        <div className="flex-1 px-3 py-2 text-foreground">{LOCATION_TYPE_OPTIONS.find(o => o.value === cardAttrs.locationType)?.label || ""}</div>
+                      </div>
+                      <div className="flex border-b border-border">
+                        <div className="w-44 bg-muted/20 px-3 py-2 font-medium text-foreground shrink-0">External Location:</div>
+                        <div className="flex-1 px-3 py-2 text-foreground break-all">{cardAttrs.externalLocation || ""}</div>
+                      </div>
+                      <div className="flex border-b border-border">
+                        <div className="w-44 bg-muted/20 px-3 py-2 font-medium text-foreground shrink-0">File Size:</div>
+                        <div className="flex-1 px-3 py-2 text-foreground">{formatFileSize(file.size)}</div>
+                      </div>
+                      <div className="flex border-b border-border">
+                        <div className="w-44 bg-muted/20 px-3 py-2 font-medium text-foreground shrink-0">Pixel Density (DPI):</div>
+                        <div className="flex-1 px-3 py-2 text-foreground">{cardAttrs.pixelDensity || ""}</div>
+                      </div>
+                      <div className="flex border-b border-border">
+                        <div className="w-44 bg-muted/20 px-3 py-2 font-medium text-foreground shrink-0">Height:</div>
+                        <div className="flex-1 px-3 py-2 text-foreground">{cardAttrs.height || ""}</div>
+                      </div>
+                      <div className="flex border-b border-border">
+                        <div className="w-44 bg-muted/20 px-3 py-2 font-medium text-foreground shrink-0">Width:</div>
+                        <div className="flex-1 px-3 py-2 text-foreground">{cardAttrs.width || ""}</div>
+                      </div>
+                      <div className="flex border-b border-border">
+                        <div className="w-44 bg-muted/20 px-3 py-2 font-medium text-foreground shrink-0">Image Style:</div>
+                        <div className="flex-1 px-3 py-2 text-foreground">{IMAGE_STYLE_OPTIONS.find(o => o.value === cardAttrs.imageStyle)?.label || ""}</div>
+                      </div>
+                      <div className="flex border-b border-border">
+                        <div className="w-44 bg-muted/20 px-3 py-2 font-medium text-foreground shrink-0">Facing (GDSN):</div>
+                        <div className="flex-1 px-3 py-2 text-foreground">{FACING_OPTIONS.find(o => o.value === cardAttrs.facing)?.label || ""}</div>
+                      </div>
+                      <div className="flex border-b border-border">
+                        <div className="w-44 bg-muted/20 px-3 py-2 font-medium text-foreground shrink-0">Angle:</div>
+                        <div className="flex-1 px-3 py-2 text-foreground">{ANGLE_OPTIONS.find(o => o.value === cardAttrs.angle)?.label || ""}</div>
+                      </div>
+                      <div className="flex border-b border-border">
+                        <div className="w-44 bg-muted/20 px-3 py-2 font-medium text-foreground shrink-0">Clipping Path:</div>
+                        <div className="flex-1 px-3 py-2 text-foreground">{cardAttrs.clippingPath || ""}</div>
+                      </div>
+                      <div className="flex border-b border-border">
+                        <div className="w-44 bg-muted/20 px-3 py-2 font-medium text-foreground shrink-0">Image Description:</div>
+                        <div className="flex-1 px-3 py-2 text-foreground">{cardAttrs.imageDescription || ""}</div>
+                      </div>
+                      <div className="flex border-b border-border">
+                        <div className="w-44 bg-muted/20 px-3 py-2 font-medium text-foreground shrink-0">Create Date:</div>
+                        <div className="flex-1 px-3 py-2 text-foreground">{currentDate}</div>
+                      </div>
+                      <div className="flex">
+                        <div className="w-44 bg-muted/20 px-3 py-2 font-medium text-foreground shrink-0">Last Update Date:</div>
+                        <div className="flex-1 px-3 py-2 text-foreground">{currentDate}</div>
+                      </div>
+                    </div>
+                    {/* Right: image preview */}
+                    <div className="w-2/5 flex items-center justify-center bg-white p-4 min-h-[280px]">
+                      {file.preview ? (
+                        <img
+                          src={file.preview}
+                          alt={file.name}
+                          className="max-w-full max-h-64 object-contain"
+                        />
+                      ) : (
+                        <div className="flex flex-col items-center gap-2 text-center">
+                          <FileImage className="size-16 text-muted-foreground/40" />
+                          <p className="text-xs text-muted-foreground">No preview</p>
+                        </div>
+                      )}
+                    </div>
                   </div>
                 </div>
               )
-            })()}
+            })}
           </div>
+        )}
 
-          {/* Right Panel - Image Preview */}
-          <div className="border border-border bg-card flex flex-col">
-            {/* Panel Header */}
-            <div className="flex items-center gap-2 border-b border-border bg-muted/30 px-3 py-2">
-            <div className="flex items-center gap-1 border border-border bg-card p-0.5">
-              <button
-                  onClick={() => {
-                    if (uploadedFiles[activeImageIndex]) {
-                      const link = document.createElement('a')
-                      link.href = uploadedFiles[activeImageIndex].preview
-                      link.download = uploadedFiles[activeImageIndex].name
-                      link.click()
-                    }
-                  }}
-                  className="p-1 hover:bg-muted" 
-                  title="Download current image"
-                >
-                  <Download className="size-3 text-muted-foreground" />
-                </button>
-                <button className="p-1 hover:bg-muted" title="Edit">
-                  <FileImage className="size-3 text-muted-foreground" />
-                </button>
-              </div>
-              {uploadedFiles.length > 1 && (
-                <div className="ml-auto text-xs text-muted-foreground">
-                  {activeImageIndex + 1} / {uploadedFiles.length}
-                </div>
-              )}
-            </div>
-
-            {/* Image Preview */}
-            <div className="flex-1 flex flex-col items-center justify-center p-4 min-h-[400px] bg-white">
-              {uploadedFiles[activeImageIndex] ? (
-                <div className="flex flex-col items-center justify-center gap-4 w-full h-full">
-                  <img 
-                    src={uploadedFiles[activeImageIndex].preview} 
-                    alt="Uploaded product" 
-                    className="max-w-full max-h-[320px] object-contain"
-                  />
-                </div>
-              ) : (
-                <div className="flex flex-col items-center justify-center text-center p-8 border-2 border-dashed border-border rounded">
-                  <FileImage className="size-16 text-muted-foreground mb-4" />
-                  <p className="text-sm text-muted-foreground">Image Preview</p>
-                </div>
-              )}
-            </div>
-
-            {/* Thumbnail Strip */}
-            {uploadedFiles.length > 1 && (
-              <div className="border-t border-border bg-muted/20 p-2">
-                <div className="flex gap-2 overflow-x-auto">
-                  {uploadedFiles.map((file, idx) => (
-                    <button
-                      key={file.id}
-                      onClick={() => setActiveImageIndex(idx)}
-                      className={cn(
-                        "flex-shrink-0 rounded border-2 overflow-hidden transition-all",
-                        activeImageIndex === idx 
-                          ? "border-primary" 
-                          : "border-border hover:border-primary/50"
-                      )}
-                    >
-                      <img
-                        src={file.preview}
-                        alt={`Image ${idx + 1}`}
-                        className="size-16 object-cover"
-                      />
-                    </button>
-                  ))}
-                </div>
-              </div>
-            )}
-          </div>
-        </div>
-
-        {/* Unified Edit dialog — Attributes + Replace image tabs (Task 1) */}
+        {/* Unified Edit modal — no tabs; Replace → Confirmation banner → Attributes → footer (Acceptance #4) */}
         <Dialog
           open={editAttrDialog.open}
           onOpenChange={(o) => {
             setEditAttrDialog(prev => ({ ...prev, open: o }))
-            if (!o) { setPendingReplaceFile(null); setEditSaveConfirmed(false) }
+            if (!o) {
+              setPendingReplaceFile(null)
+              setEditSaveConfirmed(false)
+              setEditDeleteConfirm(false)
+              setReplacementAttrChecked(false)
+              setEditAttrInitial(null)
+            }
           }}
         >
-          <DialogContent className="max-w-lg">
-            <DialogHeader>
-              <DialogTitle>Edit image &mdash; {uploadedFiles[editAttrDialog.fileIndex]?.name}</DialogTitle>
+          <DialogContent className="max-w-xl max-h-[90vh] flex flex-col">
+            {/* Header */}
+            <DialogHeader className="pb-0">
+              <DialogTitle>Edit Image</DialogTitle>
+              <p className="text-xs text-muted-foreground mt-0.5">
+                {uploadedFiles[editAttrDialog.fileIndex]?.name}
+                {getAutoPopulatedData().productId ? ` \u2022 ${getAutoPopulatedData().productId}` : ""}
+              </p>
             </DialogHeader>
 
-            {/* Tab bar */}
-            <div className="flex border-b border-border -mx-6 px-6">
-              <button
-                className={cn(
-                  "px-4 py-2 text-sm font-medium border-b-2 transition-colors",
-                  editDialogTab === "attributes"
-                    ? "border-primary text-foreground"
-                    : "border-transparent text-muted-foreground hover:text-foreground"
-                )}
-                onClick={() => setEditDialogTab("attributes")}
-              >
-                Attributes
-              </button>
-              <button
-                className={cn(
-                  "px-4 py-2 text-sm font-medium border-b-2 transition-colors",
-                  editDialogTab === "replace"
-                    ? "border-primary text-foreground"
-                    : "border-transparent text-muted-foreground hover:text-foreground"
-                )}
-                onClick={() => { setEditDialogTab("replace"); setPendingReplaceFile(null) }}
-              >
-                Replace image
-              </button>
-              <button
-                className={cn(
-                  "px-4 py-2 text-sm font-medium border-b-2 transition-colors",
-                  editDialogTab === "delete"
-                    ? "border-destructive text-destructive"
-                    : "border-transparent text-muted-foreground hover:text-destructive"
-                )}
-                onClick={() => setEditDialogTab("delete")}
-              >
-                Delete
-              </button>
-            </div>
-
-            {/* Tab A: Attributes */}
-            {editDialogTab === "attributes" && (
+            {editDeleteConfirm ? (
+              /* ── Delete confirmation step (Acceptance #7) ── */
               <>
-                <div className="flex flex-col gap-4 py-2 max-h-[60vh] overflow-y-auto pr-1">
-                  <StepTwoForm
-                    currentAttrs={editAttrDialog.draft}
-                    updateAttrs={(newAttrs) => setEditAttrDialog(prev => ({ ...prev, draft: newAttrs }))}
-                    advancedOpen={advancedOpen}
-                    setAdvancedOpen={setAdvancedOpen}
-                    uploadLevel={uploadLevel}
-                    autoData={getAutoPopulatedData()}
-                  />
-                  {/* Replace image anchor — below form, above Save (Task 1) */}
-                  <button
-                    className="text-sm text-tg-link hover:underline text-left"
-                    onClick={() => { setEditDialogTab("replace"); setPendingReplaceFile(null) }}
-                  >
-                    Replace image instead
-                  </button>
-                </div>
-                <div className="flex items-center justify-end gap-2 pt-2 border-t border-border">
-                  {editSaveConfirmed && (
-                    <span className="flex items-center gap-1 text-xs text-tg-success mr-auto">
-                      <CheckCircle2 className="size-3.5" />
-                      Saved
-                    </span>
+                <div className="flex flex-col gap-4 py-2 flex-1">
+                  <h3 className="text-sm font-semibold text-foreground">Delete this image</h3>
+                  <p className="text-sm text-muted-foreground">
+                    Are you sure you want to delete{" "}
+                    <span className="font-medium text-foreground">{uploadedFiles[editAttrDialog.fileIndex]?.name}</span>{" "}
+                    from <span className="font-medium text-foreground">{getAutoPopulatedData().productId}</span>?
+                  </p>
+                  {/* Last-image warning */}
+                  {uploadedFiles.length === 1 ? (
+                    <div className="flex items-start gap-3 rounded border border-destructive/40 bg-destructive/5 p-3">
+                      <Trash2 className="size-4 text-destructive mt-0.5 shrink-0" />
+                      <p className="text-sm text-destructive">
+                        This is the last image on <span className="font-medium">{getAutoPopulatedData().productId}</span>. The product will have zero images after deletion. Retailer subscribers will see no images for this product on next sync.
+                      </p>
+                    </div>
+                  ) : (
+                    <p className="text-sm text-muted-foreground">
+                      This image will be removed from retailer subscribers on next sync.
+                    </p>
                   )}
-                  <Button variant="outline" onClick={() => setEditAttrDialog(prev => ({ ...prev, open: false }))}>Cancel</Button>
-                  <Button onClick={() => {
-                    if (applyToAll) {
-                      setAttributes(editAttrDialog.draft)
-                    } else {
-                      setAttributesByImage(prev => ({ ...prev, [editAttrDialog.fileIndex]: editAttrDialog.draft }))
-                    }
-                    setEditSaveConfirmed(true)
-                    setTimeout(() => {
-                      setEditAttrDialog(prev => ({ ...prev, open: false }))
-                      setEditSaveConfirmed(false)
-                    }, 1500)
-                  }}>Save</Button>
                 </div>
-              </>
-            )}
-
-            {/* Tab B: Replace image */}
-            {editDialogTab === "replace" && (
-              <div className="py-2 flex flex-col gap-4">
-                {!pendingReplaceFile ? (
-                  <div
-                    className="flex flex-col items-center justify-center gap-3 rounded border-2 border-dashed border-border p-8 cursor-pointer hover:border-primary/50 transition-colors"
-                    onDragOver={(e) => e.preventDefault()}
-                    onDrop={(e) => {
-                      e.preventDefault()
-                      const f = e.dataTransfer.files[0]
-                      if (!f) return
-                      const { errors } = validateImageBatch([f])
-                      if (errors.length) { setValidationErrors(prev => [...prev, ...errors]); return }
-                      setPendingReplaceFile(f)
-                    }}
-                  >
-                    <Upload className="size-8 text-muted-foreground" />
-                    <p className="text-sm text-muted-foreground text-center">Drop a replacement image here</p>
-                    <label>
-                      <input
-                        type="file"
-                        accept="image/jpeg,.jpg,.jpeg"
-                        className="hidden"
-                        onChange={(e) => {
-                          const f = e.target.files?.[0]
-                          if (!f) return
-                          const { errors } = validateImageBatch([f])
-                          if (errors.length) { setValidationErrors(prev => [...prev, ...errors]); return }
-                          setPendingReplaceFile(f)
-                        }}
-                      />
-                      <Button variant="outline" size="sm" asChild><span className="cursor-pointer">Browse</span></Button>
-                    </label>
-                    <p className="text-xs text-muted-foreground">Max 500 KB &middot; JPG/JPEG only</p>
-                  </div>
-                ) : (
-                  <div className="flex flex-col gap-4">
-                    <div className="flex items-center gap-3 rounded border border-border bg-muted/20 p-3 text-sm">
-                      <CheckCircle2 className="size-4 text-tg-success shrink-0" />
-                      <span className="text-foreground">
-                        Replace <span className="font-medium">{uploadedFiles[editAttrDialog.fileIndex]?.name}</span> with{" "}
-                        <span className="font-medium">{pendingReplaceFile.name}</span>?
-                      </span>
-                    </div>
-                    <div className="flex items-center justify-end gap-2">
-                      <Button variant="outline" onClick={() => setPendingReplaceFile(null)}>Choose different file</Button>
-                      <Button onClick={() => {
-                        const f = pendingReplaceFile
-                        const newFile: UploadedFile = {
-                          id: uploadedFiles[editAttrDialog.fileIndex].id,
-                          name: f.name,
-                          size: f.size,
-                          type: f.type,
-                          preview: URL.createObjectURL(f),
-                          status: "complete",
-                        }
-                        setUploadedFiles(prev => prev.map((u, i) => i === editAttrDialog.fileIndex ? newFile : u))
-                        setPendingReplaceFile(null)
-                        setEditAttrDialog(prev => ({ ...prev, open: false }))
-                      }}>Confirm replace</Button>
-                    </div>
-                  </div>
-                )}
-              </div>
-            )}
-
-            {/* Tab C: Delete image */}
-            {editDialogTab === "delete" && (
-              <div className="py-4 flex flex-col gap-4">
-                <div className="flex items-start gap-3 rounded border border-destructive/30 bg-destructive/5 p-4">
-                  <Trash2 className="size-5 text-destructive mt-0.5 shrink-0" />
-                  <div>
-                    <p className="text-sm font-medium text-foreground">
-                      Delete &ldquo;{uploadedFiles[editAttrDialog.fileIndex]?.name}&rdquo;?
-                    </p>
-                    <p className="text-sm text-muted-foreground mt-1">
-                      This action cannot be undone. The image will be permanently removed.
-                    </p>
-                  </div>
-                </div>
-                <div className="flex items-center justify-end gap-2">
-                  <Button variant="outline" onClick={() => setEditAttrDialog(prev => ({ ...prev, open: false }))}>
-                    Cancel
+                <div className="flex items-center justify-between pt-3 border-t border-border">
+                  <Button variant="outline" onClick={() => setEditDeleteConfirm(false)}>
+                    Back
                   </Button>
                   <Button
                     variant="destructive"
                     onClick={() => {
                       const idx = editAttrDialog.fileIndex
                       setUploadedFiles(prev => prev.filter((_, i) => i !== idx))
-                      // Adjust activeImageIndex if needed
-                      if (activeImageIndex >= uploadedFiles.length - 1 && activeImageIndex > 0) {
-                        setActiveImageIndex(activeImageIndex - 1)
-                      }
                       setEditAttrDialog(prev => ({ ...prev, open: false }))
+                      setEditDeleteConfirm(false)
                     }}
                   >
                     <Trash2 className="size-4 mr-2" />
                     Delete image
                   </Button>
                 </div>
-              </div>
+              </>
+            ) : (
+              /* ── Main unified form ── */
+              <>
+                <div className="flex flex-col gap-5 overflow-y-auto flex-1 pr-1 py-2">
+
+                  {/* 1. Replace section (Acceptance #4 — Replace at top) */}
+                  <div className="flex flex-col gap-2">
+                    <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Image file</p>
+                    <div className="flex items-start gap-3 rounded border border-border p-3">
+                      {/* Current / staged preview thumbnail */}
+                      <div className="shrink-0 size-20 border border-border overflow-hidden rounded bg-white flex items-center justify-center">
+                        {pendingReplaceFile ? (
+                          <img src={URL.createObjectURL(pendingReplaceFile)} alt="Replacement preview" className="size-full object-contain" />
+                        ) : uploadedFiles[editAttrDialog.fileIndex]?.preview ? (
+                          <img src={uploadedFiles[editAttrDialog.fileIndex].preview} alt="Current image" className="size-full object-contain" />
+                        ) : (
+                          <FileImage className="size-8 text-muted-foreground/40" />
+                        )}
+                      </div>
+                      {/* Filename / size / type + replace control */}
+                      <div className="flex flex-col gap-1 flex-1 min-w-0">
+                        <p className="text-sm font-medium text-foreground truncate">
+                          {pendingReplaceFile ? pendingReplaceFile.name : uploadedFiles[editAttrDialog.fileIndex]?.name}
+                        </p>
+                        <p className="text-xs text-muted-foreground">
+                          {pendingReplaceFile
+                            ? formatFileSize(pendingReplaceFile.size)
+                            : uploadedFiles[editAttrDialog.fileIndex]
+                              ? formatFileSize(uploadedFiles[editAttrDialog.fileIndex].size)
+                              : ""}
+                        </p>
+                        {pendingReplaceFile && (
+                          <span className="inline-flex items-center gap-1 text-xs text-primary font-medium">
+                            <CheckCircle2 className="size-3" />
+                            Replacement staged
+                          </span>
+                        )}
+                        <div className="flex items-center gap-3 mt-1">
+                          <label className="text-xs text-tg-link hover:underline cursor-pointer">
+                            Replace image
+                            <input
+                              type="file"
+                              accept="image/jpeg,.jpg,.jpeg"
+                              className="hidden"
+                              onChange={(e) => {
+                                const f = e.target.files?.[0]
+                                if (!f) return
+                                const { errors } = validateImageBatch([f])
+                                if (errors.length) { setValidationErrors(prev => [...prev, ...errors]); return }
+                                setPendingReplaceFile(f)
+                                setReplacementAttrChecked(false)
+                              }}
+                            />
+                          </label>
+                          {pendingReplaceFile && (
+                            <button
+                              className="text-xs text-muted-foreground hover:text-foreground hover:underline"
+                              onClick={() => { setPendingReplaceFile(null); setReplacementAttrChecked(false) }}
+                            >
+                              Undo replacement
+                            </button>
+                          )}
+                        </div>
+                        <p className="text-xs text-muted-foreground">Max 500 KB &middot; JPG/JPEG only</p>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* 2. Replacement confirmation banner — only when staged (Acceptance #5) */}
+                  {pendingReplaceFile && (
+                    <div className="rounded border border-primary/30 bg-primary/5 p-3 flex flex-col gap-2">
+                      <div className="flex items-start gap-2">
+                        <Info className="size-4 text-primary mt-0.5 shrink-0" />
+                        <p className="text-sm text-foreground">Image replaced. Confirm the attributes still apply to the new image.</p>
+                      </div>
+                      <label className="flex items-center gap-2 cursor-pointer select-none pl-6">
+                        <input
+                          type="checkbox"
+                          checked={replacementAttrChecked}
+                          onChange={(e) => setReplacementAttrChecked(e.target.checked)}
+                          className="accent-primary"
+                        />
+                        <span className="text-sm text-foreground">Attributes are correct for the new image.</span>
+                      </label>
+                    </div>
+                  )}
+
+                  {/* 3. Attributes section (Acceptance #4 — below Replace) */}
+                  <div className="flex flex-col gap-2">
+                    <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Image attributes</p>
+                    <StepTwoForm
+                      currentAttrs={editAttrDialog.draft}
+                      updateAttrs={(newAttrs) => setEditAttrDialog(prev => ({ ...prev, draft: newAttrs }))}
+                      advancedOpen={advancedOpen}
+                      setAdvancedOpen={setAdvancedOpen}
+                      uploadLevel={uploadLevel}
+                      autoData={getAutoPopulatedData()}
+                    />
+                  </div>
+                </div>
+
+                {/* Footer: Delete left | Cancel + Save right (Acceptance #4, #5, #6) */}
+                <div className="flex items-center justify-between pt-3 border-t border-border gap-2">
+                  <Button
+                    variant="destructive"
+                    onClick={() => setEditDeleteConfirm(true)}
+                  >
+                    Delete this image
+                  </Button>
+                  <div className="flex items-center gap-2">
+                    {editSaveConfirmed && (
+                      <span className="flex items-center gap-1 text-xs text-tg-success">
+                        <CheckCircle2 className="size-3.5" />
+                        Saved
+                      </span>
+                    )}
+                    <Button variant="outline" onClick={() => setEditAttrDialog(prev => ({ ...prev, open: false }))}>
+                      Cancel
+                    </Button>
+                    <Button
+                      disabled={(() => {
+                        // Dirty check: any attribute field changed from initial? (Acceptance #6)
+                        const attrDirty = editAttrInitial
+                          ? (Object.keys(editAttrDialog.draft) as Array<keyof typeof attributes>).some(
+                              k => editAttrDialog.draft[k] !== editAttrInitial[k]
+                            )
+                          : false
+                        // When replacement staged: need checkbox OR attr changed (Acceptance #5)
+                        if (pendingReplaceFile) return !replacementAttrChecked && !attrDirty
+                        // No replacement: need at least one attr changed (Acceptance #6)
+                        return !attrDirty
+                      })()}
+                      onClick={() => {
+                        // Commit replacement if staged (Acceptance #8)
+                        if (pendingReplaceFile) {
+                          const f = pendingReplaceFile
+                          const newFile: UploadedFile = {
+                            id: uploadedFiles[editAttrDialog.fileIndex].id,
+                            name: f.name,
+                            size: f.size,
+                            type: f.type,
+                            preview: URL.createObjectURL(f),
+                            status: "complete",
+                          }
+                          setUploadedFiles(prev => prev.map((u, i) => i === editAttrDialog.fileIndex ? newFile : u))
+                          setPendingReplaceFile(null)
+                        }
+                        // Commit attribute edits (Acceptance #8)
+                        if (applyToAll) {
+                          setAttributes(editAttrDialog.draft)
+                        } else {
+                          setAttributesByImage(prev => ({ ...prev, [editAttrDialog.fileIndex]: editAttrDialog.draft }))
+                        }
+                        setEditSaveConfirmed(true)
+                        setTimeout(() => {
+                          setEditAttrDialog(prev => ({ ...prev, open: false }))
+                          setEditSaveConfirmed(false)
+                          setReplacementAttrChecked(false)
+                        }, 1200)
+                      }}
+                    >
+                      Save
+                    </Button>
+                  </div>
+                </div>
+              </>
             )}
           </DialogContent>
         </Dialog>
 
-        {/* Action Buttons */}
+        {/* Action Buttons — single Done button returns to landing */}
         <div className="flex items-center justify-end gap-3 pt-4">
-          <Button 
-            variant="outline" 
-            onClick={() => {
-              setShowProductMedia(false)
-              setCurrentStep(2)
-            }}
-          >
-            Upload More Images
-          </Button>
           <Button onClick={onComplete}>
-            Return to Image Upload
+            Done
           </Button>
         </div>
 

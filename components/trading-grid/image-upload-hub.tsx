@@ -292,7 +292,7 @@ export function RetailerImageBrowser() {
   const [selectedVendor, setSelectedVendor] = useState<typeof MOCK_VENDORS[0] | null>(null)
   const [selectedSelectionCode, setSelectedSelectionCode] = useState<string | null>(null)
   const [selectedProduct, setSelectedProduct] = useState<typeof MOCK_PRODUCTS[0] | null>(null)
-  const [activeImageIndex, setActiveImageIndex] = useState(0)
+  // activeImageIndex removed — retailer product-media uses stacked list (no active selection)
   const [showDownloadModal, setShowDownloadModal] = useState(false)
   const [downloadPhase, setDownloadPhase] = useState<"select" | "preparing" | "complete">("select")
 
@@ -612,8 +612,6 @@ export function RetailerImageBrowser() {
 
   // Product Media View (read-only for retailer)
   if (currentView === "product-media") {
-    const currentImage = MOCK_IMAGES[activeImageIndex]
-    
     return (
       <div className="flex flex-col gap-6">
         {renderBreadcrumb()}
@@ -640,82 +638,74 @@ export function RetailerImageBrowser() {
           <div><span className="font-medium text-muted-foreground">Images:</span> <span className="text-foreground">{selectedProduct?.images}</span></div>
         </div>
 
-        {/* Image Grid with Attributes and Preview */}
-        <div className="grid grid-cols-2 gap-6">
-          {/* Left: Attributes Table */}
-          <div className="border border-border">
-            <div className="flex items-center gap-2 border-b border-border bg-muted/30 px-3 py-2">
-              <button className="p-1 hover:bg-muted" title="Download">
-                <Download className="size-3 text-muted-foreground" />
+        {/* Sticky jump-to thumbnail strip — hidden when only 1 image (Acceptance #9) */}
+        {MOCK_IMAGES.length > 1 && (
+          <div className="sticky top-0 z-10 bg-card border border-border p-2 flex gap-2 overflow-x-auto shadow-sm">
+            {MOCK_IMAGES.map((img, idx) => (
+              <button
+                key={idx}
+                title={img.fileName}
+                onClick={() => {
+                  document.getElementById(`retailer-card-${idx}`)?.scrollIntoView({ behavior: "smooth", block: "start" })
+                }}
+                className="flex-shrink-0 rounded border-2 border-border hover:border-primary/60 overflow-hidden transition-all p-2 bg-muted/20"
+              >
+                <FileImage className="size-10 text-muted-foreground" />
               </button>
-              <span className="text-sm font-medium text-tg-link">Product Level Image</span>
-            </div>
-            
-            <div className="text-sm">
-              {[
-                { label: "File Name:", value: currentImage?.fileName },
-                { label: "File Type:", value: currentImage?.fileType },
-                { label: "Image Type:", value: currentImage?.imageType, link: true },
-                { label: "Purpose:", value: currentImage?.purpose, link: true },
-                { label: "Orientation:", value: currentImage?.orientation, link: true },
-                { label: "Location Type:", value: currentImage?.locationType },
-                { label: "External Location:", value: "" },
-                { label: "File Size:", value: "" },
-                { label: "Pixel Density (DPI):", value: "" },
-                { label: "Height:", value: "" },
-                { label: "Width:", value: "" },
-                { label: "Image Style:", value: "" },
-                { label: "Facing (GDSN):", value: "" },
-                { label: "Angle:", value: "" },
-                { label: "Clipping Path:", value: "" },
-                { label: "Image Description:", value: "" },
-                { label: "Create Date:", value: currentImage?.createDate },
-                { label: "Last Update Date:", value: currentImage?.lastUpdate || "" },
-              ].map((row, idx) => (
-                <div key={idx} className="flex border-b border-border last:border-b-0">
-                  <div className="w-44 bg-muted/20 px-3 py-2 font-medium text-foreground">{row.label}</div>
-                  <div className={cn("flex-1 px-3 py-2", row.link ? "text-tg-link" : "text-foreground")}>
-                    {row.value}
-                  </div>
-                </div>
-              ))}
-            </div>
+            ))}
           </div>
+        )}
 
-          {/* Right: Image Preview */}
-          <div className="border border-border bg-white flex flex-col">
-            <div className="flex items-center gap-1 border-b border-border bg-muted/30 px-3 py-2">
-            </div>
-            <div className="flex-1 flex items-center justify-center p-4 min-h-[400px]">
-              <div className="flex flex-col items-center justify-center text-center p-8 border-2 border-dashed border-border rounded">
-                <FileImage className="size-24 text-primary/40 mb-4" />
-                <p className="text-sm text-muted-foreground">Product Image Preview</p>
-                <p className="text-xs text-muted-foreground mt-1">{currentImage?.fileName}</p>
+        {/* Stacked image cards — read-only, no per-card actions (Acceptance #2) */}
+        <div className="flex flex-col gap-3">
+          {MOCK_IMAGES.map((img, idx) => (
+            <div key={idx} id={`retailer-card-${idx}`} className="border border-border bg-card">
+              {/* Card header — no toolbar actions (retailer is read-only) */}
+              <div className="flex items-center border-b border-border bg-muted/30 px-3 py-2">
+                <span className="text-sm font-medium text-tg-link">Product Level Image</span>
               </div>
-            </div>
-            
-            {/* Thumbnail Strip */}
-            {MOCK_IMAGES.length > 1 && (
-              <div className="border-t border-border bg-muted/20 p-2">
-                <div className="flex gap-2 overflow-x-auto">
-                  {MOCK_IMAGES.map((img, idx) => (
-                    <button
-                      key={idx}
-                      onClick={() => setActiveImageIndex(idx)}
-                      className={cn(
-                        "flex-shrink-0 rounded border-2 overflow-hidden transition-all p-2",
-                        activeImageIndex === idx 
-                          ? "border-primary bg-primary/10" 
-                          : "border-border hover:border-primary/50"
-                      )}
-                    >
-                      <FileImage className="size-12 text-muted-foreground" />
-                    </button>
+              {/* Card body: attributes 60% left, preview placeholder 40% right */}
+              <div className="flex">
+                {/* Left: attribute table */}
+                <div className="w-3/5 border-r border-border text-sm">
+                  {[
+                    { label: "File Name:", value: img.fileName, link: false },
+                    { label: "File Type:", value: img.fileType, link: false },
+                    { label: "Image Type:", value: img.imageType, link: true },
+                    { label: "Purpose:", value: img.purpose, link: true },
+                    { label: "Orientation:", value: img.orientation, link: true },
+                    { label: "Location Type:", value: img.locationType, link: false },
+                    { label: "External Location:", value: "", link: false },
+                    { label: "File Size:", value: "", link: false },
+                    { label: "Pixel Density (DPI):", value: "", link: false },
+                    { label: "Height:", value: "", link: false },
+                    { label: "Width:", value: "", link: false },
+                    { label: "Image Style:", value: "", link: false },
+                    { label: "Facing (GDSN):", value: "", link: false },
+                    { label: "Angle:", value: "", link: false },
+                    { label: "Clipping Path:", value: "", link: false },
+                    { label: "Image Description:", value: "", link: false },
+                    { label: "Create Date:", value: img.createDate, link: false },
+                    { label: "Last Update Date:", value: img.lastUpdate || "", link: false },
+                  ].map((row, rowIdx) => (
+                    <div key={rowIdx} className="flex border-b border-border last:border-b-0">
+                      <div className="w-44 bg-muted/20 px-3 py-2 font-medium text-foreground shrink-0">{row.label}</div>
+                      <div className={cn("flex-1 px-3 py-2", row.link ? "text-tg-link" : "text-foreground")}>
+                        {row.value}
+                      </div>
+                    </div>
                   ))}
                 </div>
+                {/* Right: image preview placeholder */}
+                <div className="w-2/5 flex items-center justify-center bg-white p-4 min-h-[280px]">
+                  <div className="flex flex-col items-center justify-center text-center gap-2">
+                    <FileImage className="size-20 text-primary/40" />
+                    <p className="text-xs text-muted-foreground">{img.fileName}</p>
+                  </div>
+                </div>
               </div>
-            )}
-          </div>
+            </div>
+          ))}
         </div>
 
 
