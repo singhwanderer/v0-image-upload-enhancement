@@ -2191,36 +2191,38 @@ End of Metadata Export
               </h3>
               
               {applyToAll ? (
-                <div className="grid grid-cols-2 gap-x-8 gap-y-2 text-sm">
-                  <div className="flex justify-between">
-                    <span className="text-muted-foreground">Image Type:</span>
-                    <span className="font-medium text-foreground">
-                      {IMAGE_TYPE_OPTIONS.find(o => o.value === attributes.imageType)?.label || attributes.imageType}
-                    </span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-muted-foreground">Purpose:</span>
-                    <span className="font-medium text-foreground">
-                      {PURPOSE_OPTIONS.find(o => o.value === attributes.purpose)?.label || attributes.purpose}
-                    </span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-muted-foreground">Orientation:</span>
-                    <span className="font-medium text-foreground">
-                      {ORIENTATION_OPTIONS.find(o => o.value === attributes.orientation)?.label || attributes.orientation}
-                    </span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-muted-foreground">Location Type:</span>
-                    <span className="font-medium text-foreground">
-                      {attributes.locationType || "ACL"}
-                    </span>
+                <div className="max-h-48 overflow-y-auto">
+                  <div className="grid grid-cols-2 gap-x-8 gap-y-2 text-sm">
+                    <div className="flex justify-between">
+                      <span className="text-muted-foreground">Image Type:</span>
+                      <span className="font-medium text-foreground">
+                        {IMAGE_TYPE_OPTIONS.find(o => o.value === attributes.imageType)?.label || attributes.imageType}
+                      </span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-muted-foreground">Purpose:</span>
+                      <span className="font-medium text-foreground">
+                        {PURPOSE_OPTIONS.find(o => o.value === attributes.purpose)?.label || attributes.purpose}
+                      </span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-muted-foreground">Orientation:</span>
+                      <span className="font-medium text-foreground">
+                        {ORIENTATION_OPTIONS.find(o => o.value === attributes.orientation)?.label || attributes.orientation}
+                      </span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-muted-foreground">Location Type:</span>
+                      <span className="font-medium text-foreground">
+                        {attributes.locationType || "ACL"}
+                      </span>
+                    </div>
                   </div>
                 </div>
               ) : (
-                <div className="overflow-x-auto">
+                <div className="max-h-48 overflow-y-auto overflow-x-auto">
                   <table className="w-full text-sm">
-                    <thead className="bg-muted/30">
+                    <thead className="bg-muted/30 sticky top-0">
                       <tr>
                         <th className="px-3 py-2 text-left font-medium text-foreground">File</th>
                         <th className="px-3 py-2 text-left font-medium text-foreground">Image Type</th>
