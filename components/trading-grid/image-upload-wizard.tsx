@@ -218,6 +218,10 @@ type ExtractionResult = {
 // Product categories offered in the AI extraction card
 const PRODUCT_CATEGORIES = ["Shoes", "Apparel", "Bags", "Jewelry", "Beauty", "Home"] as const
 
+// Extraction mode: "mock" (default, stable demos) or "gemini" (real /api/extract-attributes).
+// Controlled by NEXT_PUBLIC_EXTRACTION_MODE; falls back to mock when unset. No UI toggle.
+const EXTRACTION_MODE = process.env.NEXT_PUBLIC_EXTRACTION_MODE === "gemini" ? "gemini" : "mock"
+
 // Extracted attribute form used in Step 2 and Edit-attributes dialog (Change 3 / Change 7)
 type StepTwoFormProps = {
   currentAttrs: {
@@ -493,8 +497,87 @@ export function ImageUploadWizard({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentStep, uploadedFiles.length])
 
-  // Runs the mock extraction for ALL uploaded files (item #1). A future implementation can replace
-  // the setTimeout body with a fetch("/api/extract-attributes", { body: formData with file content }).
+  // Dispatcher: routes to Gemini or mock based on EXTRACTION_MODE. Wired to all extract triggers.
+  const runExtraction = () => {
+    if (EXTRACTION_MODE === "gemini") {
+      void runGeminiExtraction()
+    } else {
+      runMockExtraction()
+    }
+  }
+
+  // Convert a File to a raw base64 string (no data: prefix) for the JSON API payload.
+  const fileToBase64 = (file: File): Promise<string> =>
+    new Promise((resolve, reject) => {
+      const reader = new FileReader()
+      reader.onload = () => {
+        const result = typeof reader.result === "string" ? reader.result : ""
+        const comma = result.indexOf(",")
+        resolve(comma >= 0 ? result.slice(comma + 1) : result)
+      }
+      reader.onerror = () => reject(new Error("Failed to read image file."))
+      reader.readAsDataURL(file)
+    })
+
+  // Real Gemini extraction: one independent request per uploaded image (item #1, #9).
+  // A failure on one image marks only that image as error; the others still complete (item #10).
+  const runGeminiExtraction = async () => {
+    if (!aiCategory || uploadedFiles.length === 0) return
+    const category = aiCategory
+    const targets = uploadedFiles.map(f => ({ id: f.id, name: f.name, file: f.file, type: f.type }))
+    setAiSkipped(false)
+    setAiEditing(null)
+    // Mark every file as extracting
+    setAiExtractions(() => {
+      const next: Record<string, ExtractionResult> = {}
+      targets.forEach(f => {
+        next[f.id] = { fileId: f.id, fileName: f.name, category, attributes: [], unresolvedAttributes: [], status: "extracting" }
+      })
+      return next
+    })
+
+    await Promise.all(targets.map(async (f) => {
+      try {
+        const imageBase64 = await fileToBase64(f.file)
+        const res = await fetch("/api/extract-attributes", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ imageBase64, mimeType: f.type, category }),
+        })
+        if (!res.ok) {
+          const errBody = await res.json().catch(() => null)
+          throw new Error(errBody?.error || `Extraction failed (${res.status}).`)
+        }
+        const data = await res.json()
+        setAiExtractions(prev => ({
+          ...prev,
+          [f.id]: {
+            fileId: f.id,
+            fileName: f.name,
+            category: typeof data.category === "string" ? data.category : category,
+            attributes: (Array.isArray(data.attributes) ? data.attributes : []).map((a: Omit<ExtractedAttribute, "accepted">) => ({ ...a, accepted: true })),
+            unresolvedAttributes: Array.isArray(data.unresolvedAttributes) ? data.unresolvedAttributes : [],
+            status: "complete",
+          },
+        }))
+      } catch (err) {
+        setAiExtractions(prev => ({
+          ...prev,
+          [f.id]: {
+            fileId: f.id,
+            fileName: f.name,
+            category,
+            attributes: [],
+            unresolvedAttributes: [],
+            status: "error",
+            error: err instanceof Error ? err.message : "Extraction failed.",
+          },
+        }))
+      }
+    }))
+  }
+
+  // Runs the mock extraction for ALL uploaded files (item #1). Kept available for stable demos.
   const runMockExtraction = () => {
     if (!aiCategory || uploadedFiles.length === 0) return
     const category = aiCategory
@@ -2168,7 +2251,7 @@ End of Metadata Export
                           </Select>
                         </div>
                         <div className="flex items-center gap-2">
-                          <Button onClick={runMockExtraction} disabled={!aiCategory || uploadedFiles.length === 0} className="gap-2">
+                          <Button onClick={runExtraction} disabled={!aiCategory || uploadedFiles.length === 0} className="gap-2">
                             <Sparkles className="size-4" />
                             Extract Extended Attributes with AI
                           </Button>
@@ -2203,7 +2286,7 @@ End of Metadata Export
                         </p>
                       </div>
                       <div className="flex items-center gap-2">
-                        <Button variant="outline" size="sm" onClick={runMockExtraction}>Try again</Button>
+                        <Button variant="outline" size="sm" onClick={runExtraction}>Try again</Button>
                         <Button variant="ghost" size="sm" onClick={() => { clearAllExtractions(); setAiSkipped(true) }}>
                           Continue manually
                         </Button>
@@ -2211,8 +2294,9 @@ End of Metadata Export
                     </div>
                   )}
 
-                  {/* Results — grouped per image (item #1) */}
-                  {anyComplete && !anyExtracting && (
+                  {/* Results — grouped per image (item #1). Shown as each image completes,
+                      so a slow or failed image never blocks the others (item #9, #10). */}
+                  {anyComplete && (
                     <div className="flex flex-col gap-4">
                       <div className="flex items-center justify-between">
                         <p className="text-sm text-foreground">
