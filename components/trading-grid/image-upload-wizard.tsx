@@ -47,6 +47,7 @@ import {
 } from "@/components/ui/dialog"
 import { cn } from "@/lib/utils"
 import { validateImageBatch, type ValidationError } from "./upload-validation"
+import { getMockExtraction, getValuesForCodeList } from "@/lib/gs1-attribute-options"
 
 interface ImageUploadWizardProps {
   uploadLevel: "product" | "product-color" | "gtin"
@@ -217,39 +218,9 @@ type ExtractionResult = {
 // Product categories offered in the AI extraction card
 const PRODUCT_CATEGORIES = ["Shoes", "Apparel", "Bags", "Jewelry", "Beauty", "Home"] as const
 
-// Mock extraction response keyed by category. A future API route returns this same shape.
-const MOCK_EXTRACTION: Record<
-  string,
-  { attributes: Omit<ExtractedAttribute, "accepted">[]; unresolvedAttributes: UnresolvedAttribute[] }
-> = {
-  Shoes: {
-    attributes: [
-      { codeListName: "Shoe Type", attributeValue: "Sneakers", code: "GM03SETPSN", confidence: 0.92, reason: "Low-top silhouette with rubber outsole consistent with sneakers." },
-      { codeListName: "Shoe Style", attributeValue: "Running", code: "GM03SHOE", confidence: 0.84, reason: "Cushioned midsole and mesh upper typical of running shoes." },
-      { codeListName: "Closure", attributeValue: "Lace Up", code: "GM03CLOSLU", confidence: 0.88, reason: "Visible eyelets and laces across the tongue." },
-      { codeListName: "Occasion", attributeValue: "Athletic", code: "GM03OCCNAT", confidence: 0.8, reason: "Performance-oriented design suggests athletic use." },
-      { codeListName: "Gender", attributeValue: "Unisex", code: "ZZ03GENDUN", confidence: 0.7, reason: "Neutral colorway and last shape not strongly gendered." },
-    ],
-    unresolvedAttributes: [
-      { codeListName: "Water Repellent", reason: "Cannot determine from image alone." },
-      { codeListName: "Advertised Origin", reason: "Requires label, packaging, or product data." },
-      { codeListName: "Care Instructions Code", reason: "Requires care label or product data." },
-    ],
-  },
-  Apparel: {
-    attributes: [
-      { codeListName: "Code List for Dress Type", attributeValue: "Dress", code: "GM03DRTPDR", confidence: 0.88, reason: "The product name and image context indicate a dress-style apparel item." },
-      { codeListName: "Sleeve Type", attributeValue: "Sleeveless", code: "GM03SLVTS4", confidence: 0.76, reason: "The visible product appears to have no full sleeve coverage." },
-      { codeListName: "Occasion", attributeValue: "Casual", code: "GM03OCCNCS", confidence: 0.72, reason: "The product appears suitable for casual/daytime wear." },
-      { codeListName: "Gender", attributeValue: "Female", code: "ZZ03GENDFE", confidence: 0.67, reason: "Suggested from product category context; user should verify." },
-    ],
-    unresolvedAttributes: [
-      { codeListName: "Care Instructions Code", reason: "Requires care label or product data." },
-      { codeListName: "Advertised Origin", reason: "Requires label, packaging, or source data." },
-      { codeListName: "Code List for Consumer Life Stage", reason: "Cannot determine confidently from image alone." },
-    ],
-  },
-}
+// Extraction mode: "mock" (default, stable demos) or "gemini" (real /api/extract-attributes).
+// Controlled by NEXT_PUBLIC_EXTRACTION_MODE; falls back to mock when unset. No UI toggle.
+const EXTRACTION_MODE = process.env.NEXT_PUBLIC_EXTRACTION_MODE === "gemini" ? "gemini" : "mock"
 
 // Extracted attribute form used in Step 2 and Edit-attributes dialog (Change 3 / Change 7)
 type StepTwoFormProps = {
@@ -526,8 +497,87 @@ export function ImageUploadWizard({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentStep, uploadedFiles.length])
 
-  // Runs the mock extraction for ALL uploaded files (item #1). A future implementation can replace
-  // the setTimeout body with a fetch("/api/extract-attributes", { body: formData with file content }).
+  // Dispatcher: routes to Gemini or mock based on EXTRACTION_MODE. Wired to all extract triggers.
+  const runExtraction = () => {
+    if (EXTRACTION_MODE === "gemini") {
+      void runGeminiExtraction()
+    } else {
+      runMockExtraction()
+    }
+  }
+
+  // Convert a File to a raw base64 string (no data: prefix) for the JSON API payload.
+  const fileToBase64 = (file: File): Promise<string> =>
+    new Promise((resolve, reject) => {
+      const reader = new FileReader()
+      reader.onload = () => {
+        const result = typeof reader.result === "string" ? reader.result : ""
+        const comma = result.indexOf(",")
+        resolve(comma >= 0 ? result.slice(comma + 1) : result)
+      }
+      reader.onerror = () => reject(new Error("Failed to read image file."))
+      reader.readAsDataURL(file)
+    })
+
+  // Real Gemini extraction: one independent request per uploaded image (item #1, #9).
+  // A failure on one image marks only that image as error; the others still complete (item #10).
+  const runGeminiExtraction = async () => {
+    if (!aiCategory || uploadedFiles.length === 0) return
+    const category = aiCategory
+    const targets = uploadedFiles.map(f => ({ id: f.id, name: f.name, file: f.file, type: f.type }))
+    setAiSkipped(false)
+    setAiEditing(null)
+    // Mark every file as extracting
+    setAiExtractions(() => {
+      const next: Record<string, ExtractionResult> = {}
+      targets.forEach(f => {
+        next[f.id] = { fileId: f.id, fileName: f.name, category, attributes: [], unresolvedAttributes: [], status: "extracting" }
+      })
+      return next
+    })
+
+    await Promise.all(targets.map(async (f) => {
+      try {
+        const imageBase64 = await fileToBase64(f.file)
+        const res = await fetch("/api/extract-attributes", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ imageBase64, mimeType: f.type, category }),
+        })
+        if (!res.ok) {
+          const errBody = await res.json().catch(() => null)
+          throw new Error(errBody?.error || `Extraction failed (${res.status}).`)
+        }
+        const data = await res.json()
+        setAiExtractions(prev => ({
+          ...prev,
+          [f.id]: {
+            fileId: f.id,
+            fileName: f.name,
+            category: typeof data.category === "string" ? data.category : category,
+            attributes: (Array.isArray(data.attributes) ? data.attributes : []).map((a: Omit<ExtractedAttribute, "accepted">) => ({ ...a, accepted: true })),
+            unresolvedAttributes: Array.isArray(data.unresolvedAttributes) ? data.unresolvedAttributes : [],
+            status: "complete",
+          },
+        }))
+      } catch (err) {
+        setAiExtractions(prev => ({
+          ...prev,
+          [f.id]: {
+            fileId: f.id,
+            fileName: f.name,
+            category,
+            attributes: [],
+            unresolvedAttributes: [],
+            status: "error",
+            error: err instanceof Error ? err.message : "Extraction failed.",
+          },
+        }))
+      }
+    }))
+  }
+
+  // Runs the mock extraction for ALL uploaded files (item #1). Kept available for stable demos.
   const runMockExtraction = () => {
     if (!aiCategory || uploadedFiles.length === 0) return
     const category = aiCategory
@@ -543,7 +593,8 @@ export function ImageUploadWizard({
       return next
     })
     setTimeout(() => {
-      const mock = MOCK_EXTRACTION[category]
+      // Mock response is grounded in the curated GS1 map (real Code List Names + codes).
+      const mock = getMockExtraction(category)
       setAiExtractions(() => {
         const next: Record<string, ExtractionResult> = {}
         snapshot.forEach(f => {
@@ -551,8 +602,8 @@ export function ImageUploadWizard({
             fileId: f.id,
             fileName: f.name,
             category,
-            attributes: mock ? mock.attributes.map(a => ({ ...a, accepted: true })) : [],
-            unresolvedAttributes: mock ? mock.unresolvedAttributes : [],
+            attributes: mock.attributes.map(a => ({ ...a, accepted: true })),
+            unresolvedAttributes: mock.unresolvedAttributes,
             status: "complete",
           }
         })
@@ -576,6 +627,26 @@ export function ImageUploadWizard({
       const ex = prev[fileId]
       if (!ex) return prev
       return { ...prev, [fileId]: { ...ex, attributes: ex.attributes.map((a, i) => i === index ? { ...a, [field]: value } : a) } }
+    })
+  }
+
+  // Select an allowed value for a suggestion from the curated GS1 list; sets value + matching code
+  // together (item #8 — dropdown editing). Falls back gracefully if no code is found.
+  const selectAttributeValue = (fileId: string, index: number, value: string) => {
+    setAiExtractions(prev => {
+      const ex = prev[fileId]
+      if (!ex) return prev
+      return {
+        ...prev,
+        [fileId]: {
+          ...ex,
+          attributes: ex.attributes.map((a, i) => {
+            if (i !== index) return a
+            const match = getValuesForCodeList(ex.category, a.codeListName).find(v => v.value === value)
+            return { ...a, attributeValue: value, code: match?.code ?? a.code }
+          }),
+        },
+      }
     })
   }
 
@@ -2180,7 +2251,7 @@ End of Metadata Export
                           </Select>
                         </div>
                         <div className="flex items-center gap-2">
-                          <Button onClick={runMockExtraction} disabled={!aiCategory || uploadedFiles.length === 0} className="gap-2">
+                          <Button onClick={runExtraction} disabled={!aiCategory || uploadedFiles.length === 0} className="gap-2">
                             <Sparkles className="size-4" />
                             Extract Extended Attributes with AI
                           </Button>
@@ -2215,7 +2286,7 @@ End of Metadata Export
                         </p>
                       </div>
                       <div className="flex items-center gap-2">
-                        <Button variant="outline" size="sm" onClick={runMockExtraction}>Try again</Button>
+                        <Button variant="outline" size="sm" onClick={runExtraction}>Try again</Button>
                         <Button variant="ghost" size="sm" onClick={() => { clearAllExtractions(); setAiSkipped(true) }}>
                           Continue manually
                         </Button>
@@ -2223,8 +2294,9 @@ End of Metadata Export
                     </div>
                   )}
 
-                  {/* Results — grouped per image (item #1) */}
-                  {anyComplete && !anyExtracting && (
+                  {/* Results — grouped per image (item #1). Shown as each image completes,
+                      so a slow or failed image never blocks the others (item #9, #10). */}
+                  {anyComplete && (
                     <div className="flex flex-col gap-4">
                       <div className="flex items-center justify-between">
                         <p className="text-sm text-foreground">
@@ -2288,28 +2360,52 @@ End of Metadata Export
                                         </span>
                                       </div>
                                       {editing ? (
-                                        <div className="flex flex-col gap-2">
-                                          <div className="flex flex-col gap-1">
-                                            <Label className="text-xs text-muted-foreground">Attribute Value</Label>
-                                            <Input
-                                              value={attr.attributeValue}
-                                              onChange={(e) => updateAttributeField(file.id, idx, "attributeValue", e.target.value)}
-                                              className="h-8 bg-background"
-                                              autoFocus
-                                            />
-                                          </div>
-                                          <div className="flex flex-col gap-1">
-                                            <Label className="text-xs text-muted-foreground">GS1 Code</Label>
-                                            <Input
-                                              value={attr.code}
-                                              onChange={(e) => updateAttributeField(file.id, idx, "code", e.target.value)}
-                                              className="h-8 bg-background font-mono"
-                                            />
-                                          </div>
-                                          <Button size="sm" variant="outline" className="h-7 w-fit gap-1 px-2 text-xs" onClick={() => setAiEditing(null)}>
-                                            <Check className="size-3" /> Done
-                                          </Button>
-                                        </div>
+                                        (() => {
+                                          const allowed = getValuesForCodeList(ex.category, attr.codeListName)
+                                          return (
+                                            <div className="flex flex-col gap-2">
+                                              <div className="flex flex-col gap-1">
+                                                <Label className="text-xs text-muted-foreground">Attribute Value</Label>
+                                                {allowed.length > 0 ? (
+                                                  <Select
+                                                    value={allowed.some(v => v.value === attr.attributeValue) ? attr.attributeValue : undefined}
+                                                    onValueChange={(v) => selectAttributeValue(file.id, idx, v)}
+                                                  >
+                                                    <SelectTrigger className="h-8 bg-background">
+                                                      <SelectValue placeholder="Select a value…" />
+                                                    </SelectTrigger>
+                                                    <SelectContent>
+                                                      {allowed.map(v => (
+                                                        <SelectItem key={v.code} value={v.value}>{v.value}</SelectItem>
+                                                      ))}
+                                                    </SelectContent>
+                                                  </Select>
+                                                ) : (
+                                                  // Fallback: free-text when no curated values exist for this code list
+                                                  <Input
+                                                    value={attr.attributeValue}
+                                                    onChange={(e) => updateAttributeField(file.id, idx, "attributeValue", e.target.value)}
+                                                    className="h-8 bg-background"
+                                                    autoFocus
+                                                  />
+                                                )}
+                                              </div>
+                                              <div className="flex flex-col gap-1">
+                                                <Label className="text-xs text-muted-foreground">GS1 Code</Label>
+                                                {/* Code is derived from the selected value when a curated list exists */}
+                                                <Input
+                                                  value={attr.code}
+                                                  onChange={(e) => updateAttributeField(file.id, idx, "code", e.target.value)}
+                                                  readOnly={allowed.length > 0}
+                                                  className={cn("h-8 bg-background font-mono", allowed.length > 0 && "text-muted-foreground")}
+                                                />
+                                              </div>
+                                              <Button size="sm" variant="outline" className="h-7 w-fit gap-1 px-2 text-xs" onClick={() => setAiEditing(null)}>
+                                                <Check className="size-3" /> Done
+                                              </Button>
+                                            </div>
+                                          )
+                                        })()
                                       ) : (
                                         <>
                                           <p className="text-sm font-medium text-foreground">{attr.attributeValue}</p>
