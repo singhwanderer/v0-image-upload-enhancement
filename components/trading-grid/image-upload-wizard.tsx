@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useCallback } from "react"
+import { useState, useCallback, useEffect } from "react"
 import { 
   X, 
   ChevronRight, 
@@ -236,6 +236,19 @@ const MOCK_EXTRACTION: Record<
       { codeListName: "Care Instructions Code", reason: "Requires care label or product data." },
     ],
   },
+  Apparel: {
+    attributes: [
+      { codeListName: "Code List for Dress Type", attributeValue: "Dress", code: "GM03DRTPDR", confidence: 0.88, reason: "The product name and image context indicate a dress-style apparel item." },
+      { codeListName: "Sleeve Type", attributeValue: "Sleeveless", code: "GM03SLVTS4", confidence: 0.76, reason: "The visible product appears to have no full sleeve coverage." },
+      { codeListName: "Occasion", attributeValue: "Casual", code: "GM03OCCNCS", confidence: 0.72, reason: "The product appears suitable for casual/daytime wear." },
+      { codeListName: "Gender", attributeValue: "Female", code: "ZZ03GENDFE", confidence: 0.67, reason: "Suggested from product category context; user should verify." },
+    ],
+    unresolvedAttributes: [
+      { codeListName: "Care Instructions Code", reason: "Requires care label or product data." },
+      { codeListName: "Advertised Origin", reason: "Requires label, packaging, or source data." },
+      { codeListName: "Code List for Consumer Life Stage", reason: "Cannot determine confidently from image alone." },
+    ],
+  },
 }
 
 // Extracted attribute form used in Step 2 and Edit-attributes dialog (Change 3 / Change 7)
@@ -441,11 +454,11 @@ export function ImageUploadWizard({
   const [aiCategory, setAiCategory] = useState<string>("")
   // Whether the user explicitly skipped the AI extraction section
   const [aiSkipped, setAiSkipped] = useState(false)
-  // Current extraction result (null until first run). Accepted suggestions live here, stored
+  // Per-image extraction results keyed by UploadedFile.id. Accepted suggestions live here, stored
   // separately from `attributes`/`attributesByImage` and never merged into them for now.
-  const [aiExtraction, setAiExtraction] = useState<ExtractionResult | null>(null)
-  // Index of the suggestion row currently being inline-edited (null = none)
-  const [aiEditingIndex, setAiEditingIndex] = useState<number | null>(null)
+  const [aiExtractions, setAiExtractions] = useState<Record<string, ExtractionResult>>({})
+  // The suggestion row currently being inline-edited (null = none), scoped by file + index
+  const [aiEditing, setAiEditing] = useState<{ fileId: string; index: number } | null>(null)
   
   // Form state for attributes
   const [attributes, setAttributes] = useState({
@@ -496,61 +509,101 @@ export function ImageUploadWizard({
   }
 
   // ── AI extraction handlers (mock-first) ──
-  // Runs the mock extraction for the selected category. A future implementation can replace the
-  // setTimeout body with a fetch("/api/extract-attributes", { body: formData with file content }).
+  // Default category heuristic from the current product/selection-code context (item #3).
+  // Not permanent — the user can still change the category manually.
+  const getDefaultCategory = () => {
+    const d = getAutoPopulatedData()
+    const hay = `${d.description} ${d.productDescription}`.toLowerCase()
+    if (/tops|dress|shirt|apparel|clothing/.test(hay)) return "Apparel"
+    return "Shoes"
+  }
+
+  // Default the category once when the user first reaches Step 2 (only if not already chosen).
+  useEffect(() => {
+    if (currentStep === 2 && !aiCategory && uploadedFiles.length > 0) {
+      setAiCategory(getDefaultCategory())
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentStep, uploadedFiles.length])
+
+  // Runs the mock extraction for ALL uploaded files (item #1). A future implementation can replace
+  // the setTimeout body with a fetch("/api/extract-attributes", { body: formData with file content }).
   const runMockExtraction = () => {
-    if (!aiCategory) return
-    const target = uploadedFiles[applyToAll ? 0 : activeAttributeImageIndex]
+    if (!aiCategory || uploadedFiles.length === 0) return
+    const category = aiCategory
+    const snapshot = uploadedFiles.map(f => ({ id: f.id, name: f.name }))
     setAiSkipped(false)
-    setAiExtraction({
-      fileId: target?.id ?? "",
-      fileName: target?.name ?? "",
-      category: aiCategory,
-      attributes: [],
-      unresolvedAttributes: [],
-      status: "extracting",
+    setAiEditing(null)
+    // Mark every file as extracting
+    setAiExtractions(() => {
+      const next: Record<string, ExtractionResult> = {}
+      snapshot.forEach(f => {
+        next[f.id] = { fileId: f.id, fileName: f.name, category, attributes: [], unresolvedAttributes: [], status: "extracting" }
+      })
+      return next
     })
     setTimeout(() => {
-      const mock = MOCK_EXTRACTION[aiCategory]
-      if (!mock) {
-        // No mock data for this category yet — return an empty (but successful) result set.
-        setAiExtraction({
-          fileId: target?.id ?? "",
-          fileName: target?.name ?? "",
-          category: aiCategory,
-          attributes: [],
-          unresolvedAttributes: [],
-          status: "complete",
+      const mock = MOCK_EXTRACTION[category]
+      setAiExtractions(() => {
+        const next: Record<string, ExtractionResult> = {}
+        snapshot.forEach(f => {
+          next[f.id] = {
+            fileId: f.id,
+            fileName: f.name,
+            category,
+            attributes: mock ? mock.attributes.map(a => ({ ...a, accepted: true })) : [],
+            unresolvedAttributes: mock ? mock.unresolvedAttributes : [],
+            status: "complete",
+          }
         })
-        return
-      }
-      setAiExtraction({
-        fileId: target?.id ?? "",
-        fileName: target?.name ?? "",
-        category: aiCategory,
-        attributes: mock.attributes.map(a => ({ ...a, accepted: true })),
-        unresolvedAttributes: mock.unresolvedAttributes,
-        status: "complete",
+        return next
       })
     }, 1200)
   }
 
-  // Toggle the accepted flag on a single suggested attribute (Accept / Reject)
-  const setAttributeAccepted = (index: number, accepted: boolean) => {
-    setAiExtraction(prev => prev
-      ? { ...prev, attributes: prev.attributes.map((a, i) => i === index ? { ...a, accepted } : a) }
-      : prev)
+  // Toggle the accepted flag on a single suggested attribute (Accept / Reject), scoped by file
+  const setAttributeAccepted = (fileId: string, index: number, accepted: boolean) => {
+    setAiExtractions(prev => {
+      const ex = prev[fileId]
+      if (!ex) return prev
+      return { ...prev, [fileId]: { ...ex, attributes: ex.attributes.map((a, i) => i === index ? { ...a, accepted } : a) } }
+    })
   }
 
-  // Edit the suggested value of a single attribute (inline Edit)
-  const updateAttributeValue = (index: number, value: string) => {
-    setAiExtraction(prev => prev
-      ? { ...prev, attributes: prev.attributes.map((a, i) => i === index ? { ...a, attributeValue: value } : a) }
-      : prev)
+  // Edit a single attribute's value or GS1 code (inline Edit). Edited rows stay accepted (item #7).
+  const updateAttributeField = (fileId: string, index: number, field: "attributeValue" | "code", value: string) => {
+    setAiExtractions(prev => {
+      const ex = prev[fileId]
+      if (!ex) return prev
+      return { ...prev, [fileId]: { ...ex, attributes: ex.attributes.map((a, i) => i === index ? { ...a, [field]: value } : a) } }
+    })
   }
 
-  // Accepted suggestions, derived — stored separately from image attributes
-  const acceptedExtractedAttributes = aiExtraction?.attributes.filter(a => a.accepted) ?? []
+  // Clear any extraction result for a single file (item #8 — removal/replacement)
+  const clearExtractionForFile = (fileId: string) => {
+    setAiExtractions(prev => {
+      if (!prev[fileId]) return prev
+      const { [fileId]: _removed, ...rest } = prev
+      return rest
+    })
+  }
+
+  // Clear all extraction state (item #8 — category/product context change, re-run)
+  const clearAllExtractions = () => {
+    setAiExtractions({})
+    setAiEditing(null)
+  }
+
+  // Ordered list of extraction results following the uploaded-file order
+  const orderedExtractions = uploadedFiles
+    .map(f => aiExtractions[f.id])
+    .filter((e): e is ExtractionResult => Boolean(e))
+  const anyExtracting = orderedExtractions.some(e => e.status === "extracting")
+  const anyComplete = orderedExtractions.some(e => e.status === "complete")
+  const anyError = orderedExtractions.some(e => e.status === "error")
+  const hasExtractions = orderedExtractions.length > 0
+  // Accepted suggestions across all images, derived — stored separately from image attributes
+  const acceptedExtractedAttributes = orderedExtractions.flatMap(e => e.attributes.filter(a => a.accepted))
 
   const handleDragOver = useCallback((e: React.DragEvent) => {
     e.preventDefault()
@@ -598,6 +651,7 @@ export function ImageUploadWizard({
 
   const removeFile = (fileId: string) => {
     setUploadedFiles(prev => prev.filter(f => f.id !== fileId))
+    clearExtractionForFile(fileId) // item #8 — drop stale AI attributes for removed file
   }
 
   const formatFileSize = (bytes: number) => {
@@ -1141,7 +1195,9 @@ End of Metadata Export
                     variant="destructive"
                     onClick={() => {
                       const idx = editAttrDialog.fileIndex
+                      const removedId = uploadedFiles[idx]?.id
                       setUploadedFiles(prev => prev.filter((_, i) => i !== idx))
+                      if (removedId) clearExtractionForFile(removedId) // item #8
                       setEditAttrDialog(prev => ({ ...prev, open: false }))
                       setEditDeleteConfirm(false)
                     }}
@@ -1297,6 +1353,7 @@ End of Metadata Export
                             status: "complete",
                           }
                           setUploadedFiles(prev => prev.map((u, i) => i === editAttrDialog.fileIndex ? newFile : u))
+                          clearExtractionForFile(newFile.id) // item #8 — replaced image invalidates old AI attributes
                           setPendingReplaceFile(null)
                         }
                         // Commit attribute edits (Acceptance #8)
@@ -1750,6 +1807,10 @@ End of Metadata Export
                   onValueChange={(value) => {
                     setSelectedProduct(value)
                     setSelectedGtin("")
+                    // item #8 — product context changed: drop stale AI attributes and re-default category
+                    clearAllExtractions()
+                    setAiCategory("")
+                    setAiSkipped(false)
                   }}
                 >
                   <SelectTrigger className="w-full bg-background">
@@ -2084,22 +2145,30 @@ End of Metadata Export
                     Use AI to suggest GS1-style extended attributes from uploaded product images.
                   </p>
                 </div>
-                {aiSkipped && !aiExtraction && (
+                {aiSkipped && (
                   <Button variant="ghost" size="sm" onClick={() => setAiSkipped(false)}>
                     Show
                   </Button>
                 )}
               </div>
 
+              {/* Skipped message (item #6) — files & manual form remain available */}
+              {aiSkipped && (
+                <div className="flex items-center gap-2 p-4 text-sm text-muted-foreground">
+                  <Info className="size-4 shrink-0" />
+                  <span>AI extraction skipped. You can continue entering attributes manually.</span>
+                </div>
+              )}
+
               {!aiSkipped && (
                 <div className="flex flex-col gap-4 p-4">
                   {/* Idle / pre-extraction controls */}
-                  {(!aiExtraction || aiExtraction.status === "idle") && (
+                  {!hasExtractions && (
                     <>
                       <div className="flex flex-col gap-2 sm:flex-row sm:items-end">
                         <div className="flex flex-col gap-1">
                           <Label htmlFor="ai-category" className="text-xs text-muted-foreground">Product category</Label>
-                          <Select value={aiCategory} onValueChange={setAiCategory}>
+                          <Select value={aiCategory} onValueChange={(v) => { setAiCategory(v); clearAllExtractions() }}>
                             <SelectTrigger id="ai-category" className="w-56 bg-background">
                               <SelectValue placeholder="Select a category..." />
                             </SelectTrigger>
@@ -2111,7 +2180,7 @@ End of Metadata Export
                           </Select>
                         </div>
                         <div className="flex items-center gap-2">
-                          <Button onClick={runMockExtraction} disabled={!aiCategory} className="gap-2">
+                          <Button onClick={runMockExtraction} disabled={!aiCategory || uploadedFiles.length === 0} className="gap-2">
                             <Sparkles className="size-4" />
                             Extract Extended Attributes with AI
                           </Button>
@@ -2121,48 +2190,48 @@ End of Metadata Export
                         </div>
                       </div>
                       <p className="text-xs text-muted-foreground">
-                        AI-generated attributes should be reviewed before saving.
+                        Runs for all {uploadedFiles.length} uploaded image{uploadedFiles.length !== 1 ? "s" : ""}. AI-generated attributes should be reviewed before saving.
                       </p>
                     </>
                   )}
 
                   {/* Loading state */}
-                  {aiExtraction?.status === "extracting" && (
+                  {anyExtracting && (
                     <div className="flex items-center gap-3 rounded border border-border bg-muted/20 p-4">
                       <Loader2 className="size-5 animate-spin text-primary" />
                       <p className="text-sm text-foreground">
-                        Analyzing {aiExtraction.fileName || "image"} for {aiExtraction.category} attributes…
+                        Analyzing {orderedExtractions.length} image{orderedExtractions.length !== 1 ? "s" : ""} for {aiCategory} attributes…
                       </p>
                     </div>
                   )}
 
                   {/* Error state */}
-                  {aiExtraction?.status === "error" && (
+                  {anyError && !anyExtracting && (
                     <div className="flex flex-col gap-3 rounded border border-destructive/30 bg-destructive/5 p-4">
                       <div className="flex items-start gap-2">
                         <AlertCircle className="size-4 text-destructive mt-0.5 shrink-0" />
                         <p className="text-sm text-foreground">
-                          {aiExtraction.error || "Extraction failed. You can continue setting attributes manually."}
+                          Extraction failed for one or more images. You can continue setting attributes manually.
                         </p>
                       </div>
                       <div className="flex items-center gap-2">
                         <Button variant="outline" size="sm" onClick={runMockExtraction}>Try again</Button>
-                        <Button variant="ghost" size="sm" onClick={() => { setAiExtraction(null); setAiSkipped(true) }}>
+                        <Button variant="ghost" size="sm" onClick={() => { clearAllExtractions(); setAiSkipped(true) }}>
                           Continue manually
                         </Button>
                       </div>
                     </div>
                   )}
 
-                  {/* Results */}
-                  {aiExtraction?.status === "complete" && (
+                  {/* Results — grouped per image (item #1) */}
+                  {anyComplete && !anyExtracting && (
                     <div className="flex flex-col gap-4">
                       <div className="flex items-center justify-between">
                         <p className="text-sm text-foreground">
-                          Category: <span className="font-medium">{aiExtraction.category}</span>
-                          <span className="text-muted-foreground"> · {acceptedExtractedAttributes.length} of {aiExtraction.attributes.length} accepted</span>
+                          Category: <span className="font-medium">{aiCategory}</span>
+                          <span className="text-muted-foreground"> · {acceptedExtractedAttributes.length} attribute{acceptedExtractedAttributes.length !== 1 ? "s" : ""} accepted across {orderedExtractions.length} image{orderedExtractions.length !== 1 ? "s" : ""}</span>
                         </p>
-                        <Button variant="ghost" size="sm" onClick={() => { setAiExtraction(null); setAiEditingIndex(null) }}>
+                        <Button variant="ghost" size="sm" onClick={clearAllExtractions}>
                           Re-run
                         </Button>
                       </div>
@@ -2171,91 +2240,133 @@ End of Metadata Export
                         <p className="text-xs text-muted-foreground">AI-generated attributes should be reviewed before saving.</p>
                       </div>
 
-                      {aiExtraction.attributes.length === 0 ? (
-                        <p className="text-sm text-muted-foreground">No extended attributes were suggested for this category.</p>
-                      ) : (
-                        <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
-                          {aiExtraction.attributes.map((attr, idx) => (
-                            <div
-                              key={`${attr.code}-${idx}`}
-                              className={cn(
-                                "flex flex-col gap-2 rounded border p-3",
-                                attr.accepted ? "border-border bg-card" : "border-border bg-muted/30 opacity-70"
-                              )}
-                            >
-                              <div className="flex items-center justify-between gap-2">
-                                <span className="text-xs font-medium uppercase tracking-wide text-muted-foreground">{attr.codeListName}</span>
-                                <span
-                                  className={cn(
-                                    "inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium",
-                                    attr.confidence >= 0.85 ? "bg-tg-success/15 text-tg-success"
-                                      : attr.confidence >= 0.75 ? "bg-tg-warning/15 text-tg-warning"
-                                      : "bg-muted text-muted-foreground"
-                                  )}
-                                >
-                                  {Math.round(attr.confidence * 100)}%
-                                </span>
+                      {uploadedFiles.map(file => {
+                        const ex = aiExtractions[file.id]
+                        if (!ex || ex.status !== "complete") return null
+                        return (
+                          <div key={file.id} className="flex flex-col gap-3 rounded border border-border p-3">
+                            {/* Per-image header: thumbnail + filename */}
+                            <div className="flex items-center gap-3 border-b border-border pb-2">
+                              <div className="size-12 shrink-0 overflow-hidden rounded border border-border bg-white flex items-center justify-center">
+                                {file.preview ? (
+                                  <img src={file.preview || "/placeholder.svg"} alt={file.name} className="size-full object-contain" />
+                                ) : (
+                                  <FileImage className="size-6 text-muted-foreground/40" />
+                                )}
                               </div>
-                              {aiEditingIndex === idx ? (
-                                <Input
-                                  value={attr.attributeValue}
-                                  onChange={(e) => updateAttributeValue(idx, e.target.value)}
-                                  className="h-8 bg-background"
-                                  autoFocus
-                                  onBlur={() => setAiEditingIndex(null)}
-                                  onKeyDown={(e) => { if (e.key === "Enter") setAiEditingIndex(null) }}
-                                />
-                              ) : (
-                                <p className="text-sm font-medium text-foreground">{attr.attributeValue}</p>
-                              )}
-                              <p className="text-xs text-muted-foreground">GS1 Code: <span className="font-mono text-foreground">{attr.code}</span></p>
-                              <p className="text-xs text-muted-foreground">{attr.reason}</p>
-                              <div className="flex items-center gap-1 pt-1">
-                                <Button
-                                  variant={attr.accepted ? "default" : "outline"}
-                                  size="sm"
-                                  className="h-7 gap-1 px-2 text-xs"
-                                  onClick={() => setAttributeAccepted(idx, true)}
-                                >
-                                  <Check className="size-3" /> Accept
-                                </Button>
-                                <Button
-                                  variant="outline"
-                                  size="sm"
-                                  className="h-7 gap-1 px-2 text-xs"
-                                  onClick={() => setAiEditingIndex(aiEditingIndex === idx ? null : idx)}
-                                >
-                                  <Pencil className="size-3" /> Edit
-                                </Button>
-                                <Button
-                                  variant="ghost"
-                                  size="sm"
-                                  className="h-7 gap-1 px-2 text-xs text-muted-foreground hover:text-destructive"
-                                  onClick={() => setAttributeAccepted(idx, false)}
-                                >
-                                  <X className="size-3" /> Reject
-                                </Button>
+                              <div className="min-w-0">
+                                <p className="text-sm font-medium text-foreground truncate">{file.name}</p>
+                                <p className="text-xs text-muted-foreground">{ex.category}</p>
                               </div>
                             </div>
-                          ))}
-                        </div>
-                      )}
 
-                      {/* Unresolved attributes */}
-                      {aiExtraction.unresolvedAttributes.length > 0 && (
-                        <div className="flex flex-col gap-2 rounded border border-border bg-muted/20 p-3">
-                          <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Unresolved attributes</p>
-                          <ul className="flex flex-col gap-1">
-                            {aiExtraction.unresolvedAttributes.map((u, i) => (
-                              <li key={i} className="flex items-start gap-2 text-sm">
-                                <AlertCircle className="size-3.5 text-tg-warning mt-0.5 shrink-0" />
-                                <span className="text-foreground">{u.codeListName}:</span>
-                                <span className="text-muted-foreground">{u.reason}</span>
-                              </li>
-                            ))}
-                          </ul>
-                        </div>
-                      )}
+                            {ex.attributes.length === 0 ? (
+                              <p className="text-sm text-muted-foreground">No extended attributes were suggested for this category.</p>
+                            ) : (
+                              <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+                                {ex.attributes.map((attr, idx) => {
+                                  const editing = aiEditing?.fileId === file.id && aiEditing.index === idx
+                                  return (
+                                    <div
+                                      key={`${attr.code}-${idx}`}
+                                      className={cn(
+                                        "flex flex-col gap-2 rounded border p-3",
+                                        attr.accepted ? "border-border bg-card" : "border-border bg-muted/30 opacity-70"
+                                      )}
+                                    >
+                                      <div className="flex items-center justify-between gap-2">
+                                        <span className="text-xs font-medium uppercase tracking-wide text-muted-foreground">{attr.codeListName}</span>
+                                        <span
+                                          className={cn(
+                                            "inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium",
+                                            attr.confidence >= 0.85 ? "bg-tg-success/15 text-tg-success"
+                                              : attr.confidence >= 0.75 ? "bg-tg-warning/15 text-tg-warning"
+                                              : "bg-muted text-muted-foreground"
+                                          )}
+                                        >
+                                          {Math.round(attr.confidence * 100)}%
+                                        </span>
+                                      </div>
+                                      {editing ? (
+                                        <div className="flex flex-col gap-2">
+                                          <div className="flex flex-col gap-1">
+                                            <Label className="text-xs text-muted-foreground">Attribute Value</Label>
+                                            <Input
+                                              value={attr.attributeValue}
+                                              onChange={(e) => updateAttributeField(file.id, idx, "attributeValue", e.target.value)}
+                                              className="h-8 bg-background"
+                                              autoFocus
+                                            />
+                                          </div>
+                                          <div className="flex flex-col gap-1">
+                                            <Label className="text-xs text-muted-foreground">GS1 Code</Label>
+                                            <Input
+                                              value={attr.code}
+                                              onChange={(e) => updateAttributeField(file.id, idx, "code", e.target.value)}
+                                              className="h-8 bg-background font-mono"
+                                            />
+                                          </div>
+                                          <Button size="sm" variant="outline" className="h-7 w-fit gap-1 px-2 text-xs" onClick={() => setAiEditing(null)}>
+                                            <Check className="size-3" /> Done
+                                          </Button>
+                                        </div>
+                                      ) : (
+                                        <>
+                                          <p className="text-sm font-medium text-foreground">{attr.attributeValue}</p>
+                                          <p className="text-xs text-muted-foreground">GS1 Code: <span className="font-mono text-foreground">{attr.code}</span></p>
+                                        </>
+                                      )}
+                                      <p className="text-xs text-muted-foreground">{attr.reason}</p>
+                                      <div className="flex items-center gap-1 pt-1">
+                                        <Button
+                                          variant={attr.accepted ? "default" : "outline"}
+                                          size="sm"
+                                          className="h-7 gap-1 px-2 text-xs"
+                                          onClick={() => setAttributeAccepted(file.id, idx, true)}
+                                        >
+                                          <Check className="size-3" /> Accept
+                                        </Button>
+                                        <Button
+                                          variant="outline"
+                                          size="sm"
+                                          className="h-7 gap-1 px-2 text-xs"
+                                          onClick={() => setAiEditing(editing ? null : { fileId: file.id, index: idx })}
+                                        >
+                                          <Pencil className="size-3" /> Edit
+                                        </Button>
+                                        <Button
+                                          variant="ghost"
+                                          size="sm"
+                                          className="h-7 gap-1 px-2 text-xs text-muted-foreground hover:text-destructive"
+                                          onClick={() => setAttributeAccepted(file.id, idx, false)}
+                                        >
+                                          <X className="size-3" /> Reject
+                                        </Button>
+                                      </div>
+                                    </div>
+                                  )
+                                })}
+                              </div>
+                            )}
+
+                            {/* Unresolved attributes for this image */}
+                            {ex.unresolvedAttributes.length > 0 && (
+                              <div className="flex flex-col gap-2 rounded border border-border bg-muted/20 p-3">
+                                <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Unresolved attributes</p>
+                                <ul className="flex flex-col gap-1">
+                                  {ex.unresolvedAttributes.map((u, i) => (
+                                    <li key={i} className="flex items-start gap-2 text-sm">
+                                      <AlertCircle className="size-3.5 text-tg-warning mt-0.5 shrink-0" />
+                                      <span className="text-foreground">{u.codeListName}:</span>
+                                      <span className="text-muted-foreground">{u.reason}</span>
+                                    </li>
+                                  ))}
+                                </ul>
+                              </div>
+                            )}
+                          </div>
+                        )
+                      })}
                     </div>
                   )}
                 </div>
@@ -2565,39 +2676,61 @@ End of Metadata Export
               )}
             </div>
 
-            {/* AI-Extracted Extended Attributes summary — only if any were accepted */}
+            {/* AI-Extracted Extended Attributes summary — grouped by image, only if any accepted (item #5) */}
             {acceptedExtractedAttributes.length > 0 && (
               <div className="rounded border border-border bg-card p-4">
                 <div className="flex items-center gap-2 mb-3">
                   <Sparkles className="size-4 text-primary" />
                   <h3 className="text-sm font-semibold text-foreground">AI-Extracted Extended Attributes</h3>
-                  {aiExtraction?.category && (
-                    <span className="text-xs text-muted-foreground">· {aiExtraction.category}</span>
-                  )}
                 </div>
-                <div className="overflow-x-auto">
-                  <table className="w-full text-sm">
-                    <thead className="bg-muted/30">
-                      <tr>
-                        <th className="px-3 py-2 text-left font-medium text-foreground">Code List Name</th>
-                        <th className="px-3 py-2 text-left font-medium text-foreground">Value</th>
-                        <th className="px-3 py-2 text-left font-medium text-foreground">GS1 Code</th>
-                        <th className="px-3 py-2 text-left font-medium text-foreground">Confidence</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {acceptedExtractedAttributes.map((attr, idx) => (
-                        <tr key={`${attr.code}-${idx}`} className="border-t border-border">
-                          <td className="px-3 py-2 text-foreground">{attr.codeListName}</td>
-                          <td className="px-3 py-2 text-foreground">{attr.attributeValue}</td>
-                          <td className="px-3 py-2 font-mono text-foreground">{attr.code}</td>
-                          <td className="px-3 py-2 text-muted-foreground">{Math.round(attr.confidence * 100)}%</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
+                <div className="flex flex-col gap-4">
+                  {uploadedFiles.map(file => {
+                    const ex = aiExtractions[file.id]
+                    const accepted = ex?.attributes.filter(a => a.accepted) ?? []
+                    if (!ex || accepted.length === 0) return null
+                    return (
+                      <div key={file.id} className="flex flex-col gap-2">
+                        {/* Per-image header: thumbnail + filename + category */}
+                        <div className="flex items-center gap-3">
+                          <div className="size-10 shrink-0 overflow-hidden rounded border border-border bg-white flex items-center justify-center">
+                            {file.preview ? (
+                              <img src={file.preview || "/placeholder.svg"} alt={file.name} className="size-full object-contain" />
+                            ) : (
+                              <FileImage className="size-5 text-muted-foreground/40" />
+                            )}
+                          </div>
+                          <div className="min-w-0">
+                            <p className="text-sm font-medium text-foreground truncate">{file.name}</p>
+                            <p className="text-xs text-muted-foreground">{ex.category}</p>
+                          </div>
+                        </div>
+                        <div className="overflow-x-auto">
+                          <table className="w-full text-sm">
+                            <thead className="bg-muted/30">
+                              <tr>
+                                <th className="px-3 py-2 text-left font-medium text-foreground">Code List Name</th>
+                                <th className="px-3 py-2 text-left font-medium text-foreground">Attribute Value</th>
+                                <th className="px-3 py-2 text-left font-medium text-foreground">GS1 Code</th>
+                                <th className="px-3 py-2 text-left font-medium text-foreground">Confidence</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {accepted.map((attr, idx) => (
+                                <tr key={`${attr.code}-${idx}`} className="border-t border-border">
+                                  <td className="px-3 py-2 text-foreground">{attr.codeListName}</td>
+                                  <td className="px-3 py-2 text-foreground">{attr.attributeValue}</td>
+                                  <td className="px-3 py-2 font-mono text-foreground">{attr.code}</td>
+                                  <td className="px-3 py-2 text-muted-foreground">{Math.round(attr.confidence * 100)}%</td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      </div>
+                    )
+                  })}
                 </div>
-                <p className="mt-2 text-xs text-muted-foreground">
+                <p className="mt-3 text-xs text-muted-foreground">
                   These extended attributes are stored separately from image attributes.
                 </p>
               </div>
