@@ -205,6 +205,16 @@ type UnresolvedAttribute = {
   reason: string
 }
 
+// ExtractionApiResponse: the shape the /api/extract-attributes route returns.
+// Intentionally does NOT include fileId, fileName, or status — those are client-side concerns.
+// This mirrors route.ts's ExtractionApiResponse without importing server code into a client bundle.
+type ExtractionApiResponse = {
+  category: string
+  attributes: Omit<ExtractedAttribute, "accepted">[]
+  unresolvedAttributes: UnresolvedAttribute[]
+}
+
+// ExtractionResult: the per-image frontend state, extends the API response with lifecycle fields.
 type ExtractionResult = {
   fileId: string
   fileName: string
@@ -548,14 +558,15 @@ export function ImageUploadWizard({
           const errBody = await res.json().catch(() => null)
           throw new Error(errBody?.error || `Extraction failed (${res.status}).`)
         }
-        const data = await res.json()
+        // data is typed as ExtractionApiResponse — no fileId/fileName/status (those are added here)
+        const data = await res.json() as ExtractionApiResponse
         setAiExtractions(prev => ({
           ...prev,
           [f.id]: {
             fileId: f.id,
             fileName: f.name,
             category: typeof data.category === "string" ? data.category : category,
-            attributes: (Array.isArray(data.attributes) ? data.attributes : []).map((a: Omit<ExtractedAttribute, "accepted">) => ({ ...a, accepted: true })),
+            attributes: (Array.isArray(data.attributes) ? data.attributes : []).map((a) => ({ ...a, accepted: true })),
             unresolvedAttributes: Array.isArray(data.unresolvedAttributes) ? data.unresolvedAttributes : [],
             status: "complete",
           },

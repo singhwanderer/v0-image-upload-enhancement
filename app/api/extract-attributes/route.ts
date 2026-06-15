@@ -10,6 +10,24 @@ const ALLOWED_CATEGORIES = ["Shoes", "Apparel", "Bags", "Jewelry", "Beauty", "Ho
 const ALLOWED_MIME_TYPES = ["image/jpeg", "image/jpg", "image/png", "image/webp"]
 const GEMINI_MODEL = "gemini-2.5-flash"
 
+// ExtractionApiResponse: the shape returned by this route.
+// It intentionally does NOT include fileId, fileName, or status — those are added
+// by the client (runGeminiExtraction) when it merges the response into ExtractionResult.
+export type ExtractionApiResponse = {
+  category: string
+  attributes: {
+    codeListName: string
+    attributeValue: string
+    code: string
+    confidence: number
+    reason: string
+  }[]
+  unresolvedAttributes: {
+    codeListName: string
+    reason: string
+  }[]
+}
+
 type RawAttribute = {
   codeListName?: unknown
   attributeValue?: unknown
@@ -179,7 +197,7 @@ Return JSON in exactly this shape:
     })
     rawText = response.text ?? ""
   } catch (err) {
-    console.log("[v0] Gemini request failed:", err instanceof Error ? err.message : String(err))
+    console.error("[extract-attributes] Gemini request failed:", err instanceof Error ? err.message : String(err))
     return NextResponse.json(
       { error: "AI extraction failed. Please try again or continue manually." },
       { status: 500 },
@@ -198,7 +216,7 @@ Return JSON in exactly this shape:
   try {
     parsed = JSON.parse(extractJsonText(rawText))
   } catch (err) {
-    console.log("[v0] Failed to parse Gemini JSON:", err instanceof Error ? err.message : String(err))
+    console.error("[extract-attributes] Failed to parse Gemini JSON:", err instanceof Error ? err.message : String(err))
     return NextResponse.json(
       { error: "AI returned an unreadable response. Please try again or continue manually." },
       { status: 500 },
@@ -262,8 +280,8 @@ Return JSON in exactly this shape:
     return true
   })
 
-  // 10. Clean response
-  return NextResponse.json({
+  // 10. Clean response — typed as ExtractionApiResponse (no fileId/fileName/status)
+  return NextResponse.json<ExtractionApiResponse>({
     category,
     attributes: cleanAttributes,
     unresolvedAttributes: dedupedUnresolved,
