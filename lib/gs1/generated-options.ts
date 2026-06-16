@@ -109,7 +109,11 @@ export const GS1_CATEGORY_OPTIONS: Record<ProductCategory, CategoryOptions> = {
           "code": "GM03SETPSA"
         },
         {
-          "value": "Flats GM03SE TPFL Slippers",
+          "value": "Flats",
+          "code": "GM03SETPFL"
+        },
+        {
+          "value": "Slippers",
           "code": "GM03SETPSL"
         },
         {
@@ -366,7 +370,11 @@ export const GS1_CATEGORY_OPTIONS: Record<ProductCategory, CategoryOptions> = {
           "code": "GM03SHOEWS"
         },
         {
-          "value": "Golf GM03SH OEGF Wingtip",
+          "value": "Golf",
+          "code": "GM03SHOEGF"
+        },
+        {
+          "value": "Wingtip",
           "code": "GM03SHOEWT"
         },
         {
@@ -479,7 +487,11 @@ export const GS1_CATEGORY_OPTIONS: Record<ProductCategory, CategoryOptions> = {
           "code": "GM03CLOSSF"
         },
         {
-          "value": "Click Top GM03CL OSCT Snap Front Partial",
+          "value": "Click Top",
+          "code": "GM03CLOSCT"
+        },
+        {
+          "value": "Snap Front Partial",
           "code": "GM03CLOSS2"
         },
         {
@@ -720,7 +732,11 @@ export const GS1_CATEGORY_OPTIONS: Record<ProductCategory, CategoryOptions> = {
           "code": "GM03HLTYSA"
         },
         {
-          "value": "Flare GM03HL TYFL Stiletto",
+          "value": "Flare",
+          "code": "GM03HLTYFL"
+        },
+        {
+          "value": "Stiletto",
           "code": "GM03HLTYSL"
         },
         {
@@ -761,7 +777,11 @@ export const GS1_CATEGORY_OPTIONS: Record<ProductCategory, CategoryOptions> = {
           "code": "GM03HLHTMD"
         },
         {
-          "value": "High > 2 inch - 3 inch GM03HLH THI Other",
+          "value": "High > 2 inch - 3 inch",
+          "code": "GM03HLHTHI"
+        },
+        {
+          "value": "Other",
           "code": "GM04HLHT99"
         }
       ]
@@ -1678,7 +1698,11 @@ export const GS1_CATEGORY_OPTIONS: Record<ProductCategory, CategoryOptions> = {
           "code": "GM03CLOSSF"
         },
         {
-          "value": "Click Top GM03CL OSCT Snap Front Partial",
+          "value": "Click Top",
+          "code": "GM03CLOSCT"
+        },
+        {
+          "value": "Snap Front Partial",
           "code": "GM03CLOSS2"
         },
         {
@@ -2094,7 +2118,11 @@ export const GS1_CATEGORY_OPTIONS: Record<ProductCategory, CategoryOptions> = {
           "code": "GM03LNTHMS"
         },
         {
-          "value": "Ankle GM03L NTHAN Mini",
+          "value": "Ankle",
+          "code": "GM03LNTHAN"
+        },
+        {
+          "value": "Mini",
           "code": "GM03LNTHMN"
         },
         {
@@ -2645,7 +2673,11 @@ export const GS1_CATEGORY_OPTIONS: Record<ProductCategory, CategoryOptions> = {
           "code": "GM03CLOSSF"
         },
         {
-          "value": "Click Top GM03CL OSCT Snap Front Partial",
+          "value": "Click Top",
+          "code": "GM03CLOSCT"
+        },
+        {
+          "value": "Snap Front Partial",
           "code": "GM03CLOSS2"
         },
         {
@@ -3554,7 +3586,11 @@ export const GS1_CATEGORY_OPTIONS: Record<ProductCategory, CategoryOptions> = {
           "code": "JW03JWLTFI"
         },
         {
-          "value": "Fashion JW03JW LTFA Other",
+          "value": "Fashion",
+          "code": "JW03JWLTFA"
+        },
+        {
+          "value": "Other",
           "code": "JW04JWLT99"
         }
       ]
@@ -3946,7 +3982,11 @@ export const GS1_CATEGORY_OPTIONS: Record<ProductCategory, CategoryOptions> = {
           "code": "GM03CLOSSF"
         },
         {
-          "value": "Click Top GM03CL OSCT Snap Front Partial",
+          "value": "Click Top",
+          "code": "GM03CLOSCT"
+        },
+        {
+          "value": "Snap Front Partial",
           "code": "GM03CLOSS2"
         },
         {
@@ -4821,7 +4861,11 @@ export const GS1_CATEGORY_OPTIONS: Record<ProductCategory, CategoryOptions> = {
           "code": "GM03COOKPC"
         },
         {
-          "value": "Cupcake/Muffin Pan GM03CO OKCM Roaster",
+          "value": "Cupcake/Muffin Pan",
+          "code": "GM03COOKCM"
+        },
+        {
+          "value": "Roaster",
           "code": "GM03COOKRR"
         },
         {
@@ -5028,7 +5072,11 @@ export const GS1_CATEGORY_OPTIONS: Record<ProductCategory, CategoryOptions> = {
           "code": "GM03RUGTRU"
         },
         {
-          "value": "Doormat GM03RU GTDM Other",
+          "value": "Doormat",
+          "code": "GM03RUGTDM"
+        },
+        {
+          "value": "Other",
           "code": "GM04RUGT99"
         },
         {

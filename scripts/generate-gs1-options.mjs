@@ -133,6 +133,26 @@ function normalize(s) {
   return String(s).replace(/\s+/g, " ").trim()
 }
 
+// Some CSV rows have a SECOND value+code mashed into the Attribute Value cell, e.g.
+//   value="Flats GM03SE TPFL Slippers", code="GM03SETPSL"
+// which really represents two values: "Flats" (code GM03SETPFL) and "Slippers" (code GM03SETPSL).
+// The embedded code is OCR-split with stray spaces. This expands such a row into the two real
+// rows; non-artifact rows pass through unchanged. Returns an array of { value, code }.
+function expandRow(value, code) {
+  // Embedded code token: 2 letters, 2 digits, then 4-6 alphanumerics, possibly broken by spaces.
+  const m = value.match(/^(.+?)\s+([A-Z]{2}\d{2}(?:\s?[A-Z0-9]){4,6})\s+(.+)$/)
+  if (!m) return [{ value, code }]
+  const valueA = m[1].trim()
+  const codeA = m[2].replace(/\s+/g, "")
+  const valueB = m[3].trim()
+  // Guard: only split when the reconstructed code looks like a valid GS1 code.
+  if (!/^[A-Z]{2}\d{2}[A-Z0-9]{4,6}$/.test(codeA)) return [{ value, code }]
+  return [
+    { value: valueA, code: codeA },
+    { value: valueB, code },
+  ]
+}
+
 // ── Main ────────────────────────────────────────────────────────────────────
 const csvText = readFileSync(CSV_PATH, "utf8")
 const rows = parseCsv(csvText)
@@ -143,12 +163,15 @@ const bySource = new Map()
 for (const r of dataRows) {
   if (!r || r.length < 3) continue
   const sourceName = normalize(r[0])
-  const value = normalize(r[1])
-  const code = normalize(r[2])
-  if (!sourceName || !value || !code) continue
+  const rawValue = normalize(r[1])
+  const rawCode = normalize(r[2])
+  if (!sourceName || !rawValue || !rawCode) continue
   if (!bySource.has(sourceName)) bySource.set(sourceName, new Map())
   const valueMap = bySource.get(sourceName)
-  if (!valueMap.has(value)) valueMap.set(value, code) // first occurrence wins
+  // Expand any mashed-together artifact rows into their real value/code pairs.
+  for (const { value, code } of expandRow(rawValue, rawCode)) {
+    if (value && code && !valueMap.has(value)) valueMap.set(value, code) // first occurrence wins
+  }
 }
 
 // Build the per-category options using the routing map.

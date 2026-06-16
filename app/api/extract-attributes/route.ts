@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server"
 import { GoogleGenAI } from "@google/genai"
-import { getOptionsForCategory } from "@/lib/gs1-attribute-options"
+import { getCategoryOptions } from "@/lib/gs1/generated-options"
 
 // Server-only route. The GEMINI_API_KEY never reaches the client.
 export const runtime = "nodejs"
@@ -121,7 +121,7 @@ export async function POST(request: Request) {
   }
 
   // 5. Load ONLY this category's curated GS1 options (never the full CSV)
-  const options = getOptionsForCategory(category)
+  const options = getCategoryOptions(category)
   if (options.length === 0) {
     return NextResponse.json({ category, attributes: [], unresolvedAttributes: [] })
   }

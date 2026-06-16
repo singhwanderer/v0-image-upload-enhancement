@@ -47,7 +47,13 @@ import {
 } from "@/components/ui/dialog"
 import { cn } from "@/lib/utils"
 import { validateImageBatch, type ValidationError } from "./upload-validation"
-import { getMockExtraction, getValuesForCodeList } from "@/lib/gs1-attribute-options"
+import useSWR from "swr"
+import type { CategoryOptions } from "@/lib/gs1/types"
+import { buildMockExtraction } from "@/lib/gs1/mock-scenarios"
+
+// Response shape from GET /api/attribute-options (declared locally so this client component
+// never imports server route code). Mirrors AttributeOptionsResponse in that route.
+type AttributeOptionsResponse = { category: string; options: CategoryOptions }
 
 interface ImageUploadWizardProps {
   uploadLevel: "product" | "product-color" | "gtin"
@@ -440,6 +446,32 @@ export function ImageUploadWizard({
   const [aiExtractions, setAiExtractions] = useState<Record<string, ExtractionResult>>({})
   // The suggestion row currently being inline-edited (null = none), scoped by file + index
   const [aiEditing, setAiEditing] = useState<{ fileId: string; index: number } | null>(null)
+
+  // Fetch the FULL CSV-derived allowed options for the selected category from the server.
+  // Only one category's options are ever sent to the client (never the whole CSV). SWR caches
+  // per category, so switching back and forth is instant. Used for edit dropdowns + mock grounding.
+  const { data: optionsData } = useSWR<AttributeOptionsResponse>(
+    aiCategory ? `/api/attribute-options?category=${encodeURIComponent(aiCategory)}` : null,
+    (url: string) => fetch(url).then(r => r.json()),
+    { revalidateOnFocus: false, dedupingInterval: 60_000 },
+  )
+  const categoryOptions: CategoryOptions = optionsData?.options ?? []
+
+  // Allowed values for a Code List within the currently-loaded category options (full CSV set).
+  const valuesForCodeList = (codeListName: string) =>
+    categoryOptions.find(o => o.codeListName === codeListName)?.values ?? []
+
+  // Direct fetch fallback used by mock mode when SWR hasn't populated yet (e.g. immediate click).
+  const fetchCategoryOptions = async (category: string): Promise<CategoryOptions> => {
+    try {
+      const res = await fetch(`/api/attribute-options?category=${encodeURIComponent(category)}`)
+      if (!res.ok) return []
+      const data = (await res.json()) as AttributeOptionsResponse
+      return Array.isArray(data.options) ? data.options : []
+    } catch {
+      return []
+    }
+  }
   
   // Form state for attributes
   const [attributes, setAttributes] = useState({
@@ -512,7 +544,7 @@ export function ImageUploadWizard({
     if (EXTRACTION_MODE === "gemini") {
       void runGeminiExtraction()
     } else {
-      runMockExtraction()
+      void runMockExtraction()
     }
   }
 
@@ -589,7 +621,8 @@ export function ImageUploadWizard({
   }
 
   // Runs the mock extraction for ALL uploaded files (item #1). Kept available for stable demos.
-  const runMockExtraction = () => {
+  // Grounds each seed's GS1 code in the SAME full CSV-derived options used by Gemini + dropdowns.
+  const runMockExtraction = async () => {
     if (!aiCategory || uploadedFiles.length === 0) return
     const category = aiCategory
     const snapshot = uploadedFiles.map(f => ({ id: f.id, name: f.name }))
@@ -603,24 +636,25 @@ export function ImageUploadWizard({
       })
       return next
     })
-    setTimeout(() => {
-      // Mock response is grounded in the curated GS1 map (real Code List Names + codes).
-      const mock = getMockExtraction(category)
-      setAiExtractions(() => {
-        const next: Record<string, ExtractionResult> = {}
-        snapshot.forEach(f => {
-          next[f.id] = {
-            fileId: f.id,
-            fileName: f.name,
-            category,
-            attributes: mock.attributes.map(a => ({ ...a, accepted: true })),
-            unresolvedAttributes: mock.unresolvedAttributes,
-            status: "complete",
-          }
-        })
-        return next
+    // Ensure options are available (SWR cache, else direct fetch) so mock codes stay grounded.
+    const options = categoryOptions.length > 0 ? categoryOptions : await fetchCategoryOptions(category)
+    // Brief delay to simulate processing latency for a realistic demo feel.
+    await new Promise(resolve => setTimeout(resolve, 900))
+    const mock = buildMockExtraction(category, options)
+    setAiExtractions(() => {
+      const next: Record<string, ExtractionResult> = {}
+      snapshot.forEach(f => {
+        next[f.id] = {
+          fileId: f.id,
+          fileName: f.name,
+          category,
+          attributes: mock.attributes.map(a => ({ ...a, accepted: true })),
+          unresolvedAttributes: mock.unresolvedAttributes,
+          status: "complete",
+        }
       })
-    }, 1200)
+      return next
+    })
   }
 
   // Toggle the accepted flag on a single suggested attribute (Accept / Reject), scoped by file
@@ -653,7 +687,7 @@ export function ImageUploadWizard({
           ...ex,
           attributes: ex.attributes.map((a, i) => {
             if (i !== index) return a
-            const match = getValuesForCodeList(ex.category, a.codeListName).find(v => v.value === value)
+            const match = valuesForCodeList(a.codeListName).find(v => v.value === value)
             return { ...a, attributeValue: value, code: match?.code ?? a.code }
           }),
         },
@@ -2372,7 +2406,7 @@ End of Metadata Export
                                       </div>
                                       {editing ? (
                                         (() => {
-                                          const allowed = getValuesForCodeList(ex.category, attr.codeListName)
+                                          const allowed = valuesForCodeList(attr.codeListName)
                                           return (
                                             <div className="flex flex-col gap-2">
                                               <div className="flex flex-col gap-1">
