@@ -10,11 +10,12 @@ const ALLOWED_CATEGORIES = ["Shoes", "Apparel", "Bags", "Jewelry", "Beauty", "Ho
 const ALLOWED_MIME_TYPES = ["image/jpeg", "image/jpg", "image/png", "image/webp"]
 const GEMINI_MODEL = "gemini-2.5-flash"
 
-// ExtractionApiResponse: the shape returned by this route.
-// It intentionally does NOT include fileId, fileName, or status — those are added
-// by the client (runGeminiExtraction) when it merges the response into ExtractionResult.
+// ExtractionApiResponse: product-level response shape returned by this route.
+// Does not include status — that is a client-side lifecycle concern.
 export type ExtractionApiResponse = {
   category: string
+  imageCount: number
+  imageNames: string[]
   attributes: {
     codeListName: string
     attributeValue: string
@@ -26,6 +27,13 @@ export type ExtractionApiResponse = {
     codeListName: string
     reason: string
   }[]
+}
+
+// Request shape: one call per product with all images bundled together.
+type ImageInput = {
+  fileName: string
+  imageBase64: string
+  mimeType: string
 }
 
 type RawAttribute = {
@@ -57,17 +65,11 @@ type CleanUnresolved = {
 // Strip markdown code fences (```json ... ```) and isolate the first JSON object.
 function extractJsonText(text: string): string {
   let t = text.trim()
-  // Remove leading/trailing markdown fences if present
   const fenceMatch = t.match(/```(?:json)?\s*([\s\S]*?)\s*```/i)
-  if (fenceMatch) {
-    t = fenceMatch[1].trim()
-  }
-  // If there is leading/trailing prose, isolate the outermost JSON object.
+  if (fenceMatch) t = fenceMatch[1].trim()
   const firstBrace = t.indexOf("{")
   const lastBrace = t.lastIndexOf("}")
-  if (firstBrace >= 0 && lastBrace > firstBrace) {
-    t = t.slice(firstBrace, lastBrace + 1)
-  }
+  if (firstBrace >= 0 && lastBrace > firstBrace) t = t.slice(firstBrace, lastBrace + 1)
   return t
 }
 
@@ -89,41 +91,66 @@ export async function POST(request: Request) {
     )
   }
 
-  // Parse request body defensively
-  let body: { imageBase64?: unknown; mimeType?: unknown; category?: unknown }
+  // 2. Parse request body
+  let body: { category?: unknown; images?: unknown }
   try {
     body = await request.json()
   } catch {
     return NextResponse.json({ error: "Invalid JSON request body." }, { status: 400 })
   }
 
-  const { imageBase64, mimeType, category } = body
+  const { category, images } = body
 
-  // 2. Validate image payload
-  if (typeof imageBase64 !== "string" || imageBase64.length === 0) {
-    return NextResponse.json({ error: "imageBase64 is required." }, { status: 400 })
-  }
-
-  // 3. Validate mime type
-  if (typeof mimeType !== "string" || !ALLOWED_MIME_TYPES.includes(mimeType)) {
-    return NextResponse.json(
-      { error: `Unsupported image type. Allowed: ${ALLOWED_MIME_TYPES.join(", ")}.` },
-      { status: 400 },
-    )
-  }
-
-  // 4. Validate category
-  if (typeof category !== "string" || !ALLOWED_CATEGORIES.includes(category as (typeof ALLOWED_CATEGORIES)[number])) {
+  // 3. Validate category
+  if (
+    typeof category !== "string" ||
+    !ALLOWED_CATEGORIES.includes(category as (typeof ALLOWED_CATEGORIES)[number])
+  ) {
     return NextResponse.json(
       { error: `Invalid category. Allowed: ${ALLOWED_CATEGORIES.join(", ")}.` },
       { status: 400 },
     )
   }
 
-  // 5. Load ONLY this category's curated GS1 options (never the full CSV)
+  // 4. Validate images array
+  if (!Array.isArray(images) || images.length === 0) {
+    return NextResponse.json(
+      { error: "images must be a non-empty array." },
+      { status: 400 },
+    )
+  }
+
+  const validatedImages: ImageInput[] = []
+  for (const img of images) {
+    if (typeof img !== "object" || img === null) {
+      return NextResponse.json({ error: "Each image must be an object." }, { status: 400 })
+    }
+    const { fileName, imageBase64, mimeType } = img as Record<string, unknown>
+    if (typeof fileName !== "string" || !fileName.trim()) {
+      return NextResponse.json({ error: "Each image must have a fileName." }, { status: 400 })
+    }
+    if (typeof imageBase64 !== "string" || imageBase64.length === 0) {
+      return NextResponse.json({ error: "Each image must have a non-empty imageBase64." }, { status: 400 })
+    }
+    if (typeof mimeType !== "string" || !ALLOWED_MIME_TYPES.includes(mimeType)) {
+      return NextResponse.json(
+        { error: `Unsupported image type in one or more images. Allowed: ${ALLOWED_MIME_TYPES.join(", ")}.` },
+        { status: 400 },
+      )
+    }
+    validatedImages.push({ fileName: fileName.trim(), imageBase64, mimeType })
+  }
+
+  // 5. Load this category's GS1 options (never the full CSV, never other categories)
   const options = getCategoryOptions(category)
   if (options.length === 0) {
-    return NextResponse.json({ category, attributes: [], unresolvedAttributes: [] })
+    return NextResponse.json<ExtractionApiResponse>({
+      category,
+      imageCount: validatedImages.length,
+      imageNames: validatedImages.map(i => i.fileName),
+      attributes: [],
+      unresolvedAttributes: [],
+    })
   }
 
   // Build validation lookups: codeListName -> (value -> code)
@@ -134,7 +161,7 @@ export async function POST(request: Request) {
     valueToCode.set(opt.codeListName, m)
   }
 
-  // Compact allowed-options block for the prompt (only names, values, codes for this category)
+  // Compact allowed-options block for the prompt
   const allowedOptionsText = options
     .map(
       (o) =>
@@ -143,26 +170,36 @@ export async function POST(request: Request) {
     )
     .join("\n")
 
-  // 6. Prompt
-  const prompt = `You are extracting GS1-style extended product attributes from a product image.
+  // Image list for prompt context (so model can reference which image provided evidence)
+  const imageListText = validatedImages
+    .map((img, i) => `  Image ${i + 1}: ${img.fileName}`)
+    .join("\n")
+
+  // 6. Prompt — explicitly product-level, multi-image
+  const prompt = `You are extracting one product-level set of GS1-style extended attributes from multiple images of the same product.
 
 Product category: ${category}
+
+You have been provided with ${validatedImages.length} image${validatedImages.length !== 1 ? "s" : ""} of the same product:
+${imageListText}
+
+Treat all uploaded images as evidence for the same product. Return one consolidated attribute set, not separate results per image.
 
 Allowed GS1 options (Code List Name, then allowed Attribute Values and their exact codes):
 ${allowedOptionsText}
 
 Rules:
 - Use only the provided allowed GS1 options.
-- Do not invent Code List Names.
-- Do not invent Attribute Values.
-- Do not invent GS1 codes.
+- Do not invent Code List Names, Attribute Values, or GS1 codes.
 - The returned code must match the selected Attribute Value exactly as listed above.
-- If unsure, return the item in unresolvedAttributes.
+- If an attribute is clearly visible in any of the uploaded images, it can be suggested.
+- If an attribute is not visible in any of the uploaded images, put it in unresolvedAttributes.
+- If images show conflicting evidence for the same attribute, put that attribute in unresolvedAttributes and explain the conflict in the reason field.
 - Do not infer hidden or non-visible attributes.
-- Do not infer Advertised Origin, Care Instructions, Water Repellent, SPF Rating, Scent Type, or Material Composition unless visible on packaging, product label, or readable text.
-- Return JSON only, with no markdown fences and no commentary.
+- Do not infer Advertised Origin, Care Instructions, Water Repellent, SPF Rating, Scent Type, or Material Composition unless visible on packaging, product label, or readable text in an image.
+- Reference the image name(s) in the reason field where helpful (e.g. "Visible in Image 1: front-view.jpg").
 - Confidence must be a number between 0 and 1.
-- Reason should be short and based on visible evidence.
+- Return JSON only, with no markdown fences and no commentary.
 
 Return JSON in exactly this shape:
 {
@@ -175,7 +212,12 @@ Return JSON in exactly this shape:
   ]
 }`
 
-  // 7. Call Gemini
+  // 7. Build Gemini content parts — prompt text first, then all image inline data
+  const imageParts = validatedImages.map((img) => ({
+    inlineData: { mimeType: img.mimeType, data: img.imageBase64 },
+  }))
+
+  // 8. Call Gemini with all images in one request
   let rawText: string
   try {
     const ai = new GoogleGenAI({ apiKey })
@@ -184,10 +226,7 @@ Return JSON in exactly this shape:
       contents: [
         {
           role: "user",
-          parts: [
-            { text: prompt },
-            { inlineData: { mimeType, data: imageBase64 } },
-          ],
+          parts: [{ text: prompt }, ...imageParts],
         },
       ],
       config: {
@@ -197,7 +236,10 @@ Return JSON in exactly this shape:
     })
     rawText = response.text ?? ""
   } catch (err) {
-    console.error("[extract-attributes] Gemini request failed:", err instanceof Error ? err.message : String(err))
+    console.error(
+      "[extract-attributes] Gemini request failed:",
+      err instanceof Error ? err.message : String(err),
+    )
     return NextResponse.json(
       { error: "AI extraction failed. Please try again or continue manually." },
       { status: 500 },
@@ -211,19 +253,22 @@ Return JSON in exactly this shape:
     )
   }
 
-  // 8. Parse defensively
+  // 9. Parse defensively
   let parsed: { attributes?: unknown; unresolvedAttributes?: unknown }
   try {
     parsed = JSON.parse(extractJsonText(rawText))
   } catch (err) {
-    console.error("[extract-attributes] Failed to parse Gemini JSON:", err instanceof Error ? err.message : String(err))
+    console.error(
+      "[extract-attributes] Failed to parse Gemini JSON:",
+      err instanceof Error ? err.message : String(err),
+    )
     return NextResponse.json(
       { error: "AI returned an unreadable response. Please try again or continue manually." },
       { status: 500 },
     )
   }
 
-  // 9. Validate against the curated map
+  // 10. Validate against the GS1 category map (server-side authority)
   const cleanAttributes: CleanAttribute[] = []
   const cleanUnresolved: CleanUnresolved[] = []
 
@@ -238,28 +283,33 @@ Return JSON in exactly this shape:
     const code = typeof a.code === "string" ? a.code.trim() : ""
 
     const codeMap = valueToCode.get(codeListName)
-    // Unknown code list name -> drop with reason
     if (!codeMap) {
       if (codeListName) {
-        cleanUnresolved.push({ codeListName, reason: "Returned a Code List Name outside the allowed options." })
+        cleanUnresolved.push({
+          codeListName,
+          reason: "Returned a Code List Name outside the allowed options.",
+        })
       }
       continue
     }
-    // Value not in curated map -> move to unresolved
     const expectedCode = codeMap.get(attributeValue)
     if (!expectedCode) {
-      cleanUnresolved.push({ codeListName, reason: "Returned an Attribute Value outside the allowed options." })
+      cleanUnresolved.push({
+        codeListName,
+        reason: "Returned an Attribute Value outside the allowed options.",
+      })
       continue
     }
-    // Code mismatch -> correct it to the curated code (keep the valid value)
-    const finalCode = code === expectedCode ? code : expectedCode
-
+    // Code is always overwritten with the authoritative curated code
     cleanAttributes.push({
       codeListName,
       attributeValue,
-      code: finalCode,
+      code: expectedCode,
       confidence: clampConfidence(a.confidence),
-      reason: typeof a.reason === "string" && a.reason.trim() ? a.reason.trim() : "Based on visible product features.",
+      reason:
+        typeof a.reason === "string" && a.reason.trim()
+          ? a.reason.trim()
+          : "Based on visible product features.",
     })
   }
 
@@ -268,7 +318,10 @@ Return JSON in exactly this shape:
     if (!codeListName) continue
     cleanUnresolved.push({
       codeListName,
-      reason: typeof u.reason === "string" && u.reason.trim() ? u.reason.trim() : "Cannot determine from the image.",
+      reason:
+        typeof u.reason === "string" && u.reason.trim()
+          ? u.reason.trim()
+          : "Cannot determine from the images.",
     })
   }
 
@@ -280,9 +333,11 @@ Return JSON in exactly this shape:
     return true
   })
 
-  // 10. Clean response — typed as ExtractionApiResponse (no fileId/fileName/status)
+  // 11. Product-level response
   return NextResponse.json<ExtractionApiResponse>({
     category,
+    imageCount: validatedImages.length,
+    imageNames: validatedImages.map((i) => i.fileName),
     attributes: cleanAttributes,
     unresolvedAttributes: dedupedUnresolved,
   })

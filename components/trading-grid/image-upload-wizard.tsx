@@ -231,7 +231,7 @@ type UploadedFile = {
   status: "uploading" | "complete" | "error"
 }
 
-// AI extended-attribute extraction types (mock-first; shaped for a future /api/extract-attributes response)
+// AI extended-attribute extraction types
 type ExtractedAttribute = {
   codeListName: string
   attributeValue: string
@@ -246,20 +246,22 @@ type UnresolvedAttribute = {
   reason: string
 }
 
-// ExtractionApiResponse: the shape the /api/extract-attributes route returns.
-// Intentionally does NOT include fileId, fileName, or status — those are client-side concerns.
-// This mirrors route.ts's ExtractionApiResponse without importing server code into a client bundle.
+// ExtractionApiResponse: product-level shape returned by POST /api/extract-attributes.
+// Mirrors route.ts ExtractionApiResponse without importing server code into the client bundle.
 type ExtractionApiResponse = {
   category: string
+  imageCount: number
+  imageNames: string[]
   attributes: Omit<ExtractedAttribute, "accepted">[]
   unresolvedAttributes: UnresolvedAttribute[]
 }
 
-// ExtractionResult: the per-image frontend state, extends the API response with lifecycle fields.
-type ExtractionResult = {
-  fileId: string
-  fileName: string
+// ProductExtractionResult: product-level frontend state (one result for the whole product,
+// not one per image). Replaces the old per-image ExtractionResult / aiExtractions Record.
+type ProductExtractionResult = {
   category: string
+  imageCount: number
+  imageNames: string[]
   attributes: ExtractedAttribute[]
   unresolvedAttributes: UnresolvedAttribute[]
   status: "idle" | "extracting" | "complete" | "error"
@@ -476,11 +478,10 @@ export function ImageUploadWizard({
   const [aiCategory, setAiCategory] = useState<string>("")
   // Whether the user explicitly skipped the AI extraction section
   const [aiSkipped, setAiSkipped] = useState(false)
-  // Per-image extraction results keyed by UploadedFile.id. Accepted suggestions live here, stored
-  // separately from `attributes`/`attributesByImage` and never merged into them for now.
-  const [aiExtractions, setAiExtractions] = useState<Record<string, ExtractionResult>>({})
-  // The suggestion row currently being inline-edited (null = none), scoped by file + index
-  const [aiEditing, setAiEditing] = useState<{ fileId: string; index: number } | null>(null)
+  // Product-level extraction result (one consolidated result for all uploaded images).
+  const [aiExtraction, setAiExtraction] = useState<ProductExtractionResult | null>(null)
+  // The suggestion row currently being inline-edited (null = none), scoped by index only
+  const [aiEditing, setAiEditing] = useState<{ index: number } | null>(null)
 
   // Fetch the FULL CSV-derived allowed options for the selected category from the server.
   // Only one category's options are ever sent to the client (never the whole CSV). SWR caches
@@ -596,165 +597,139 @@ export function ImageUploadWizard({
       reader.readAsDataURL(file)
     })
 
-  // Real Gemini extraction: one independent request per uploaded image (item #1, #9).
-  // A failure on one image marks only that image as error; the others still complete (item #10).
+  // Real Gemini extraction: all uploaded images are sent together in one request,
+  // producing one consolidated product-level attribute set.
   const runGeminiExtraction = async () => {
     if (!aiCategory || uploadedFiles.length === 0) return
     const category = aiCategory
-    const targets = uploadedFiles.map(f => ({ id: f.id, name: f.name, file: f.file, type: f.type }))
+    const targets = uploadedFiles.map(f => ({ name: f.name, file: f.file, type: f.type }))
     setAiSkipped(false)
     setAiEditing(null)
-    // Mark every file as extracting
-    setAiExtractions(() => {
-      const next: Record<string, ExtractionResult> = {}
-      targets.forEach(f => {
-        next[f.id] = { fileId: f.id, fileName: f.name, category, attributes: [], unresolvedAttributes: [], status: "extracting" }
-      })
-      return next
+    setAiExtraction({
+      category,
+      imageCount: targets.length,
+      imageNames: targets.map(f => f.name),
+      attributes: [],
+      unresolvedAttributes: [],
+      status: "extracting",
     })
 
-    await Promise.all(targets.map(async (f) => {
-      try {
-        const imageBase64 = await fileToBase64(f.file)
-        const res = await fetch("/api/extract-attributes", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ imageBase64, mimeType: f.type, category }),
-        })
-        if (!res.ok) {
-          const errBody = await res.json().catch(() => null)
-          throw new Error(errBody?.error || `Extraction failed (${res.status}).`)
-        }
-        // data is typed as ExtractionApiResponse — no fileId/fileName/status (those are added here)
-        const data = await res.json() as ExtractionApiResponse
-        setAiExtractions(prev => ({
-          ...prev,
-          [f.id]: {
-            fileId: f.id,
-            fileName: f.name,
-            category: typeof data.category === "string" ? data.category : category,
-            attributes: (Array.isArray(data.attributes) ? data.attributes : []).map((a) => ({ ...a, accepted: true })),
-            unresolvedAttributes: Array.isArray(data.unresolvedAttributes) ? data.unresolvedAttributes : [],
-            status: "complete",
-          },
+    try {
+      // Convert all files to base64 in parallel
+      const images = await Promise.all(
+        targets.map(async (f) => ({
+          fileName: f.name,
+          imageBase64: await fileToBase64(f.file),
+          mimeType: f.type,
         }))
-      } catch (err) {
-        setAiExtractions(prev => ({
-          ...prev,
-          [f.id]: {
-            fileId: f.id,
-            fileName: f.name,
-            category,
-            attributes: [],
-            unresolvedAttributes: [],
-            status: "error",
-            error: err instanceof Error ? err.message : "Extraction failed.",
-          },
-        }))
+      )
+
+      const res = await fetch("/api/extract-attributes", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ category, images }),
+      })
+
+      if (!res.ok) {
+        const errBody = await res.json().catch(() => null)
+        throw new Error(errBody?.error || `Extraction failed (${res.status}).`)
       }
-    }))
+
+      const data = await res.json() as ExtractionApiResponse
+      setAiExtraction({
+        category: typeof data.category === "string" ? data.category : category,
+        imageCount: typeof data.imageCount === "number" ? data.imageCount : targets.length,
+        imageNames: Array.isArray(data.imageNames) ? data.imageNames : targets.map(f => f.name),
+        attributes: (Array.isArray(data.attributes) ? data.attributes : []).map(a => ({ ...a, accepted: true })),
+        unresolvedAttributes: Array.isArray(data.unresolvedAttributes) ? data.unresolvedAttributes : [],
+        status: "complete",
+      })
+    } catch (err) {
+      setAiExtraction(prev => prev ? {
+        ...prev,
+        attributes: [],
+        unresolvedAttributes: [],
+        status: "error",
+        error: err instanceof Error ? err.message : "Extraction failed.",
+      } : null)
+    }
   }
 
-  // Runs the mock extraction for ALL uploaded files (item #1). Kept available for stable demos.
-  // Grounds each seed's GS1 code in the SAME full CSV-derived options used by Gemini + dropdowns.
+  // Mock extraction: returns one consolidated product-level result (same shape as Gemini mode).
+  // Grounds GS1 codes in the same CSV-derived options used by Gemini + dropdowns.
   const runMockExtraction = async () => {
     if (!aiCategory || uploadedFiles.length === 0) return
     const category = aiCategory
-    const snapshot = uploadedFiles.map(f => ({ id: f.id, name: f.name }))
+    const imageNames = uploadedFiles.map(f => f.name)
     setAiSkipped(false)
     setAiEditing(null)
-    // Mark every file as extracting
-    setAiExtractions(() => {
-      const next: Record<string, ExtractionResult> = {}
-      snapshot.forEach(f => {
-        next[f.id] = { fileId: f.id, fileName: f.name, category, attributes: [], unresolvedAttributes: [], status: "extracting" }
-      })
-      return next
+    setAiExtraction({
+      category,
+      imageCount: uploadedFiles.length,
+      imageNames,
+      attributes: [],
+      unresolvedAttributes: [],
+      status: "extracting",
     })
     // Ensure options are available (SWR cache, else direct fetch) so mock codes stay grounded.
     const options = categoryOptions.length > 0 ? categoryOptions : await fetchCategoryOptions(category)
     // Brief delay to simulate processing latency for a realistic demo feel.
     await new Promise(resolve => setTimeout(resolve, 900))
     const mock = buildMockExtraction(category, options)
-    setAiExtractions(() => {
-      const next: Record<string, ExtractionResult> = {}
-      snapshot.forEach(f => {
-        next[f.id] = {
-          fileId: f.id,
-          fileName: f.name,
-          category,
-          attributes: mock.attributes.map(a => ({ ...a, accepted: true })),
-          unresolvedAttributes: mock.unresolvedAttributes,
-          status: "complete",
-        }
-      })
-      return next
+    setAiExtraction({
+      category,
+      imageCount: uploadedFiles.length,
+      imageNames,
+      attributes: mock.attributes.map(a => ({ ...a, accepted: true })),
+      unresolvedAttributes: mock.unresolvedAttributes,
+      status: "complete",
     })
   }
 
-  // Toggle the accepted flag on a single suggested attribute (Accept / Reject), scoped by file
-  const setAttributeAccepted = (fileId: string, index: number, accepted: boolean) => {
-    setAiExtractions(prev => {
-      const ex = prev[fileId]
-      if (!ex) return prev
-      return { ...prev, [fileId]: { ...ex, attributes: ex.attributes.map((a, i) => i === index ? { ...a, accepted } : a) } }
+  // Toggle the accepted flag on a single suggested attribute (Accept / Reject)
+  const setAttributeAccepted = (index: number, accepted: boolean) => {
+    setAiExtraction(prev => {
+      if (!prev) return prev
+      return { ...prev, attributes: prev.attributes.map((a, i) => i === index ? { ...a, accepted } : a) }
     })
   }
 
-  // Edit a single attribute's value or GS1 code (inline Edit). Edited rows stay accepted (item #7).
-  const updateAttributeField = (fileId: string, index: number, field: "attributeValue" | "code", value: string) => {
-    setAiExtractions(prev => {
-      const ex = prev[fileId]
-      if (!ex) return prev
-      return { ...prev, [fileId]: { ...ex, attributes: ex.attributes.map((a, i) => i === index ? { ...a, [field]: value } : a) } }
+  // Edit a single attribute's value or GS1 code (inline Edit). Edited rows stay accepted.
+  const updateAttributeField = (index: number, field: "attributeValue" | "code", value: string) => {
+    setAiExtraction(prev => {
+      if (!prev) return prev
+      return { ...prev, attributes: prev.attributes.map((a, i) => i === index ? { ...a, [field]: value } : a) }
     })
   }
 
-  // Select an allowed value for a suggestion from the curated GS1 list; sets value + matching code
-  // together (item #8 — dropdown editing). Falls back gracefully if no code is found.
-  const selectAttributeValue = (fileId: string, index: number, value: string) => {
-    setAiExtractions(prev => {
-      const ex = prev[fileId]
-      if (!ex) return prev
+  // Select an allowed value for a suggestion from the curated GS1 list; sets value + matching code.
+  const selectAttributeValue = (index: number, value: string) => {
+    setAiExtraction(prev => {
+      if (!prev) return prev
       return {
         ...prev,
-        [fileId]: {
-          ...ex,
-          attributes: ex.attributes.map((a, i) => {
-            if (i !== index) return a
-            const match = valuesForCodeList(a.codeListName).find(v => v.value === value)
-            return { ...a, attributeValue: value, code: match?.code ?? a.code }
-          }),
-        },
+        attributes: prev.attributes.map((a, i) => {
+          if (i !== index) return a
+          const match = valuesForCodeList(a.codeListName).find(v => v.value === value)
+          return { ...a, attributeValue: value, code: match?.code ?? a.code }
+        }),
       }
     })
   }
 
-  // Clear any extraction result for a single file (item #8 — removal/replacement)
-  const clearExtractionForFile = (fileId: string) => {
-    setAiExtractions(prev => {
-      if (!prev[fileId]) return prev
-      const { [fileId]: _removed, ...rest } = prev
-      return rest
-    })
-  }
-
-  // Clear all extraction state (item #8 — category/product context change, re-run)
-  const clearAllExtractions = () => {
-    setAiExtractions({})
+  // Clear extraction state when files change, product changes, or category changes.
+  const clearExtraction = () => {
+    setAiExtraction(null)
     setAiEditing(null)
   }
 
-  // Ordered list of extraction results following the uploaded-file order
-  const orderedExtractions = uploadedFiles
-    .map(f => aiExtractions[f.id])
-    .filter((e): e is ExtractionResult => Boolean(e))
-  const anyExtracting = orderedExtractions.some(e => e.status === "extracting")
-  const anyComplete = orderedExtractions.some(e => e.status === "complete")
-  const anyError = orderedExtractions.some(e => e.status === "error")
-  const hasExtractions = orderedExtractions.length > 0
-  // Accepted suggestions across all images, derived — stored separately from image attributes
-  const acceptedExtractedAttributes = orderedExtractions.flatMap(e => e.attributes.filter(a => a.accepted))
+  // Derived status flags from the single product-level extraction result
+  const isExtracting = aiExtraction?.status === "extracting"
+  const isComplete = aiExtraction?.status === "complete"
+  const isError = aiExtraction?.status === "error"
+  const hasExtraction = aiExtraction !== null
+  // Accepted suggestions at the product level
+  const acceptedExtractedAttributes = aiExtraction?.attributes.filter(a => a.accepted) ?? []
 
   const handleDragOver = useCallback((e: React.DragEvent) => {
     e.preventDefault()
@@ -802,7 +777,7 @@ export function ImageUploadWizard({
 
   const removeFile = (fileId: string) => {
     setUploadedFiles(prev => prev.filter(f => f.id !== fileId))
-    clearExtractionForFile(fileId) // item #8 — drop stale AI attributes for removed file
+    clearExtraction() // file list changed — stale product-level extraction is invalid
   }
 
   const formatFileSize = (bytes: number) => {
@@ -1346,9 +1321,8 @@ End of Metadata Export
                     variant="destructive"
                     onClick={() => {
                       const idx = editAttrDialog.fileIndex
-                      const removedId = uploadedFiles[idx]?.id
                       setUploadedFiles(prev => prev.filter((_, i) => i !== idx))
-                      if (removedId) clearExtractionForFile(removedId) // item #8
+                      clearExtraction() // file list changed — stale product-level extraction is invalid
                       setEditAttrDialog(prev => ({ ...prev, open: false }))
                       setEditDeleteConfirm(false)
                     }}
@@ -1504,7 +1478,7 @@ End of Metadata Export
                             status: "complete",
                           }
                           setUploadedFiles(prev => prev.map((u, i) => i === editAttrDialog.fileIndex ? newFile : u))
-                          clearExtractionForFile(newFile.id) // item #8 — replaced image invalidates old AI attributes
+                          clearExtraction() // replaced image invalidates the product-level extraction
                           setPendingReplaceFile(null)
                         }
                         // Commit attribute edits (Acceptance #8)
@@ -1958,8 +1932,8 @@ End of Metadata Export
                   onValueChange={(value) => {
                     setSelectedProduct(value)
                     setSelectedGtin("")
-                    // item #8 — product context changed: drop stale AI attributes and re-default category
-                    clearAllExtractions()
+                    // product context changed: drop stale product-level extraction and re-default category
+                    clearExtraction()
                     setAiCategory("")
                     setAiSkipped(false)
                   }}
@@ -2303,7 +2277,7 @@ End of Metadata Export
                 )}
               </div>
 
-              {/* Skipped message (item #6) — files & manual form remain available */}
+              {/* Skipped message — files & manual form remain available */}
               {aiSkipped && (
                 <div className="flex items-center gap-2 p-4 text-sm text-muted-foreground">
                   <Info className="size-4 shrink-0" />
@@ -2314,12 +2288,12 @@ End of Metadata Export
               {!aiSkipped && (
                 <div className="flex flex-col gap-4 p-4">
                   {/* Idle / pre-extraction controls */}
-                  {!hasExtractions && (
+                  {!hasExtraction && (
                     <>
                       <div className="flex flex-col gap-2 sm:flex-row sm:items-end">
                         <div className="flex flex-col gap-1">
                           <Label htmlFor="ai-category" className="text-xs text-muted-foreground">Product category</Label>
-                          <Select value={aiCategory} onValueChange={(v) => { setAiCategory(v); clearAllExtractions() }}>
+                          <Select value={aiCategory} onValueChange={(v) => { setAiCategory(v); clearExtraction() }}>
                             <SelectTrigger id="ai-category" className="w-56 bg-background">
                               <SelectValue placeholder="Select a category..." />
                             </SelectTrigger>
@@ -2341,208 +2315,201 @@ End of Metadata Export
                         </div>
                       </div>
                       <p className="text-xs text-muted-foreground">
-                        Runs for all {uploadedFiles.length} uploaded image{uploadedFiles.length !== 1 ? "s" : ""}. AI-generated attributes should be reviewed before saving.
+                        {uploadedFiles.length === 1
+                          ? "1 image will be analyzed for this product."
+                          : `${uploadedFiles.length} images will be analyzed together for this product.`}{" "}
+                        All uploaded images are treated as evidence for the same product.
                       </p>
                     </>
                   )}
 
                   {/* Loading state */}
-                  {anyExtracting && (
+                  {isExtracting && (
                     <div className="flex items-center gap-3 rounded border border-border bg-muted/20 p-4">
                       <Loader2 className="size-5 animate-spin text-primary" />
                       <p className="text-sm text-foreground">
-                        Analyzing {orderedExtractions.length} image{orderedExtractions.length !== 1 ? "s" : ""} for {aiCategory} attributes…
+                        Analyzing {aiExtraction?.imageCount ?? uploadedFiles.length} image{(aiExtraction?.imageCount ?? uploadedFiles.length) !== 1 ? "s" : ""} together for {aiCategory} attributes…
                       </p>
                     </div>
                   )}
 
                   {/* Error state */}
-                  {anyError && !anyExtracting && (
+                  {isError && (
                     <div className="flex flex-col gap-3 rounded border border-destructive/30 bg-destructive/5 p-4">
                       <div className="flex items-start gap-2">
                         <AlertCircle className="size-4 text-destructive mt-0.5 shrink-0" />
                         <p className="text-sm text-foreground">
-                          Extraction failed for one or more images. You can continue setting attributes manually.
+                          {aiExtraction?.error ?? "Extraction failed. You can continue setting attributes manually."}
                         </p>
                       </div>
                       <div className="flex items-center gap-2">
                         <Button variant="outline" size="sm" onClick={runExtraction}>Try again</Button>
-                        <Button variant="ghost" size="sm" onClick={() => { clearAllExtractions(); setAiSkipped(true) }}>
+                        <Button variant="ghost" size="sm" onClick={() => { clearExtraction(); setAiSkipped(true) }}>
                           Continue manually
                         </Button>
                       </div>
                     </div>
                   )}
 
-                  {/* Results — grouped per image (item #1). Shown as each image completes,
-                      so a slow or failed image never blocks the others (item #9, #10). */}
-                  {anyComplete && (
+                  {/* Product-level results — one consolidated set for all uploaded images */}
+                  {isComplete && aiExtraction && (
                     <div className="flex flex-col gap-4">
+                      {/* Results header */}
                       <div className="flex items-center justify-between">
-                        <p className="text-sm text-foreground">
-                          Category: <span className="font-medium">{aiCategory}</span>
-                          <span className="text-muted-foreground"> · {acceptedExtractedAttributes.length} attribute{acceptedExtractedAttributes.length !== 1 ? "s" : ""} accepted across {orderedExtractions.length} image{orderedExtractions.length !== 1 ? "s" : ""}</span>
-                        </p>
-                        <Button variant="ghost" size="sm" onClick={clearAllExtractions}>
+                        <div className="flex flex-col gap-0.5">
+                          <p className="text-sm text-foreground">
+                            Category: <span className="font-medium">{aiExtraction.category}</span>
+                            <span className="text-muted-foreground">
+                              {" "}· {acceptedExtractedAttributes.length} attribute{acceptedExtractedAttributes.length !== 1 ? "s" : ""} accepted
+                            </span>
+                          </p>
+                          <p className="text-xs text-muted-foreground">
+                            {aiExtraction.imageCount === 1
+                              ? "1 image analyzed"
+                              : `${aiExtraction.imageCount} images analyzed together`}
+                            {aiExtraction.imageNames.length > 0 && (
+                              <span> — {aiExtraction.imageNames.join(", ")}</span>
+                            )}
+                          </p>
+                        </div>
+                        <Button variant="ghost" size="sm" onClick={clearExtraction}>
                           Re-run
                         </Button>
                       </div>
                       <div className="flex items-start gap-2 rounded bg-muted/30 p-2">
                         <Info className="size-3.5 text-muted-foreground mt-0.5 shrink-0" />
-                        <p className="text-xs text-muted-foreground">AI-generated attributes should be reviewed before saving.</p>
+                        <p className="text-xs text-muted-foreground">AI-generated attributes should be reviewed before saving. All images were analyzed together to produce this single product-level attribute set.</p>
                       </div>
 
-                      {uploadedFiles.map(file => {
-                        const ex = aiExtractions[file.id]
-                        if (!ex || ex.status !== "complete") return null
-                        return (
-                          <div key={file.id} className="flex flex-col gap-3 rounded border border-border p-3">
-                            {/* Per-image header: thumbnail + filename */}
-                            <div className="flex items-center gap-3 border-b border-border pb-2">
-                              <div className="size-12 shrink-0 overflow-hidden rounded border border-border bg-white flex items-center justify-center">
-                                {file.preview ? (
-                                  <img src={file.preview || "/placeholder.svg"} alt={file.name} className="size-full object-contain" />
-                                ) : (
-                                  <FileImage className="size-6 text-muted-foreground/40" />
-                                )}
-                              </div>
-                              <div className="min-w-0">
-                                <p className="text-sm font-medium text-foreground truncate">{file.name}</p>
-                                <p className="text-xs text-muted-foreground">{ex.category}</p>
-                              </div>
-                            </div>
-
-                            {ex.attributes.length === 0 ? (
-                              <p className="text-sm text-muted-foreground">No extended attributes were suggested for this category.</p>
-                            ) : (
-                              <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
-                                {ex.attributes.map((attr, idx) => {
-                                  const editing = aiEditing?.fileId === file.id && aiEditing.index === idx
-                                  return (
-                                    <div
-                                      key={`${attr.code}-${idx}`}
+                      {/* Product-level attribute cards */}
+                      <div className="flex flex-col gap-3 rounded border border-border p-3">
+                        {aiExtraction.attributes.length === 0 ? (
+                          <p className="text-sm text-muted-foreground">No extended attributes were suggested for this category.</p>
+                        ) : (
+                          <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+                            {aiExtraction.attributes.map((attr, idx) => {
+                              const editing = aiEditing?.index === idx
+                              return (
+                                <div
+                                  key={`${attr.code}-${idx}`}
+                                  className={cn(
+                                    "flex flex-col gap-2 rounded border p-3",
+                                    attr.accepted ? "border-border bg-card" : "border-border bg-muted/30 opacity-70"
+                                  )}
+                                >
+                                  <div className="flex items-center justify-between gap-2">
+                                    <span className="text-xs font-medium uppercase tracking-wide text-muted-foreground">{attr.codeListName}</span>
+                                    <span
                                       className={cn(
-                                        "flex flex-col gap-2 rounded border p-3",
-                                        attr.accepted ? "border-border bg-card" : "border-border bg-muted/30 opacity-70"
+                                        "inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium",
+                                        attr.confidence >= 0.85 ? "bg-tg-success/15 text-tg-success"
+                                          : attr.confidence >= 0.75 ? "bg-tg-warning/15 text-tg-warning"
+                                          : "bg-muted text-muted-foreground"
                                       )}
                                     >
-                                      <div className="flex items-center justify-between gap-2">
-                                        <span className="text-xs font-medium uppercase tracking-wide text-muted-foreground">{attr.codeListName}</span>
-                                        <span
-                                          className={cn(
-                                            "inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium",
-                                            attr.confidence >= 0.85 ? "bg-tg-success/15 text-tg-success"
-                                              : attr.confidence >= 0.75 ? "bg-tg-warning/15 text-tg-warning"
-                                              : "bg-muted text-muted-foreground"
-                                          )}
-                                        >
-                                          {Math.round(attr.confidence * 100)}%
-                                        </span>
-                                      </div>
-                                      {editing ? (
-                                        (() => {
-                                          const allowed = valuesForCodeList(attr.codeListName)
-                                          return (
-                                            <div className="flex flex-col gap-2">
-                                              <div className="flex flex-col gap-1">
-                                                <Label className="text-xs text-muted-foreground">Attribute Value</Label>
-                                                {allowed.length > 0 ? (
-                                                  <Select
-                                                    value={allowed.some(v => v.value === attr.attributeValue) ? attr.attributeValue : undefined}
-                                                    onValueChange={(v) => selectAttributeValue(file.id, idx, v)}
-                                                  >
-                                                    <SelectTrigger className="h-8 bg-background">
-                                                      <SelectValue placeholder="Select a value…" />
-                                                    </SelectTrigger>
-                                                    <SelectContent>
-                                                      {allowed.map(v => (
-                                                        <SelectItem key={v.code} value={v.value}>{v.value}</SelectItem>
-                                                      ))}
-                                                    </SelectContent>
-                                                  </Select>
-                                                ) : (
-                                                  // Fallback: free-text when no curated values exist for this code list
-                                                  <Input
-                                                    value={attr.attributeValue}
-                                                    onChange={(e) => updateAttributeField(file.id, idx, "attributeValue", e.target.value)}
-                                                    className="h-8 bg-background"
-                                                    autoFocus
-                                                  />
-                                                )}
-                                              </div>
-                                              <div className="flex flex-col gap-1">
-                                                <Label className="text-xs text-muted-foreground">GS1 Code</Label>
-                                                {/* Code is derived from the selected value when a curated list exists */}
-                                                <Input
-                                                  value={attr.code}
-                                                  onChange={(e) => updateAttributeField(file.id, idx, "code", e.target.value)}
-                                                  readOnly={allowed.length > 0}
-                                                  className={cn("h-8 bg-background font-mono", allowed.length > 0 && "text-muted-foreground")}
-                                                />
-                                              </div>
-                                              <Button size="sm" variant="outline" className="h-7 w-fit gap-1 px-2 text-xs" onClick={() => setAiEditing(null)}>
-                                                <Check className="size-3" /> Done
-                                              </Button>
-                                            </div>
-                                          )
-                                        })()
-                                      ) : (
-                                        <>
-                                          <p className="text-sm font-medium text-foreground">{attr.attributeValue}</p>
-                                          <p className="text-xs text-muted-foreground">GS1 Code: <span className="font-mono text-foreground">{attr.code}</span></p>
-                                        </>
-                                      )}
-                                      <p className="text-xs text-muted-foreground">{attr.reason}</p>
-                                      <div className="flex items-center gap-1 pt-1">
-                                        <Button
-                                          variant={attr.accepted ? "default" : "outline"}
-                                          size="sm"
-                                          className="h-7 gap-1 px-2 text-xs"
-                                          onClick={() => setAttributeAccepted(file.id, idx, true)}
-                                        >
-                                          <Check className="size-3" /> Accept
-                                        </Button>
-                                        <Button
-                                          variant="outline"
-                                          size="sm"
-                                          className="h-7 gap-1 px-2 text-xs"
-                                          onClick={() => setAiEditing(editing ? null : { fileId: file.id, index: idx })}
-                                        >
-                                          <Pencil className="size-3" /> Edit
-                                        </Button>
-                                        <Button
-                                          variant="ghost"
-                                          size="sm"
-                                          className="h-7 gap-1 px-2 text-xs text-muted-foreground hover:text-destructive"
-                                          onClick={() => setAttributeAccepted(file.id, idx, false)}
-                                        >
-                                          <X className="size-3" /> Reject
-                                        </Button>
-                                      </div>
-                                    </div>
-                                  )
-                                })}
-                              </div>
-                            )}
-
-                            {/* Unresolved attributes for this image */}
-                            {ex.unresolvedAttributes.length > 0 && (
-                              <div className="flex flex-col gap-2 rounded border border-border bg-muted/20 p-3">
-                                <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Unresolved attributes</p>
-                                <ul className="flex flex-col gap-1">
-                                  {ex.unresolvedAttributes.map((u, i) => (
-                                    <li key={i} className="flex items-start gap-2 text-sm">
-                                      <AlertCircle className="size-3.5 text-tg-warning mt-0.5 shrink-0" />
-                                      <span className="text-foreground">{u.codeListName}:</span>
-                                      <span className="text-muted-foreground">{u.reason}</span>
-                                    </li>
-                                  ))}
-                                </ul>
-                              </div>
-                            )}
+                                      {Math.round(attr.confidence * 100)}%
+                                    </span>
+                                  </div>
+                                  {editing ? (
+                                    (() => {
+                                      const allowed = valuesForCodeList(attr.codeListName)
+                                      return (
+                                        <div className="flex flex-col gap-2">
+                                          <div className="flex flex-col gap-1">
+                                            <Label className="text-xs text-muted-foreground">Attribute Value</Label>
+                                            {allowed.length > 0 ? (
+                                              <Select
+                                                value={allowed.some(v => v.value === attr.attributeValue) ? attr.attributeValue : undefined}
+                                                onValueChange={(v) => selectAttributeValue(idx, v)}
+                                              >
+                                                <SelectTrigger className="h-8 bg-background">
+                                                  <SelectValue placeholder="Select a value…" />
+                                                </SelectTrigger>
+                                                <SelectContent>
+                                                  {allowed.map(v => (
+                                                    <SelectItem key={v.code} value={v.value}>{v.value}</SelectItem>
+                                                  ))}
+                                                </SelectContent>
+                                              </Select>
+                                            ) : (
+                                              <Input
+                                                value={attr.attributeValue}
+                                                onChange={(e) => updateAttributeField(idx, "attributeValue", e.target.value)}
+                                                className="h-8 bg-background"
+                                                autoFocus
+                                              />
+                                            )}
+                                          </div>
+                                          <div className="flex flex-col gap-1">
+                                            <Label className="text-xs text-muted-foreground">GS1 Code</Label>
+                                            <Input
+                                              value={attr.code}
+                                              onChange={(e) => updateAttributeField(idx, "code", e.target.value)}
+                                              readOnly={allowed.length > 0}
+                                              className={cn("h-8 bg-background font-mono", allowed.length > 0 && "text-muted-foreground")}
+                                            />
+                                          </div>
+                                          <Button size="sm" variant="outline" className="h-7 w-fit gap-1 px-2 text-xs" onClick={() => setAiEditing(null)}>
+                                            <Check className="size-3" /> Done
+                                          </Button>
+                                        </div>
+                                      )
+                                    })()
+                                  ) : (
+                                    <>
+                                      <p className="text-sm font-medium text-foreground">{attr.attributeValue}</p>
+                                      <p className="text-xs text-muted-foreground">GS1 Code: <span className="font-mono text-foreground">{attr.code}</span></p>
+                                    </>
+                                  )}
+                                  <p className="text-xs text-muted-foreground">{attr.reason}</p>
+                                  <div className="flex items-center gap-1 pt-1">
+                                    <Button
+                                      variant={attr.accepted ? "default" : "outline"}
+                                      size="sm"
+                                      className="h-7 gap-1 px-2 text-xs"
+                                      onClick={() => setAttributeAccepted(idx, true)}
+                                    >
+                                      <Check className="size-3" /> Accept
+                                    </Button>
+                                    <Button
+                                      variant="outline"
+                                      size="sm"
+                                      className="h-7 gap-1 px-2 text-xs"
+                                      onClick={() => setAiEditing(editing ? null : { index: idx })}
+                                    >
+                                      <Pencil className="size-3" /> Edit
+                                    </Button>
+                                    <Button
+                                      variant="ghost"
+                                      size="sm"
+                                      className="h-7 gap-1 px-2 text-xs text-muted-foreground hover:text-destructive"
+                                      onClick={() => setAttributeAccepted(idx, false)}
+                                    >
+                                      <X className="size-3" /> Reject
+                                    </Button>
+                                  </div>
+                                </div>
+                              )
+                            })}
                           </div>
-                        )
-                      })}
+                        )}
+
+                        {/* Unresolved attributes — product level */}
+                        {aiExtraction.unresolvedAttributes.length > 0 && (
+                          <div className="flex flex-col gap-2 rounded border border-border bg-muted/20 p-3 mt-1">
+                            <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Unresolved attributes</p>
+                            <ul className="flex flex-col gap-1">
+                              {aiExtraction.unresolvedAttributes.map((u, i) => (
+                                <li key={i} className="flex items-start gap-2 text-sm">
+                                  <AlertCircle className="size-3.5 text-tg-warning mt-0.5 shrink-0" />
+                                  <span className="text-foreground">{u.codeListName}:</span>
+                                  <span className="text-muted-foreground">{u.reason}</span>
+                                </li>
+                              ))}
+                            </ul>
+                          </div>
+                        )}
+                      </div>
                     </div>
                   )}
                 </div>
@@ -2852,62 +2819,49 @@ End of Metadata Export
               )}
             </div>
 
-            {/* AI-Extracted Extended Attributes summary — grouped by image, only if any accepted (item #5) */}
-            {acceptedExtractedAttributes.length > 0 && (
+            {/* AI-Extracted Product Attributes — product-level, shown once (not per image) */}
+            {acceptedExtractedAttributes.length > 0 && aiExtraction && (
               <div className="rounded border border-border bg-card p-4">
                 <div className="flex items-center gap-2 mb-3">
                   <Sparkles className="size-4 text-primary" />
-                  <h3 className="text-sm font-semibold text-foreground">AI-Extracted Extended Attributes</h3>
+                  <h3 className="text-sm font-semibold text-foreground">AI-Extracted Product Attributes</h3>
                 </div>
-                <div className="flex flex-col gap-4">
-                  {uploadedFiles.map(file => {
-                    const ex = aiExtractions[file.id]
-                    const accepted = ex?.attributes.filter(a => a.accepted) ?? []
-                    if (!ex || accepted.length === 0) return null
-                    return (
-                      <div key={file.id} className="flex flex-col gap-2">
-                        {/* Per-image header: thumbnail + filename + category */}
-                        <div className="flex items-center gap-3">
-                          <div className="size-10 shrink-0 overflow-hidden rounded border border-border bg-white flex items-center justify-center">
-                            {file.preview ? (
-                              <img src={file.preview || "/placeholder.svg"} alt={file.name} className="size-full object-contain" />
-                            ) : (
-                              <FileImage className="size-5 text-muted-foreground/40" />
-                            )}
-                          </div>
-                          <div className="min-w-0">
-                            <p className="text-sm font-medium text-foreground truncate">{file.name}</p>
-                            <p className="text-xs text-muted-foreground">{ex.category}</p>
-                          </div>
-                        </div>
-                        <div className="overflow-x-auto">
-                          <table className="w-full text-sm">
-                            <thead className="bg-muted/30">
-                              <tr>
-                                <th className="px-3 py-2 text-left font-medium text-foreground">Code List Name</th>
-                                <th className="px-3 py-2 text-left font-medium text-foreground">Attribute Value</th>
-                                <th className="px-3 py-2 text-left font-medium text-foreground">GS1 Code</th>
-                                <th className="px-3 py-2 text-left font-medium text-foreground">Confidence</th>
-                              </tr>
-                            </thead>
-                            <tbody>
-                              {accepted.map((attr, idx) => (
-                                <tr key={`${attr.code}-${idx}`} className="border-t border-border">
-                                  <td className="px-3 py-2 text-foreground">{attr.codeListName}</td>
-                                  <td className="px-3 py-2 text-foreground">{attr.attributeValue}</td>
-                                  <td className="px-3 py-2 font-mono text-foreground">{attr.code}</td>
-                                  <td className="px-3 py-2 text-muted-foreground">{Math.round(attr.confidence * 100)}%</td>
-                                </tr>
-                              ))}
-                            </tbody>
-                          </table>
-                        </div>
-                      </div>
-                    )
-                  })}
+                {/* Product-level meta */}
+                <div className="flex flex-wrap gap-x-4 gap-y-1 mb-3">
+                  <p className="text-xs text-muted-foreground">
+                    Category: <span className="font-medium text-foreground">{aiExtraction.category}</span>
+                  </p>
+                  <p className="text-xs text-muted-foreground">
+                    Images analyzed: <span className="font-medium text-foreground">{aiExtraction.imageCount}</span>
+                    {aiExtraction.imageNames.length > 0 && (
+                      <span> ({aiExtraction.imageNames.join(", ")})</span>
+                    )}
+                  </p>
+                </div>
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm">
+                    <thead className="bg-muted/30">
+                      <tr>
+                        <th className="px-3 py-2 text-left font-medium text-foreground">Code List Name</th>
+                        <th className="px-3 py-2 text-left font-medium text-foreground">Attribute Value</th>
+                        <th className="px-3 py-2 text-left font-medium text-foreground">GS1 Code</th>
+                        <th className="px-3 py-2 text-left font-medium text-foreground">Confidence</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {acceptedExtractedAttributes.map((attr, idx) => (
+                        <tr key={`${attr.code}-${idx}`} className="border-t border-border">
+                          <td className="px-3 py-2 text-foreground">{attr.codeListName}</td>
+                          <td className="px-3 py-2 text-foreground">{attr.attributeValue}</td>
+                          <td className="px-3 py-2 font-mono text-foreground">{attr.code}</td>
+                          <td className="px-3 py-2 text-muted-foreground">{Math.round(attr.confidence * 100)}%</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
                 </div>
                 <p className="mt-3 text-xs text-muted-foreground">
-                  These extended attributes are stored separately from image attributes.
+                  These product-level extended attributes are stored separately from image attributes.
                 </p>
               </div>
             )}

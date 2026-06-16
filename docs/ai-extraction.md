@@ -52,11 +52,11 @@ The route:
 
 | Scenario | Mock | Gemini |
 |---|---|---|
-| Category selected, images uploaded | Runs instantly after ~1.2 s | Sends one request per image in parallel |
-| Image clearly matches category | Returns seeded suggestions, accepted by default | Returns Gemini suggestions validated against full category map |
-| Image is ambiguous or unlabeled | Returns suggestions with low confidence | Returns empty attributes, all code lists in unresolvedAttributes |
+| Category selected, images uploaded | Runs instantly after ~0.9 s | Sends all images together in one request |
+| Images clearly match category | Returns seeded suggestions, accepted by default | Returns Gemini suggestions validated against full category map |
+| Images are ambiguous or unlabeled | Returns suggestions with low confidence | Returns empty attributes, all code lists in unresolvedAttributes |
 | Restricted attribute attempted | Never returned (not in mock data) | Blocked by prompt rules + server-side validation |
-| Error on one image | N/A (mock never errors) | Only that image is marked error; others complete independently |
+| Extraction error | N/A (mock never errors) | Product-level error; all images fail together — user can retry |
 | Missing GEMINI_API_KEY | N/A | Returns 500 with clean error message |
 
 ---
@@ -102,9 +102,9 @@ These restrictions are enforced both in the Gemini prompt and in the server-side
 
 | Type | Location | Purpose |
 |---|---|---|
-| `ExtractionApiResponse` | `app/api/extract-attributes/route.ts` | Shape returned by the route (no lifecycle fields) |
+| `ExtractionApiResponse` | `app/api/extract-attributes/route.ts` | Shape returned by the route — includes `category`, `imageCount`, `imageNames`, `attributes`, `unresolvedAttributes` |
 | `ExtractionApiResponse` | `image-upload-wizard.tsx` (client-side copy) | Mirrors the route type without importing server code |
-| `ExtractionResult` | `image-upload-wizard.tsx` | Per-image frontend state — extends the API response with `fileId`, `fileName`, `status`, `error` |
+| `ProductExtractionResult` | `image-upload-wizard.tsx` | Product-level frontend state — extends the API response with `status` and `error`; replaces the old per-image `ExtractionResult` / `aiExtractions` record |
 | `ExtractedAttribute` | `image-upload-wizard.tsx` | Single suggestion row, adds `accepted: boolean` |
 
 ---
@@ -138,18 +138,18 @@ The allowed-options map is **generated at build time from the full CSV** — no 
    Names (full values within those lists). Adding a new Code List to a category requires editing
    `CATEGORY_ROUTING` in `scripts/generate-gs1-options.mjs` and regenerating.
 
-2. **Same suggestions for all images in a batch (mock only).** In mock mode every image receives
-   identical suggestions because the mock is category-keyed, not image-keyed. Gemini mode sends one
-   real request per image and returns per-image results.
+2. **One consolidated result for all images.** Both mock and Gemini mode return a single product-level
+   attribute set — there is no per-image breakdown of which image contributed which attribute. If
+   images conflict Gemini must resolve internally; the app does not surface per-image attribution.
 
 3. **Default category heuristic is keyword-based.** `getDefaultCategory()` matches
    `tops/dress/shirt/apparel/clothing` → Apparel, otherwise defaults to Shoes. It does not detect
    Bags, Jewelry, Beauty, or Home automatically.
 
-4. **No streaming.** Results appear per image on request completion. There is no partial/streaming UI.
+4. **No streaming.** Results appear after the full request completes. There is no partial/streaming UI.
 
-5. **Error state has no mock trigger.** In mock mode the error state (`anyError`) is never triggered.
-   To test the error UI, temporarily modify `runMockExtraction` to set `status: "error"` for one image.
+5. **Error state has no mock trigger.** In mock mode the error state is never triggered.
+   To test the error UI, temporarily modify `runMockExtraction` to set `status: "error"`.
 
 6. **Generated module is committed.** Re-run the generator whenever the CSV or routing changes;
    the output `lib/gs1/generated-options.ts` is checked into the repo.
@@ -177,8 +177,8 @@ Switch to Gemini mode only for internal engineering demos or when real image ana
 | `lib/gs1/types.ts` | Client-safe types: `GS1AttributeOption`, `CategoryOptions`, `ProductCategory`, `isProductCategory` |
 | `lib/gs1/mock-scenarios.ts` | Mock seeds, codes resolved at runtime against fetched options |
 | `app/api/attribute-options/route.ts` | GET: serves single-category options to client (SWR cache) |
-| `app/api/extract-attributes/route.ts` | POST: grounds Gemini against full category map, re-validates response |
-| `components/trading-grid/image-upload-wizard.tsx` | SWR fetch, `valuesForCodeList`, `buildMockExtraction`, `runGeminiExtraction` |
+| `app/api/extract-attributes/route.ts` | POST: accepts `{ category, images: [...] }`, sends all images in one Gemini call, returns one product-level result |
+| `components/trading-grid/image-upload-wizard.tsx` | `ProductExtractionResult` (product-level state), `aiExtraction` (singular), updated handlers and UI |
 | `docs/ai-extraction.md` | This file |
 
 ### Generation approach
@@ -200,7 +200,7 @@ lists are taken wholesale from the CSV. Original GS1 codes are preserved verbati
 
 ### Test results
 
-**`tsc --noEmit`:** exit 0, zero errors.
+**`tsc --noEmit`:** exit 0, zero errors (including after product-level refactor).
 
 **`generate:gs1`:** generates cleanly, 1,218 total values across all categories, zero missing
 `codeListName`/`attributeValue`/`code` fields, zero duplicates within any category code list.
@@ -238,5 +238,8 @@ The browser receives only the selected category's options via `GET /api/attribut
 **Mock mode (no API key):** works, no key required. Pass.
 **Gemini mode (`NEXT_PUBLIC_EXTRACTION_MODE=gemini`):** works with `GEMINI_API_KEY`. Pass.
 **Missing `GEMINI_API_KEY`:** route returns 500 with `"GEMINI_API_KEY is not configured on the server."`. Pass.
-**Review & Confirm:** groups accepted AI attributes by image (`uploadedFiles.map` at line 2828,
-keyed by `file.id`, filtered by `a.accepted`). Pass.
+**Review & Confirm:** renders `acceptedExtractedAttributes` from the single `aiExtraction` state as one product-level table (not grouped by image). Pass.
+
+**Product-level API request shape:** `POST /api/extract-attributes` now accepts `{ category, images: [{ fileName, imageBase64, mimeType }] }` and returns one `ExtractionApiResponse` with `imageCount` and `imageNames`. Pass.
+
+**State model:** `aiExtractions: Record<string, ExtractionResult>` replaced by `aiExtraction: ProductExtractionResult | null`. `aiEditing` scope reduced from `{ fileId, index }` to `{ index }`. All call sites (`removeFile`, `clearExtraction`, category select, skip, re-run, replace-image, delete-from-dialog, product-change) updated. Zero stale references. Pass.
