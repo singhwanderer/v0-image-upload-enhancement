@@ -66,54 +66,89 @@ interface ImageUploadWizardProps {
 // Mock data with multiple GTINs per product and 3-digit color codes
 const MOCK_DATA = {
   selectionCodes: [
-    { code: "001", description: "dresses" },
-    { code: "002", description: "tops" },
-    { code: "003", description: "Dresses" },
-    { code: "004", description: "Womens Jeans" },
-    { code: "005", description: "Footwear" },
+    { code: "001", description: "Apparel / Dresses" },
+    { code: "002", description: "Apparel / Tops" },
+    { code: "003", description: "Apparel / Denim" },
+    { code: "004", description: "Footwear" },
+    { code: "005", description: "Bags" },
+    { code: "006", description: "Jewelry" },
+    { code: "007", description: "Beauty" },
+    { code: "008", description: "Home" },
   ],
   products: [
-    { 
-      id: "1TESTPROD1", 
-      description: "1TESTPROD1 Desc", 
+    {
+      id: "DRESS001",
+      description: "Summer Floral Dress",
       gtins: [
-        { gtin: "574211012895", type: "UA" },
-        { gtin: "574211012901", type: "EA" },
-        { gtin: "574211012918", type: "CS" },
-      ] 
+        { gtin: "00123456789001", type: "UA" },
+        { gtin: "00123456789011", type: "EA" },
+      ],
     },
-    { 
-      id: "TESTPROD2", 
-      description: "Summer Floral Dress", 
+    {
+      id: "TOP001",
+      description: "Cotton Blouse",
       gtins: [
-        { gtin: "00123456789013", type: "UA" },
-        { gtin: "00123456789023", type: "EA" },
-      ] 
+        { gtin: "00123456789002", type: "UA" },
+        { gtin: "00123456789012", type: "EA" },
+      ],
     },
-    { 
-      id: "B11442", 
-      description: "Boon DESERT Drying Rack", 
+    {
+      id: "DENIM001",
+      description: "Classic Denim Jacket",
       gtins: [
-        { gtin: "00123456789014", type: "UA" },
-      ] 
+        { gtin: "00123456789003", type: "UA" },
+        { gtin: "00123456789013", type: "EA" },
+        { gtin: "00123456789023", type: "CS" },
+      ],
     },
-    { 
-      id: "TESTPROD4", 
-      description: "Classic Denim Jacket", 
+    {
+      id: "SHOE001",
+      description: "Low-Top Running Sneaker",
       gtins: [
-        { gtin: "00123456789015", type: "UA" },
-        { gtin: "00123456789025", type: "EA" },
-        { gtin: "00123456789035", type: "CS" },
-        { gtin: "00123456789045", type: "PK" },
-      ] 
+        { gtin: "00123456789004", type: "UA" },
+        { gtin: "00123456789014", type: "EA" },
+        { gtin: "00123456789024", type: "CS" },
+        { gtin: "00123456789034", type: "PK" },
+      ],
     },
-    { 
-      id: "TESTPROD5", 
-      description: "Cotton Blend Cardigan", 
+    {
+      id: "BAG001",
+      description: "Leather Crossbody Bag",
       gtins: [
-        { gtin: "00123456789016", type: "UA" },
-        { gtin: "00123456789026", type: "EA" },
-      ] 
+        { gtin: "00123456789005", type: "UA" },
+        { gtin: "00123456789015", type: "EA" },
+      ],
+    },
+    {
+      id: "JEWEL001",
+      description: "Gold Hoop Earrings",
+      gtins: [
+        { gtin: "00123456789006", type: "UA" },
+        { gtin: "00123456789016", type: "EA" },
+      ],
+    },
+    {
+      id: "BEAUTY001",
+      description: "Hydrating Face Serum",
+      gtins: [
+        { gtin: "00123456789007", type: "UA" },
+        { gtin: "00123456789017", type: "EA" },
+      ],
+    },
+    {
+      id: "HOME001",
+      description: "Cotton Bath Towel",
+      gtins: [
+        { gtin: "00123456789008", type: "UA" },
+        { gtin: "00123456789018", type: "EA" },
+      ],
+    },
+    {
+      id: "HOME002",
+      description: "Desert Drying Rack",
+      gtins: [
+        { gtin: "00123456789009", type: "UA" },
+      ],
     },
   ],
   // 3-digit color codes as per requirement
@@ -403,8 +438,8 @@ export function ImageUploadWizard({
   portalType = "supplier",
 }: ImageUploadWizardProps) {
   const [currentStep, setCurrentStep] = useState(1)
-  const [selectedSelectionCode, setSelectedSelectionCode] = useState("")
-  const [selectedProduct, setSelectedProduct] = useState("")
+  const [selectedSelectionCode, setSelectedSelectionCode] = useState("001")
+  const [selectedProduct, setSelectedProduct] = useState("DRESS001")
   const [selectedColorCode, setSelectedColorCode] = useState("")
   const [selectedGtin, setSelectedGtin] = useState("")
   const [uploadedFiles, setUploadedFiles] = useState<UploadedFile[]>([])
