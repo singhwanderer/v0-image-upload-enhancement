@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server"
 import { GoogleGenAI } from "@google/genai"
-import { getOptionsForCategory } from "@/lib/gs1-attribute-options"
+import { getCategoryOptions } from "@/lib/gs1/generated-options"
 
 // Server-only route. The GEMINI_API_KEY never reaches the client.
 export const runtime = "nodejs"
@@ -9,6 +9,24 @@ export const maxDuration = 60
 const ALLOWED_CATEGORIES = ["Shoes", "Apparel", "Bags", "Jewelry", "Beauty", "Home"] as const
 const ALLOWED_MIME_TYPES = ["image/jpeg", "image/jpg", "image/png", "image/webp"]
 const GEMINI_MODEL = "gemini-2.5-flash"
+
+// ExtractionApiResponse: the shape returned by this route.
+// It intentionally does NOT include fileId, fileName, or status — those are added
+// by the client (runGeminiExtraction) when it merges the response into ExtractionResult.
+export type ExtractionApiResponse = {
+  category: string
+  attributes: {
+    codeListName: string
+    attributeValue: string
+    code: string
+    confidence: number
+    reason: string
+  }[]
+  unresolvedAttributes: {
+    codeListName: string
+    reason: string
+  }[]
+}
 
 type RawAttribute = {
   codeListName?: unknown
@@ -103,7 +121,7 @@ export async function POST(request: Request) {
   }
 
   // 5. Load ONLY this category's curated GS1 options (never the full CSV)
-  const options = getOptionsForCategory(category)
+  const options = getCategoryOptions(category)
   if (options.length === 0) {
     return NextResponse.json({ category, attributes: [], unresolvedAttributes: [] })
   }
@@ -179,7 +197,7 @@ Return JSON in exactly this shape:
     })
     rawText = response.text ?? ""
   } catch (err) {
-    console.log("[v0] Gemini request failed:", err instanceof Error ? err.message : String(err))
+    console.error("[extract-attributes] Gemini request failed:", err instanceof Error ? err.message : String(err))
     return NextResponse.json(
       { error: "AI extraction failed. Please try again or continue manually." },
       { status: 500 },
@@ -198,7 +216,7 @@ Return JSON in exactly this shape:
   try {
     parsed = JSON.parse(extractJsonText(rawText))
   } catch (err) {
-    console.log("[v0] Failed to parse Gemini JSON:", err instanceof Error ? err.message : String(err))
+    console.error("[extract-attributes] Failed to parse Gemini JSON:", err instanceof Error ? err.message : String(err))
     return NextResponse.json(
       { error: "AI returned an unreadable response. Please try again or continue manually." },
       { status: 500 },
@@ -262,8 +280,8 @@ Return JSON in exactly this shape:
     return true
   })
 
-  // 10. Clean response
-  return NextResponse.json({
+  // 10. Clean response — typed as ExtractionApiResponse (no fileId/fileName/status)
+  return NextResponse.json<ExtractionApiResponse>({
     category,
     attributes: cleanAttributes,
     unresolvedAttributes: dedupedUnresolved,
