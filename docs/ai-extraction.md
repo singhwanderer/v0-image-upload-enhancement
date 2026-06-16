@@ -61,6 +61,26 @@ The route:
 
 ---
 
+## Grounding and validation
+
+**Gemini is grounded by the full CSV-derived values for the selected category only.**
+
+- The route calls `getCategoryOptions(category)`, which returns only the Code List Names that have
+  been explicitly routed to that category in `CATEGORY_ROUTING` (see the generator script).
+- Unrelated Code List Names are **excluded entirely**. For example, when `category = Shoes`, Gemini
+  receives no mention of Bedding Size, SPF Rating, Jewelry Type, Beauty Treatment Specialty, Rug Type,
+  Watch Case Shape, or any other non-shoe list.
+- The full CSV (all 94 Code List Names, all categories) is **never sent to Gemini**. Only the
+  relevant subset for the selected category is injected into the prompt, reducing token usage and
+  eliminating confusion from irrelevant lists.
+- **Server-side validation is authoritative.** After the model responds, the route re-validates every
+  suggested attribute: unknown Code List Names are dropped to `unresolvedAttributes`; unknown
+  Attribute Values are dropped to `unresolvedAttributes`; the GS1 code is always overwritten with the
+  authoritative value from the generated map (Gemini's returned code is not trusted); extra fields
+  are ignored; malformed JSON returns a 400 with a clean error message.
+
+---
+
 ## Guardrails — restricted attributes
 
 The following attributes are **never returned** in `attributes` unless visible on product packaging,
@@ -144,3 +164,79 @@ category options the client fetches), so the UX (per-image results, Accept/Edit/
 summary, unresolved attributes) is fully exercisable without any real model calls.
 
 Switch to Gemini mode only for internal engineering demos or when real image analysis is needed.
+
+---
+
+## Verification summary (last run)
+
+### Files changed
+| File | Role |
+|---|---|
+| `scripts/generate-gs1-options.mjs` | Build-time CSV parser and code generator |
+| `lib/gs1/generated-options.ts` | Generated full options map (server-only by convention) |
+| `lib/gs1/types.ts` | Client-safe types: `GS1AttributeOption`, `CategoryOptions`, `ProductCategory`, `isProductCategory` |
+| `lib/gs1/mock-scenarios.ts` | Mock seeds, codes resolved at runtime against fetched options |
+| `app/api/attribute-options/route.ts` | GET: serves single-category options to client (SWR cache) |
+| `app/api/extract-attributes/route.ts` | POST: grounds Gemini against full category map, re-validates response |
+| `components/trading-grid/image-upload-wizard.tsx` | SWR fetch, `valuesForCodeList`, `buildMockExtraction`, `runGeminiExtraction` |
+| `docs/ai-extraction.md` | This file |
+
+### Generation approach
+`scripts/generate-gs1-options.mjs` reads `GS1_Extended_Attribute_Code_Lists_Fixed.csv`, normalizes
+OCR whitespace artifacts, splits mashed-together rows (e.g. `"Flats GM03SE TPFL Slippers"` →
+`Flats / GM03SETPFL` + `Slippers / GM03SETPSL`), and emits `lib/gs1/generated-options.ts`. Each
+category maps to a curated list of relevant Code List Names via `CATEGORY_ROUTING`; values for those
+lists are taken wholesale from the CSV. Original GS1 codes are preserved verbatim.
+
+### Category counts
+| Category | Code Lists | Attribute Values | Gemini prompt (bytes) | Client JSON (bytes) |
+|---|---|---|---|---|
+| Shoes | 12 | 264 | 7,350 | 11,667 |
+| Apparel | 11 | 309 | 8,553 | 13,520 |
+| Bags | 8 | 258 | 7,156 | 11,274 |
+| Jewelry | 11 | 186 | 5,141 | 8,263 |
+| Beauty | 6 | 79 | 2,055 | 3,436 |
+| Home | 10 | 122 | 3,597 | 5,729 |
+
+### Test results
+
+**`tsc --noEmit`:** exit 0, zero errors.
+
+**`generate:gs1`:** generates cleanly, 1,218 total values across all categories, zero missing
+`codeListName`/`attributeValue`/`code` fields, zero duplicates within any category code list.
+
+**Category filtering (Shoes):** Bedding Size, SPF Rating, Jewelry Type, Beauty Treatment Specialty,
+Rug Type, Watch Case Shape, Code List for Dinnerware Category — all absent. Pass.
+
+**Category filtering (Apparel):** Shoe Type, Heel Type, Bag Type, Jewelry Type, SPF Rating,
+Bedding Size — all absent. Pass.
+
+**Mock extraction — all six categories:** all codes grounded (`groundedInList=true`), no mismatches.
+Pass.
+
+**Server-side validation — 400 paths:** malformed JSON → 400; empty `imageBase64` → 400;
+unsupported MIME (`image/bmp`) → 400; invalid category (`Furniture`) → 400. All with clean JSON
+error messages. Pass.
+
+**Gemini live — Shoes (sneaker image):** 10 accepted attributes, 2 unresolved (`Heel Material`,
+`Water Repellent`). All 10 codes validated against full map — no mismatches. Pass.
+
+**Gemini live — Apparel (floral dress image):** 7 accepted attributes, 4 unresolved (`Closure`,
+`Primary Detail Type`, `Primary Detail Placement`, `Primary Detail Application`). All 7 codes
+validated — no mismatches. Pass.
+
+**Gemini live — ambiguous (plain cardboard box, category=Shoes):** 0 accepted, 12 unresolved
+(all 12 Shoes code lists). Pass.
+
+**Client bundle:** `generated-options.ts` is not imported by any client component or page. The wizard
+imports only `useSWR`, `CategoryOptions` (type-only), and `buildMockExtraction` from `lib/gs1/`.
+The browser receives only the selected category's options via `GET /api/attribute-options`. Pass.
+
+**Edit dropdowns:** `valuesForCodeList(codeListName)` pulls from SWR-cached
+`CategoryOptions` (full CSV values for that code list), not the old ~6-value subset. Pass.
+
+**Mock mode (no API key):** works, no key required. Pass.
+**Gemini mode (`NEXT_PUBLIC_EXTRACTION_MODE=gemini`):** works with `GEMINI_API_KEY`. Pass.
+**Missing `GEMINI_API_KEY`:** route returns 500 with `"GEMINI_API_KEY is not configured on the server."`. Pass.
+**Review & Confirm:** groups accepted AI attributes by image (`uploadedFiles.map` at line 2828,
+keyed by `file.id`, filtered by `a.accepted`). Pass.
