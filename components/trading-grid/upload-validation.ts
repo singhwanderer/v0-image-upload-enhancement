@@ -7,7 +7,10 @@ export type ValidationError = {
   ruleFailed: string
 }
 
-const MAX_SIZE_BYTES = 500 * 1024 // 500 KB
+const MAX_SIZE_BYTES = 4 * 1024 * 1024 // 4 MB
+
+const ALLOWED_EXTENSIONS = ["jpg", "jpeg", "png", "webp"]
+const ALLOWED_MIME_PREFIXES = ["image/jpeg", "image/png", "image/webp"]
 
 // Validates a single file; returns ValidationError or null if valid
 export function validateImageFile(file: File): ValidationError | null {
@@ -16,17 +19,20 @@ export function validateImageFile(file: File): ValidationError | null {
     return {
       fileName: file.name,
       observedValue: `${(file.size / 1024).toFixed(0)} KB`,
-      ruleFailed: `Must be ≤ 500 KB`,
+      ruleFailed: `Must be ≤ 4 MB`,
     }
   }
 
-  // Format check — only .jpg / .jpeg
+  // Format check — jpg, jpeg, png, webp
   const ext = file.name.split(".").pop()?.toLowerCase()
-  if (!["jpg", "jpeg"].includes(ext ?? "") || !file.type.includes("jpeg")) {
+  if (
+    !ALLOWED_EXTENSIONS.includes(ext ?? "") ||
+    !ALLOWED_MIME_PREFIXES.some(prefix => file.type.startsWith(prefix))
+  ) {
     return {
       fileName: file.name,
       observedValue: ext?.toUpperCase() ?? "unknown",
-      ruleFailed: "Must be .jpg or .jpeg",
+      ruleFailed: "Must be .jpg, .jpeg, .png, or .webp",
     }
   }
 

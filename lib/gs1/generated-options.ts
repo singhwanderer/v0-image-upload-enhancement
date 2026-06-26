@@ -1,3 +1,4 @@
+// @generated
 // =============================================================================
 // GENERATED FILE — DO NOT EDIT BY HAND.
 // Produced by scripts/generate-gs1-options.mjs from

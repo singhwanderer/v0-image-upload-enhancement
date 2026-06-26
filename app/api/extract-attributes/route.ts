@@ -195,8 +195,8 @@ Rules:
 - If an attribute is clearly visible in any of the uploaded images, it can be suggested.
 - If an attribute is not visible in any of the uploaded images, put it in unresolvedAttributes.
 - If images show conflicting evidence for the same attribute, put that attribute in unresolvedAttributes and explain the conflict in the reason field.
-- Do not infer hidden or non-visible attributes.
-- Do not infer Advertised Origin, Care Instructions, Water Repellent, SPF Rating, Scent Type, or Material Composition unless visible on packaging, product label, or readable text in an image.
+- Visual inference is allowed for most attributes — suggest them if the product appearance in any image supports the classification.
+- The following attributes require visible text on packaging, labels, or product markings and must NOT be inferred from appearance alone: Advertised Origin, Care Instructions, Water Repellent, SPF Rating, Scent Type, Material Composition. If not readable in any image, move them to unresolvedAttributes.
 - Reference the image name(s) in the reason field where helpful (e.g. "Visible in Image 1: front-view.jpg").
 - Confidence must be a number between 0 and 1.
 - Return JSON only, with no markdown fences and no commentary.
@@ -217,9 +217,8 @@ Return JSON in exactly this shape:
     inlineData: { mimeType: img.mimeType, data: img.imageBase64 },
   }))
 
-  // 8. Call Gemini with all images in one request
-  let rawText: string
-  try {
+  // 8. Call Gemini with all images in one request (1 silent retry on network/server errors)
+  const callGemini = async (): Promise<string> => {
     const ai = new GoogleGenAI({ apiKey })
     const response = await ai.models.generateContent({
       model: GEMINI_MODEL,
@@ -234,16 +233,30 @@ Return JSON in exactly this shape:
         temperature: 0.2,
       },
     })
-    rawText = response.text ?? ""
-  } catch (err) {
-    console.error(
-      "[extract-attributes] Gemini request failed:",
-      err instanceof Error ? err.message : String(err),
+    return response.text ?? ""
+  }
+
+  let rawText: string
+  try {
+    rawText = await callGemini()
+  } catch (firstErr) {
+    console.warn(
+      "[extract-attributes] Gemini request failed, retrying in 2s:",
+      firstErr instanceof Error ? firstErr.message : String(firstErr),
     )
-    return NextResponse.json(
-      { error: "AI extraction failed. Please try again or continue manually." },
-      { status: 500 },
-    )
+    try {
+      await new Promise(resolve => setTimeout(resolve, 2000))
+      rawText = await callGemini()
+    } catch (retryErr) {
+      console.error(
+        "[extract-attributes] Gemini retry also failed:",
+        retryErr instanceof Error ? retryErr.message : String(retryErr),
+      )
+      return NextResponse.json(
+        { error: "AI extraction failed. Please try again or continue manually." },
+        { status: 500 },
+      )
+    }
   }
 
   if (!rawText.trim()) {
