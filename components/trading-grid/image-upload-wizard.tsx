@@ -266,6 +266,7 @@ type ProductExtractionResult = {
   unresolvedAttributes: UnresolvedAttribute[]
   status: "idle" | "extracting" | "complete" | "error"
   error?: string
+  fallbackUsed?: boolean
 }
 
 // Product categories offered in the AI extraction card
@@ -644,14 +645,19 @@ export function ImageUploadWizard({
         unresolvedAttributes: Array.isArray(data.unresolvedAttributes) ? data.unresolvedAttributes : [],
         status: "complete",
       })
-    } catch (err) {
-      setAiExtraction(prev => prev ? {
-        ...prev,
-        attributes: [],
-        unresolvedAttributes: [],
-        status: "error",
-        error: err instanceof Error ? err.message : "Extraction failed.",
-      } : null)
+    } catch {
+      // Auto-fallback to mock/demo results when Gemini is unavailable
+      const options = categoryOptions.length > 0 ? categoryOptions : await fetchCategoryOptions(category)
+      const mock = buildMockExtraction(category, options)
+      setAiExtraction({
+        category,
+        imageCount: targets.length,
+        imageNames: targets.map(f => f.name),
+        attributes: mock.attributes.map(a => ({ ...a, accepted: true })),
+        unresolvedAttributes: mock.unresolvedAttributes,
+        status: "complete",
+        fallbackUsed: true,
+      })
     }
   }
 
@@ -713,6 +719,27 @@ export function ImageUploadWizard({
           const match = valuesForCodeList(a.codeListName).find(v => v.value === value)
           return { ...a, attributeValue: value, code: match?.code ?? a.code }
         }),
+      }
+    })
+  }
+
+  // Resolve an unresolved attribute by selecting a value from the GS1 options.
+  const resolveUnresolvedAttribute = (unresolvedIndex: number, codeListName: string, value: string) => {
+    const match = valuesForCodeList(codeListName).find(v => v.value === value)
+    if (!match) return
+    setAiExtraction(prev => {
+      if (!prev) return prev
+      return {
+        ...prev,
+        attributes: [...prev.attributes, {
+          codeListName,
+          attributeValue: value,
+          code: match.code,
+          confidence: 1.0,
+          reason: "Manually added by user.",
+          accepted: true,
+        }],
+        unresolvedAttributes: prev.unresolvedAttributes.filter((_, i) => i !== unresolvedIndex),
       }
     })
   }
@@ -1374,7 +1401,7 @@ End of Metadata Export
                             Replace image
                             <input
                               type="file"
-                              accept="image/jpeg,.jpg,.jpeg"
+                              accept="image/jpeg,image/png,image/webp,.jpg,.jpeg,.png,.webp"
                               className="hidden"
                               onChange={(e) => {
                                 const f = e.target.files?.[0]
@@ -1395,7 +1422,7 @@ End of Metadata Export
                             </button>
                           )}
                         </div>
-                        <p className="text-xs text-muted-foreground">Max 500 KB &middot; JPG/JPEG only</p>
+                        <p className="text-xs text-muted-foreground">Max 4 MB &middot; JPG, PNG, or WebP</p>
                       </div>
                     </div>
                   </div>
@@ -2092,7 +2119,7 @@ End of Metadata Export
                   </div>
                   <input
                     type="file"
-                    accept="image/jpeg,.jpg,.jpeg"
+                    accept="image/jpeg,image/png,image/webp,.jpg,.jpeg,.png,.webp"
                     multiple
                     className="hidden"
                     id="file-upload"
@@ -2104,7 +2131,7 @@ End of Metadata Export
                     </Button>
                   </label>
                   <p className="text-xs text-muted-foreground">
-                    Max 500 KB each &middot; JPG/JPEG only &middot;{" "}
+                    Max 4 MB each &middot; JPG, PNG, or WebP &middot;{" "}
                     <a href="#" className="text-tg-link hover:underline">
                       View GS1 guidelines
                     </a>
@@ -2235,7 +2262,7 @@ End of Metadata Export
                     <span className="text-xs text-muted-foreground">Add More</span>
                     <input
                       type="file"
-                      accept="image/jpeg,.jpg,.jpeg"
+                      accept="image/jpeg,image/png,image/webp,.jpg,.jpeg,.png,.webp"
                       multiple
                       className="hidden"
                       id="file-upload-more"
@@ -2376,6 +2403,16 @@ End of Metadata Export
                           Re-run
                         </Button>
                       </div>
+                      {/* Fallback banner when Gemini was unavailable */}
+                      {aiExtraction.fallbackUsed && (
+                        <div className="flex items-center justify-between rounded border border-primary/30 bg-primary/5 px-3 py-2">
+                          <div className="flex items-center gap-2">
+                            <Info className="size-4 text-primary shrink-0" />
+                            <p className="text-sm text-foreground">AI service unavailable — showing demo results.</p>
+                          </div>
+                          <Button variant="outline" size="sm" onClick={runExtraction}>Try again with AI</Button>
+                        </div>
+                      )}
                       <div className="flex items-start gap-2 rounded bg-muted/30 p-2">
                         <Info className="size-3.5 text-muted-foreground mt-0.5 shrink-0" />
                         <p className="text-xs text-muted-foreground">AI-generated attributes should be reviewed before saving. All images were analyzed together to produce this single product-level attribute set.</p>
@@ -2498,14 +2535,33 @@ End of Metadata Export
                         {aiExtraction.unresolvedAttributes.length > 0 && (
                           <div className="flex flex-col gap-2 rounded border border-border bg-muted/20 p-3 mt-1">
                             <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Unresolved attributes</p>
-                            <ul className="flex flex-col gap-1">
-                              {aiExtraction.unresolvedAttributes.map((u, i) => (
-                                <li key={i} className="flex items-start gap-2 text-sm">
-                                  <AlertCircle className="size-3.5 text-tg-warning mt-0.5 shrink-0" />
-                                  <span className="text-foreground">{u.codeListName}:</span>
-                                  <span className="text-muted-foreground">{u.reason}</span>
-                                </li>
-                              ))}
+                            <ul className="flex flex-col gap-2">
+                              {aiExtraction.unresolvedAttributes.map((u, i) => {
+                                const options = valuesForCodeList(u.codeListName)
+                                return (
+                                  <li key={i} className="flex items-start gap-2 text-sm">
+                                    <AlertCircle className="size-3.5 text-tg-warning mt-0.5 shrink-0" />
+                                    <div className="flex-1">
+                                      <span className="text-foreground">{u.codeListName}: </span>
+                                      <span className="text-muted-foreground">{u.reason}</span>
+                                    </div>
+                                    {options.length > 0 && (
+                                      <select
+                                        className="h-7 rounded border border-border bg-background px-2 text-xs text-foreground"
+                                        defaultValue=""
+                                        onChange={(e) => {
+                                          if (e.target.value) resolveUnresolvedAttribute(i, u.codeListName, e.target.value)
+                                        }}
+                                      >
+                                        <option value="" disabled>Add manually…</option>
+                                        {options.map(o => (
+                                          <option key={o.code} value={o.value}>{o.value}</option>
+                                        ))}
+                                      </select>
+                                    )}
+                                  </li>
+                                )
+                              })}
                             </ul>
                           </div>
                         )}
