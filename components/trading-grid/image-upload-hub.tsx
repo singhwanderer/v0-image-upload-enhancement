@@ -27,19 +27,32 @@ interface ImageUploadLandingProps {
 
 // Mock vendor data for retailer portal
 const MOCK_VENDORS = [
-  { id: "1", name: "KIBBLES N BITS", accountNumber: "125103335555", selectionCodes: 5, products: 156 },
+  { id: "1", name: "APEX ATHLETIC FOOTWEAR", accountNumber: "125103335555", selectionCodes: 5, products: 156 },
   { id: "2", name: "TRAILBLAZE FOOTWEAR", accountNumber: "127142417199", selectionCodes: 3, products: 89 },
   { id: "3", name: "STRIDEWORKS INC", accountNumber: "198765432100", selectionCodes: 8, products: 234 },
 ]
 
 const MOCK_PRODUCTS = [
-  { id: "RUNCOOL-GRY-M", description: "Men's Cool Runner - Grey", createDate: "03/25/2026", lastUpdate: "05/06/2026", gtins: 1, images: 4 },
-  { id: "NEWATTRIBUTESK", description: "NEWATTRIBUTESK", createDate: "11/04/2025", lastUpdate: "04/13/2026", gtins: 2, images: 1 },
+  { id: "RUNCOOL-GRY-M", description: "Men's Cool Runner - Grey", createDate: "03/25/2026", lastUpdate: "05/06/2026", gtins: 1, images: 2 },
+  { id: "COURT-WHT-M", description: "Men's Court Classic - White", createDate: "11/04/2025", lastUpdate: "04/13/2026", gtins: 2, images: 2 },
   { id: "TRLRUN-BLK-M", description: "Men's Trail Runner - Black", createDate: "01/20/2026", lastUpdate: "04/28/2026", gtins: 1, images: 2 },
-  { id: "NEWPRODD", description: "NEWPRODD Desc", createDate: "11/04/2025", lastUpdate: "01/20/2026", gtins: 1, images: 0 },
-  { id: "NEWPRODE", description: "Sample MS", createDate: "03/09/2026", lastUpdate: "", gtins: 0, images: 0 },
-  { id: "OUTBOUND", description: "OUTBOUND Desc", createDate: "01/27/2026", lastUpdate: "01/27/2026", gtins: 1, images: 0 },
+  { id: "SLIP-NVY-W", description: "Women's Slip-On - Navy", createDate: "11/04/2025", lastUpdate: "01/20/2026", gtins: 1, images: 0 },
+  { id: "HIKE-BRN-M", description: "Men's Hiking Boot - Brown", createDate: "03/09/2026", lastUpdate: "", gtins: 0, images: 0 },
+  { id: "WALK-GRY-W", description: "Women's Walking Shoe - Grey", createDate: "01/27/2026", lastUpdate: "01/27/2026", gtins: 1, images: 0 },
 ]
+
+// Footwear-themed selection-code metadata, shared across the selection-code table,
+// product-media context, and download metadata so the description stays consistent.
+const SELECTION_CODES = [
+  { code: "001", description: "Spring Running Line" },
+  { code: "002", description: "Trail & Outdoor Collection" },
+  { code: "003", description: "Court & Lifestyle" },
+  { code: "004", description: "Walking Comfort Series" },
+  { code: "005", description: "Seasonal Clearance" },
+]
+
+const selectionCodeDescription = (code: string | null): string =>
+  SELECTION_CODES.find(c => c.code === code)?.description ?? "Product Selection"
 
 const MOCK_IMAGES = [
   { fileName: "sneaker-front.jpg", fileType: "JPG-JPEG", imageType: "SI-Still Shot", purpose: "INT-Internet", orientation: "PRI-Primary", locationType: "ACL", createDate: "Apr 7, 2026", previewSrc: "/mock/sneaker-front.jpg" },
@@ -474,15 +487,15 @@ export function RetailerImageBrowser() {
               </tr>
             </thead>
             <tbody>
-              {["001", "002", "003", "004", "005"].map((code, idx) => (
-                <tr 
-                  key={code} 
+              {SELECTION_CODES.map(({ code, description }, idx) => (
+                <tr
+                  key={code}
                   className="border-t border-border hover:bg-muted/50 cursor-pointer"
                   onClick={() => handleSelectionCodeSelect(code)}
                 >
                   <td className="px-3 py-2 text-tg-link hover:underline">{code}</td>
-                  <td className="px-3 py-2 text-foreground">Selcode {code} Update</td>
-                  <td className="px-3 py-2 text-foreground">{14 + idx * 3}</td>
+                  <td className="px-3 py-2 text-foreground">{description}</td>
+                  <td className="px-3 py-2 text-foreground">{idx === 0 ? MOCK_PRODUCTS.length : 14 + idx * 3}</td>
                 </tr>
               ))}
             </tbody>
@@ -524,7 +537,7 @@ export function RetailerImageBrowser() {
             </div>
             <div>
               <span className="font-medium text-muted-foreground">Total Products:</span>
-              <span className="ml-2 text-foreground">14</span>
+              <span className="ml-2 text-foreground">{MOCK_PRODUCTS.length}</span>
             </div>
           </div>
         </div>
@@ -556,7 +569,7 @@ export function RetailerImageBrowser() {
 
         {/* Pagination */}
         <div className="flex items-center justify-end gap-2 text-sm text-muted-foreground">
-          <span>1-14 of 14 records</span>
+          <span>1-{MOCK_PRODUCTS.length} of {MOCK_PRODUCTS.length} records</span>
           <div className="flex items-center gap-1">
             <Button variant="outline" size="sm" disabled>&lt;&lt;</Button>
             <Button variant="outline" size="sm" disabled>&lt;</Button>
@@ -641,7 +654,7 @@ export function RetailerImageBrowser() {
           <div><span className="font-medium text-muted-foreground">Trading Partner Name:</span> <span className="text-foreground">{selectedVendor?.name}</span></div>
           <div><span className="font-medium text-muted-foreground">Account Number:</span> <span className="text-foreground">{selectedVendor?.accountNumber}</span></div>
           <div><span className="font-medium text-muted-foreground">Selection Code:</span> <span className="text-foreground">{selectedSelectionCode}</span></div>
-          <div><span className="font-medium text-muted-foreground">Description:</span> <span className="text-foreground">Selcode {selectedSelectionCode} Update</span></div>
+          <div><span className="font-medium text-muted-foreground">Description:</span> <span className="text-foreground">{selectionCodeDescription(selectedSelectionCode)}</span></div>
           <div><span className="font-medium text-muted-foreground">Product:</span> <span className="text-foreground">{selectedProduct?.id}</span></div>
           <div><span className="font-medium text-muted-foreground">Product Description:</span> <span className="text-foreground">{selectedProduct?.description}</span></div>
           <div><span className="font-medium text-muted-foreground">Images:</span> <span className="text-foreground">{selectedProduct?.images}</span></div>
@@ -902,12 +915,12 @@ Export Date: ${new Date().toLocaleDateString("en-US", { month: "short", day: "nu
 Level: Product Level
 
 COMPANY INFORMATION
-Company Name: ${selectedVendor?.name || "KIBBLES N BITS"}
+Company Name: ${selectedVendor?.name || "APEX ATHLETIC FOOTWEAR"}
 Account Number: ${selectedVendor?.accountNumber || "125103335555"}
 
 PRODUCT INFORMATION
-Product ID: ${selectedProduct?.id || "TESTPROD2"}
-Selection Code: ${selectedSelectionCode || "002"}
+Product ID: ${selectedProduct?.id || "RUNCOOL-GRY-M"}
+Selection Code: ${selectedSelectionCode || "001"} - ${selectionCodeDescription(selectedSelectionCode)}
 
 IMAGE DETAILS
 File Name: ${MOCK_IMAGES[0]?.fileName || "sneaker-front.jpg"}
