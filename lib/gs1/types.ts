@@ -2,9 +2,11 @@
 // category list — so it can be imported by both client components and server routes without
 // pulling the full (large) generated option map into the browser bundle.
 
-export type ProductCategory = "Shoes" | "Apparel" | "Bags" | "Jewelry" | "Beauty" | "Home"
+// Home is intentionally excluded: it has no GPC brick coverage in
+// "Brick to extended attributes.xlsx", so AI extraction cannot scope its attributes to a brick.
+export type ProductCategory = "Shoes" | "Apparel" | "Bags" | "Jewelry" | "Beauty"
 
-export const PRODUCT_CATEGORIES: ProductCategory[] = ["Shoes", "Apparel", "Bags", "Jewelry", "Beauty", "Home"]
+export const PRODUCT_CATEGORIES: ProductCategory[] = ["Shoes", "Apparel", "Bags", "Jewelry", "Beauty"]
 
 export function isProductCategory(value: string): value is ProductCategory {
   return (PRODUCT_CATEGORIES as string[]).includes(value)

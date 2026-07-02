@@ -50,6 +50,7 @@ import { validateImageBatch, type ValidationError } from "./upload-validation"
 import useSWR from "swr"
 import type { CategoryOptions } from "@/lib/gs1/types"
 import { buildMockExtraction } from "@/lib/gs1/mock-scenarios"
+import { getCategoryBricks, type Brick } from "@/lib/gs1/generated-bricks"
 
 // Response shape from GET /api/attribute-options (declared locally so this client component
 // never imports server route code). Mirrors AttributeOptionsResponse in that route.
@@ -231,14 +232,18 @@ type UploadedFile = {
   status: "uploading" | "complete" | "error"
 }
 
-// AI extended-attribute extraction types
+// AI extended-attribute extraction types.
+// `decision` is tri-state: suggestions arrive "pending" and require an explicit Accept click to
+// count (Accept and Reject are shown as separate actions on every card).
+type AttributeDecision = "pending" | "accepted" | "rejected"
+
 type ExtractedAttribute = {
   codeListName: string
   attributeValue: string
   code: string
   confidence: number
   reason: string
-  accepted: boolean
+  decision: AttributeDecision
 }
 
 type UnresolvedAttribute = {
@@ -250,9 +255,11 @@ type UnresolvedAttribute = {
 // Mirrors route.ts ExtractionApiResponse without importing server code into the client bundle.
 type ExtractionApiResponse = {
   category: string
+  brickCode?: string
+  brickName?: string
   imageCount: number
   imageNames: string[]
-  attributes: Omit<ExtractedAttribute, "accepted">[]
+  attributes: Omit<ExtractedAttribute, "decision">[]
   unresolvedAttributes: UnresolvedAttribute[]
 }
 
@@ -260,6 +267,8 @@ type ExtractionApiResponse = {
 // not one per image). Replaces the old per-image ExtractionResult / aiExtractions Record.
 type ProductExtractionResult = {
   category: string
+  brickCode?: string
+  brickName?: string
   imageCount: number
   imageNames: string[]
   attributes: ExtractedAttribute[]
@@ -269,8 +278,9 @@ type ProductExtractionResult = {
   fallbackUsed?: boolean
 }
 
-// Product categories offered in the AI extraction card
-const PRODUCT_CATEGORIES = ["Shoes", "Apparel", "Bags", "Jewelry", "Beauty", "Home"] as const
+// Product categories offered in the AI extraction card. Home is excluded — it has no GPC brick
+// coverage in the brick matrix, so its attributes cannot be scoped to a single brick.
+const PRODUCT_CATEGORIES = ["Shoes", "Apparel", "Bags", "Jewelry", "Beauty"] as const
 
 // Extraction mode: "mock" (default, stable demos) or "gemini" (real /api/extract-attributes).
 // Controlled by NEXT_PUBLIC_EXTRACTION_MODE; falls back to mock when unset. No UI toggle.
@@ -477,6 +487,9 @@ export function ImageUploadWizard({
   // ── AI Extended-Attribute extraction (Step 2 sub-section, mock-first) ──
   // Selected product category for extraction
   const [aiCategory, setAiCategory] = useState<string>("")
+  // Selected GPC brick (leaf classification) within the category. Extraction is brick-scoped:
+  // only this brick's attributes are ever suggested. Null until a brick is chosen.
+  const [aiBrick, setAiBrick] = useState<Brick | null>(null)
   // Whether the user explicitly skipped the AI extraction section
   const [aiSkipped, setAiSkipped] = useState(false)
   // Product-level extraction result (one consolidated result for all uploaded images).
@@ -576,6 +589,15 @@ export function ImageUploadWizard({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentStep, uploadedFiles.length])
 
+  // Keep the brick in sync with the category: reset on category change, auto-selecting when the
+  // category has exactly one brick (so single-brick categories need no extra click).
+  const bricksForCategory = aiCategory ? getCategoryBricks(aiCategory) : []
+  useEffect(() => {
+    const bricks = aiCategory ? getCategoryBricks(aiCategory) : []
+    setAiBrick(bricks.length === 1 ? bricks[0] : null)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [aiCategory])
+
   // Dispatcher: routes to Gemini or mock based on EXTRACTION_MODE. Wired to all extract triggers.
   const runExtraction = () => {
     if (EXTRACTION_MODE === "gemini") {
@@ -601,13 +623,16 @@ export function ImageUploadWizard({
   // Real Gemini extraction: all uploaded images are sent together in one request,
   // producing one consolidated product-level attribute set.
   const runGeminiExtraction = async () => {
-    if (!aiCategory || uploadedFiles.length === 0) return
+    if (!aiCategory || !aiBrick || uploadedFiles.length === 0) return
     const category = aiCategory
+    const brick = aiBrick
     const targets = uploadedFiles.map(f => ({ name: f.name, file: f.file, type: f.type }))
     setAiSkipped(false)
     setAiEditing(null)
     setAiExtraction({
       category,
+      brickCode: brick.code,
+      brickName: brick.name,
       imageCount: targets.length,
       imageNames: targets.map(f => f.name),
       attributes: [],
@@ -628,7 +653,7 @@ export function ImageUploadWizard({
       const res = await fetch("/api/extract-attributes", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ category, images }),
+        body: JSON.stringify({ category, brick: brick.code, images }),
       })
 
       if (!res.ok) {
@@ -639,21 +664,25 @@ export function ImageUploadWizard({
       const data = await res.json() as ExtractionApiResponse
       setAiExtraction({
         category: typeof data.category === "string" ? data.category : category,
+        brickCode: typeof data.brickCode === "string" ? data.brickCode : brick.code,
+        brickName: typeof data.brickName === "string" ? data.brickName : brick.name,
         imageCount: typeof data.imageCount === "number" ? data.imageCount : targets.length,
         imageNames: Array.isArray(data.imageNames) ? data.imageNames : targets.map(f => f.name),
-        attributes: (Array.isArray(data.attributes) ? data.attributes : []).map(a => ({ ...a, accepted: true })),
+        attributes: (Array.isArray(data.attributes) ? data.attributes : []).map(a => ({ ...a, decision: "pending" as const })),
         unresolvedAttributes: Array.isArray(data.unresolvedAttributes) ? data.unresolvedAttributes : [],
         status: "complete",
       })
     } catch {
       // Auto-fallback to mock/demo results when Gemini is unavailable
       const options = categoryOptions.length > 0 ? categoryOptions : await fetchCategoryOptions(category)
-      const mock = buildMockExtraction(category, options)
+      const mock = buildMockExtraction(category, brick, options)
       setAiExtraction({
         category,
+        brickCode: brick.code,
+        brickName: brick.name,
         imageCount: targets.length,
         imageNames: targets.map(f => f.name),
-        attributes: mock.attributes.map(a => ({ ...a, accepted: true })),
+        attributes: mock.attributes.map(a => ({ ...a, decision: "pending" as const })),
         unresolvedAttributes: mock.unresolvedAttributes,
         status: "complete",
         fallbackUsed: true,
@@ -664,13 +693,16 @@ export function ImageUploadWizard({
   // Mock extraction: returns one consolidated product-level result (same shape as Gemini mode).
   // Grounds GS1 codes in the same CSV-derived options used by Gemini + dropdowns.
   const runMockExtraction = async () => {
-    if (!aiCategory || uploadedFiles.length === 0) return
+    if (!aiCategory || !aiBrick || uploadedFiles.length === 0) return
     const category = aiCategory
+    const brick = aiBrick
     const imageNames = uploadedFiles.map(f => f.name)
     setAiSkipped(false)
     setAiEditing(null)
     setAiExtraction({
       category,
+      brickCode: brick.code,
+      brickName: brick.name,
       imageCount: uploadedFiles.length,
       imageNames,
       attributes: [],
@@ -681,22 +713,24 @@ export function ImageUploadWizard({
     const options = categoryOptions.length > 0 ? categoryOptions : await fetchCategoryOptions(category)
     // Brief delay to simulate processing latency for a realistic demo feel.
     await new Promise(resolve => setTimeout(resolve, 900))
-    const mock = buildMockExtraction(category, options)
+    const mock = buildMockExtraction(category, brick, options)
     setAiExtraction({
       category,
+      brickCode: brick.code,
+      brickName: brick.name,
       imageCount: uploadedFiles.length,
       imageNames,
-      attributes: mock.attributes.map(a => ({ ...a, accepted: true })),
+      attributes: mock.attributes.map(a => ({ ...a, decision: "pending" as const })),
       unresolvedAttributes: mock.unresolvedAttributes,
       status: "complete",
     })
   }
 
-  // Toggle the accepted flag on a single suggested attribute (Accept / Reject)
-  const setAttributeAccepted = (index: number, accepted: boolean) => {
+  // Set the review decision on a single suggested attribute (explicit Accept / Reject).
+  const setAttributeDecision = (index: number, decision: AttributeDecision) => {
     setAiExtraction(prev => {
       if (!prev) return prev
-      return { ...prev, attributes: prev.attributes.map((a, i) => i === index ? { ...a, accepted } : a) }
+      return { ...prev, attributes: prev.attributes.map((a, i) => i === index ? { ...a, decision } : a) }
     })
   }
 
@@ -737,7 +771,7 @@ export function ImageUploadWizard({
           code: match.code,
           confidence: 1.0,
           reason: "Manually added by user.",
-          accepted: true,
+          decision: "accepted" as const,
         }],
         unresolvedAttributes: prev.unresolvedAttributes.filter((_, i) => i !== unresolvedIndex),
       }
@@ -755,8 +789,8 @@ export function ImageUploadWizard({
   const isComplete = aiExtraction?.status === "complete"
   const isError = aiExtraction?.status === "error"
   const hasExtraction = aiExtraction !== null
-  // Accepted suggestions at the product level
-  const acceptedExtractedAttributes = aiExtraction?.attributes.filter(a => a.accepted) ?? []
+  // Accepted suggestions at the product level (only explicit Accept clicks count)
+  const acceptedExtractedAttributes = aiExtraction?.attributes.filter(a => a.decision === "accepted") ?? []
 
   const handleDragOver = useCallback((e: React.DragEvent) => {
     e.preventDefault()
@@ -2317,7 +2351,7 @@ End of Metadata Export
                   {/* Idle / pre-extraction controls */}
                   {!hasExtraction && (
                     <>
-                      <div className="flex flex-col gap-2 sm:flex-row sm:items-end">
+                      <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:flex-wrap">
                         <div className="flex flex-col gap-1">
                           <Label htmlFor="ai-category" className="text-xs text-muted-foreground">Product category</Label>
                           <Select value={aiCategory} onValueChange={(v) => { setAiCategory(v); clearExtraction() }}>
@@ -2331,8 +2365,26 @@ End of Metadata Export
                             </SelectContent>
                           </Select>
                         </div>
+                        {/* GPC brick — attributes are scoped to this single classification */}
+                        <div className="flex flex-col gap-1">
+                          <Label htmlFor="ai-brick" className="text-xs text-muted-foreground">Product brick (GPC)</Label>
+                          <Select
+                            value={aiBrick?.code ?? ""}
+                            onValueChange={(code) => { setAiBrick(bricksForCategory.find(b => b.code === code) ?? null); clearExtraction() }}
+                            disabled={!aiCategory || bricksForCategory.length === 0}
+                          >
+                            <SelectTrigger id="ai-brick" className="w-72 bg-background">
+                              <SelectValue placeholder={aiCategory ? "Select a brick..." : "Select a category first"} />
+                            </SelectTrigger>
+                            <SelectContent>
+                              {bricksForCategory.map(b => (
+                                <SelectItem key={b.code} value={b.code}>{b.name}</SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                        </div>
                         <div className="flex items-center gap-2">
-                          <Button onClick={runExtraction} disabled={!aiCategory || uploadedFiles.length === 0} className="gap-2">
+                          <Button onClick={runExtraction} disabled={!aiCategory || !aiBrick || uploadedFiles.length === 0} className="gap-2">
                             <Sparkles className="size-4" />
                             Extract Extended Attributes with AI
                           </Button>
@@ -2341,12 +2393,19 @@ End of Metadata Export
                           </Button>
                         </div>
                       </div>
-                      <p className="text-xs text-muted-foreground">
-                        {uploadedFiles.length === 1
-                          ? "1 image will be analyzed for this product."
-                          : `${uploadedFiles.length} images will be analyzed together for this product.`}{" "}
-                        All uploaded images are treated as evidence for the same product.
-                      </p>
+                      {aiCategory && bricksForCategory.length === 0 ? (
+                        <p className="text-xs text-tg-warning">
+                          No GS1 brick mapping is available for this category — continue entering attributes manually.
+                        </p>
+                      ) : (
+                        <p className="text-xs text-muted-foreground">
+                          {!aiBrick && "Select the product brick to scope attributes to that classification. "}
+                          {uploadedFiles.length === 1
+                            ? "1 image will be analyzed for this product."
+                            : `${uploadedFiles.length} images will be analyzed together for this product.`}{" "}
+                          All uploaded images are treated as evidence for the same product.
+                        </p>
+                      )}
                     </>
                   )}
 
@@ -2386,6 +2445,12 @@ End of Metadata Export
                         <div className="flex flex-col gap-0.5">
                           <p className="text-sm text-foreground">
                             Category: <span className="font-medium">{aiExtraction.category}</span>
+                            {aiExtraction.brickName && (
+                              <>
+                                {" · "}Brick: <span className="font-medium">{aiExtraction.brickName}</span>
+                                {aiExtraction.brickCode && <span className="font-mono text-xs text-muted-foreground"> ({aiExtraction.brickCode})</span>}
+                              </>
+                            )}
                             <span className="text-muted-foreground">
                               {" "}· {acceptedExtractedAttributes.length} attribute{acceptedExtractedAttributes.length !== 1 ? "s" : ""} accepted
                             </span>
@@ -2431,7 +2496,9 @@ End of Metadata Export
                                   key={`${attr.code}-${idx}`}
                                   className={cn(
                                     "flex flex-col gap-2 rounded border p-3",
-                                    attr.accepted ? "border-border bg-card" : "border-border bg-muted/30 opacity-70"
+                                    attr.decision === "accepted" ? "border-tg-success/40 bg-card"
+                                      : attr.decision === "rejected" ? "border-border bg-muted/30 opacity-70"
+                                      : "border-border bg-card"
                                   )}
                                 >
                                   <div className="flex items-center justify-between gap-2">
@@ -2440,11 +2507,15 @@ End of Metadata Export
                                       <span
                                         className={cn(
                                           "inline-flex shrink-0 items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium",
-                                          attr.accepted ? "bg-tg-success/15 text-tg-success" : "bg-muted text-muted-foreground"
+                                          attr.decision === "accepted" ? "bg-tg-success/15 text-tg-success"
+                                            : attr.decision === "rejected" ? "bg-muted text-muted-foreground"
+                                            : "bg-tg-warning/15 text-tg-warning"
                                         )}
                                       >
-                                        {attr.accepted ? <Check className="size-3" /> : <X className="size-3" />}
-                                        {attr.accepted ? "Accepted" : "Rejected"}
+                                        {attr.decision === "accepted" ? <Check className="size-3" />
+                                          : attr.decision === "rejected" ? <X className="size-3" />
+                                          : <AlertCircle className="size-3" />}
+                                        {attr.decision === "accepted" ? "Accepted" : attr.decision === "rejected" ? "Rejected" : "Pending review"}
                                       </span>
                                     </div>
                                     <span
@@ -2511,27 +2582,32 @@ End of Metadata Export
                                   )}
                                   <p className="text-xs text-muted-foreground">{attr.reason}</p>
                                   <div className="flex items-center gap-1 pt-1">
-                                    {/* Contextual toggle: only the action that changes state is shown,
-                                        so the visible button is never inert (fixes "Accept looks dead"). */}
-                                    {attr.accepted ? (
-                                      <Button
-                                        variant="ghost"
-                                        size="sm"
-                                        className="h-7 gap-1 px-2 text-xs text-muted-foreground hover:text-destructive"
-                                        onClick={() => setAttributeAccepted(idx, false)}
-                                      >
-                                        <X className="size-3" /> Reject
-                                      </Button>
-                                    ) : (
-                                      <Button
-                                        variant="default"
-                                        size="sm"
-                                        className="h-7 gap-1 px-2 text-xs"
-                                        onClick={() => setAttributeAccepted(idx, true)}
-                                      >
-                                        <Check className="size-3" /> Accept
-                                      </Button>
-                                    )}
+                                    {/* Explicit review actions: Accept and Reject are always shown as
+                                        separate buttons; the active decision is highlighted. Suggestions
+                                        start "pending" and only count once Accept is clicked. */}
+                                    <Button
+                                      variant={attr.decision === "accepted" ? "default" : "outline"}
+                                      size="sm"
+                                      className="h-7 gap-1 px-2 text-xs"
+                                      aria-pressed={attr.decision === "accepted"}
+                                      onClick={() => setAttributeDecision(idx, attr.decision === "accepted" ? "pending" : "accepted")}
+                                    >
+                                      <Check className="size-3" /> Accept
+                                    </Button>
+                                    <Button
+                                      variant="outline"
+                                      size="sm"
+                                      className={cn(
+                                        "h-7 gap-1 px-2 text-xs",
+                                        attr.decision === "rejected"
+                                          ? "border-destructive/50 bg-destructive/10 text-destructive"
+                                          : "text-muted-foreground hover:text-destructive"
+                                      )}
+                                      aria-pressed={attr.decision === "rejected"}
+                                      onClick={() => setAttributeDecision(idx, attr.decision === "rejected" ? "pending" : "rejected")}
+                                    >
+                                      <X className="size-3" /> Reject
+                                    </Button>
                                     <Button
                                       variant="outline"
                                       size="sm"
@@ -2903,6 +2979,12 @@ End of Metadata Export
                   <p className="text-xs text-muted-foreground">
                     Category: <span className="font-medium text-foreground">{aiExtraction.category}</span>
                   </p>
+                  {aiExtraction.brickName && (
+                    <p className="text-xs text-muted-foreground">
+                      Brick: <span className="font-medium text-foreground">{aiExtraction.brickName}</span>
+                      {aiExtraction.brickCode && <span className="font-mono"> ({aiExtraction.brickCode})</span>}
+                    </p>
+                  )}
                   <p className="text-xs text-muted-foreground">
                     Images analyzed: <span className="font-medium text-foreground">{aiExtraction.imageCount}</span>
                     {aiExtraction.imageNames.length > 0 && (
