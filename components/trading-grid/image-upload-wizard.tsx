@@ -2435,10 +2435,21 @@ End of Metadata Export
                                   )}
                                 >
                                   <div className="flex items-center justify-between gap-2">
-                                    <span className="text-xs font-medium uppercase tracking-wide text-muted-foreground">{attr.codeListName}</span>
+                                    <div className="flex items-center gap-2 min-w-0">
+                                      <span className="text-xs font-medium uppercase tracking-wide text-muted-foreground truncate">{attr.codeListName}</span>
+                                      <span
+                                        className={cn(
+                                          "inline-flex shrink-0 items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium",
+                                          attr.accepted ? "bg-tg-success/15 text-tg-success" : "bg-muted text-muted-foreground"
+                                        )}
+                                      >
+                                        {attr.accepted ? <Check className="size-3" /> : <X className="size-3" />}
+                                        {attr.accepted ? "Accepted" : "Rejected"}
+                                      </span>
+                                    </div>
                                     <span
                                       className={cn(
-                                        "inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium",
+                                        "inline-flex shrink-0 items-center rounded-full px-2 py-0.5 text-xs font-medium",
                                         attr.confidence >= 0.85 ? "bg-tg-success/15 text-tg-success"
                                           : attr.confidence >= 0.75 ? "bg-tg-warning/15 text-tg-warning"
                                           : "bg-muted text-muted-foreground"
@@ -2500,14 +2511,27 @@ End of Metadata Export
                                   )}
                                   <p className="text-xs text-muted-foreground">{attr.reason}</p>
                                   <div className="flex items-center gap-1 pt-1">
-                                    <Button
-                                      variant={attr.accepted ? "default" : "outline"}
-                                      size="sm"
-                                      className="h-7 gap-1 px-2 text-xs"
-                                      onClick={() => setAttributeAccepted(idx, true)}
-                                    >
-                                      <Check className="size-3" /> Accept
-                                    </Button>
+                                    {/* Contextual toggle: only the action that changes state is shown,
+                                        so the visible button is never inert (fixes "Accept looks dead"). */}
+                                    {attr.accepted ? (
+                                      <Button
+                                        variant="ghost"
+                                        size="sm"
+                                        className="h-7 gap-1 px-2 text-xs text-muted-foreground hover:text-destructive"
+                                        onClick={() => setAttributeAccepted(idx, false)}
+                                      >
+                                        <X className="size-3" /> Reject
+                                      </Button>
+                                    ) : (
+                                      <Button
+                                        variant="default"
+                                        size="sm"
+                                        className="h-7 gap-1 px-2 text-xs"
+                                        onClick={() => setAttributeAccepted(idx, true)}
+                                      >
+                                        <Check className="size-3" /> Accept
+                                      </Button>
+                                    )}
                                     <Button
                                       variant="outline"
                                       size="sm"
@@ -2515,14 +2539,6 @@ End of Metadata Export
                                       onClick={() => setAiEditing(editing ? null : { index: idx })}
                                     >
                                       <Pencil className="size-3" /> Edit
-                                    </Button>
-                                    <Button
-                                      variant="ghost"
-                                      size="sm"
-                                      className="h-7 gap-1 px-2 text-xs text-muted-foreground hover:text-destructive"
-                                      onClick={() => setAttributeAccepted(idx, false)}
-                                    >
-                                      <X className="size-3" /> Reject
                                     </Button>
                                   </div>
                                 </div>
