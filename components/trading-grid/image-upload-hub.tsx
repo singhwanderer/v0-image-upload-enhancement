@@ -28,22 +28,22 @@ interface ImageUploadLandingProps {
 // Mock vendor data for retailer portal
 const MOCK_VENDORS = [
   { id: "1", name: "KIBBLES N BITS", accountNumber: "125103335555", selectionCodes: 5, products: 156 },
-  { id: "2", name: "2 WRZNLMWH", accountNumber: "127142417199", selectionCodes: 3, products: 89 },
-  { id: "3", name: "ACME CORP", accountNumber: "198765432100", selectionCodes: 8, products: 234 },
+  { id: "2", name: "TRAILBLAZE FOOTWEAR", accountNumber: "127142417199", selectionCodes: 3, products: 89 },
+  { id: "3", name: "STRIDEWORKS INC", accountNumber: "198765432100", selectionCodes: 8, products: 234 },
 ]
 
 const MOCK_PRODUCTS = [
-  { id: "ABC_DDD", description: "ABC", createDate: "03/25/2026", lastUpdate: "05/06/2026", gtins: 1, images: 4 },
+  { id: "RUNCOOL-GRY-M", description: "Men's Cool Runner - Grey", createDate: "03/25/2026", lastUpdate: "05/06/2026", gtins: 1, images: 4 },
   { id: "NEWATTRIBUTESK", description: "NEWATTRIBUTESK", createDate: "11/04/2025", lastUpdate: "04/13/2026", gtins: 2, images: 1 },
-  { id: "NEWPROD", description: "NewProd", createDate: "01/20/2026", lastUpdate: "04/28/2026", gtins: 1, images: 2 },
+  { id: "TRLRUN-BLK-M", description: "Men's Trail Runner - Black", createDate: "01/20/2026", lastUpdate: "04/28/2026", gtins: 1, images: 2 },
   { id: "NEWPRODD", description: "NEWPRODD Desc", createDate: "11/04/2025", lastUpdate: "01/20/2026", gtins: 1, images: 0 },
   { id: "NEWPRODE", description: "Sample MS", createDate: "03/09/2026", lastUpdate: "", gtins: 0, images: 0 },
   { id: "OUTBOUND", description: "OUTBOUND Desc", createDate: "01/27/2026", lastUpdate: "01/27/2026", gtins: 1, images: 0 },
 ]
 
 const MOCK_IMAGES = [
-  { fileName: "Image1.jpg", fileType: "JPG-JPEG", imageType: "SI-Still Shot", purpose: "INT-Internet", orientation: "PRI-Primary", locationType: "ACL", createDate: "Apr 7, 2026" },
-  { fileName: "Image12.jpg", fileType: "JPG-JPEG", imageType: "SI-Still Shot", purpose: "INT-Internet", orientation: "PRI-Primary", locationType: "ACL", createDate: "Apr 13, 2026", lastUpdate: "Apr 23, 2026" },
+  { fileName: "sneaker-front.jpg", fileType: "JPG-JPEG", imageType: "SI-Still Shot", purpose: "INT-Internet", orientation: "PRI-Primary", locationType: "ACL", createDate: "Apr 7, 2026", previewSrc: "/mock/sneaker-front.jpg" },
+  { fileName: "sneaker-side.jpg", fileType: "JPG-JPEG", imageType: "SI-Still Shot", purpose: "INT-Internet", orientation: "PRI-Primary", locationType: "ACL", createDate: "Apr 13, 2026", lastUpdate: "Apr 23, 2026", previewSrc: "/mock/sneaker-side.jpg" },
 ]
 
 export function ImageUploadLanding({ onUploadClick }: ImageUploadLandingProps) {
@@ -295,6 +295,15 @@ export function RetailerImageBrowser() {
   // activeImageIndex removed — retailer product-media uses stacked list (no active selection)
   const [showDownloadModal, setShowDownloadModal] = useState(false)
   const [downloadPhase, setDownloadPhase] = useState<"select" | "preparing" | "complete">("select")
+  // Lightbox: full-size view of a single product-media image
+  const [lightboxImage, setLightboxImage] = useState<{ src: string; fileName: string } | null>(null)
+
+  const downloadSingleImage = (src: string, fileName: string) => {
+    const link = document.createElement("a")
+    link.href = src
+    link.download = fileName
+    link.click()
+  }
 
 
   const handleVendorSelect = (vendor: typeof MOCK_VENDORS[0]) => {
@@ -660,9 +669,16 @@ export function RetailerImageBrowser() {
         <div className="flex flex-col gap-3">
           {MOCK_IMAGES.map((img, idx) => (
             <div key={idx} id={`retailer-card-${idx}`} className="border border-border bg-card">
-              {/* Card header — no toolbar actions (retailer is read-only) */}
-              <div className="flex items-center border-b border-border bg-muted/30 px-3 py-2">
+              {/* Card header — read-only (no edit), but download is available per image */}
+              <div className="flex items-center justify-between border-b border-border bg-muted/30 px-3 py-2">
                 <span className="text-sm font-medium text-tg-link">Product Level Image</span>
+                <button
+                  className="p-1.5 hover:bg-muted rounded"
+                  title="Download this image"
+                  onClick={() => downloadSingleImage(img.previewSrc, img.fileName)}
+                >
+                  <Download className="size-3.5 text-muted-foreground" />
+                </button>
               </div>
               {/* Card body: attributes 60% left, preview placeholder 40% right */}
               <div className="flex">
@@ -696,13 +712,19 @@ export function RetailerImageBrowser() {
                     </div>
                   ))}
                 </div>
-                {/* Right: image preview placeholder */}
-                <div className="w-2/5 flex items-center justify-center bg-white p-4 min-h-[280px]">
-                  <div className="flex flex-col items-center justify-center text-center gap-2">
-                    <FileImage className="size-20 text-primary/40" />
-                    <p className="text-xs text-muted-foreground">{img.fileName}</p>
-                  </div>
-                </div>
+                {/* Right: image preview — click to zoom */}
+                <button
+                  type="button"
+                  className="w-2/5 flex items-center justify-center bg-white p-4 min-h-[280px] cursor-zoom-in hover:opacity-90 transition-opacity"
+                  title="Click to view full size"
+                  onClick={() => setLightboxImage({ src: img.previewSrc, fileName: img.fileName })}
+                >
+                  <img
+                    src={img.previewSrc}
+                    alt={img.fileName}
+                    className="max-w-full max-h-64 object-contain"
+                  />
+                </button>
               </div>
             </div>
           ))}
@@ -880,15 +902,15 @@ Export Date: ${new Date().toLocaleDateString("en-US", { month: "short", day: "nu
 Level: Product Level
 
 COMPANY INFORMATION
-Company Name: KIBBLES N BITS
-Account Number: 125103335555
+Company Name: ${selectedVendor?.name || "KIBBLES N BITS"}
+Account Number: ${selectedVendor?.accountNumber || "125103335555"}
 
 PRODUCT INFORMATION
 Product ID: ${selectedProduct?.id || "TESTPROD2"}
-Selection Code: 002
+Selection Code: ${selectedSelectionCode || "002"}
 
 IMAGE DETAILS
-File Name: ${MOCK_IMAGES[0]?.fileName || "Image1.jpg"}
+File Name: ${MOCK_IMAGES[0]?.fileName || "sneaker-front.jpg"}
 Image Type: ${MOCK_IMAGES[0]?.imageType || "SI-Still Shot"}
 Purpose: ${MOCK_IMAGES[0]?.purpose || "INT-Internet"}
 Orientation: ${MOCK_IMAGES[0]?.orientation || "PRI-Primary"}`}
@@ -902,6 +924,29 @@ Orientation: ${MOCK_IMAGES[0]?.orientation || "PRI-Primary"}`}
                 )}
               </div>
             </div>
+          </div>
+        )}
+
+        {/* Lightbox — full-size view of a single product-media image */}
+        {lightboxImage && (
+          <div
+            className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 cursor-zoom-out"
+            onClick={() => setLightboxImage(null)}
+          >
+            <button
+              className="absolute top-4 right-4 text-white/80 hover:text-white"
+              onClick={() => setLightboxImage(null)}
+              title="Close"
+            >
+              <X className="size-6" />
+            </button>
+            <img
+              src={lightboxImage.src}
+              alt={lightboxImage.fileName}
+              className="max-w-[90vw] max-h-[85vh] object-contain"
+              onClick={(e) => e.stopPropagation()}
+            />
+            <span className="absolute bottom-4 text-sm text-white/80">{lightboxImage.fileName}</span>
           </div>
         )}
       </div>
