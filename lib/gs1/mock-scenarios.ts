@@ -8,6 +8,7 @@
 // This module imports ONLY the shared types (no option data), so it is safe to bundle on the client.
 
 import type { ProductCategory, CategoryOptions } from "./types"
+import type { Brick } from "./generated-bricks"
 
 export type MockSeed = {
   codeListName: string
@@ -90,31 +91,28 @@ const MOCK_SCENARIOS: Record<ProductCategory, { seeds: MockSeed[]; unresolved: M
       { codeListName: "Skin Type", reason: "Targeted skin type requires label claims or product data." },
     ],
   },
-  Home: {
-    seeds: [
-      { codeListName: "Bedding Type", value: "Comforter", confidence: 0.86, reason: "Quilted, padded top layer consistent with a comforter." },
-      { codeListName: "Shape", value: "Rectangular", confidence: 0.78, reason: "Standard rectangular form factor visible." },
-    ],
-    unresolved: [
-      { codeListName: "Bedding Size", reason: "Exact size requires product data, not a visible scale." },
-      { codeListName: "Care Instructions Code", reason: "Requires a care label or product data." },
-    ],
-  },
 }
 
-// Builds a mock extraction response, grounding each seed's GS1 code in the supplied
-// CSV-derived options (the same full map used by Gemini + the edit dropdowns).
-// Seeds whose value can't be resolved against the options are skipped defensively.
-export function buildMockExtraction(category: string, options: CategoryOptions): MockExtractionResponse {
+// Builds a mock extraction response scoped to a single GPC brick. Suggestions are the category
+// seeds that (a) are valid for the brick and (b) resolve against the CSV-derived options (the
+// same full map used by Gemini + the edit dropdowns). The brick's remaining valid attributes —
+// those without a suggestion — become the unresolved list, so the mock stays brick-consistent.
+// A towel can no longer surface apparel attributes: only the chosen brick's set is ever shown.
+export function buildMockExtraction(
+  category: string,
+  brick: Brick | null,
+  options: CategoryOptions,
+): MockExtractionResponse {
   const scenario = MOCK_SCENARIOS[category as ProductCategory]
-  if (!scenario) {
-    return { category, attributes: [], unresolvedAttributes: [] }
-  }
+  const seeds = scenario?.seeds ?? []
 
   const codeFor = (codeListName: string, value: string): string | undefined =>
     options.find(o => o.codeListName === codeListName)?.values.find(v => v.value === value)?.code
 
-  const attributes = scenario.seeds
+  const allowed = brick ? new Set(brick.attributeCodeListNames) : null
+
+  const attributes = seeds
+    .filter(seed => !allowed || allowed.has(seed.codeListName))
     .map(seed => {
       const code = codeFor(seed.codeListName, seed.value)
       if (!code) return null
@@ -128,5 +126,19 @@ export function buildMockExtraction(category: string, options: CategoryOptions):
     })
     .filter((a): a is NonNullable<typeof a> => a !== null)
 
-  return { category, attributes, unresolvedAttributes: scenario.unresolved }
+  // Brick-scoped unresolved: every valid brick attribute that wasn't suggested above.
+  let unresolvedAttributes: MockUnresolved[]
+  if (brick) {
+    const suggested = new Set(attributes.map(a => a.codeListName))
+    unresolvedAttributes = brick.attributeCodeListNames
+      .filter(name => !suggested.has(name))
+      .map(name => ({
+        codeListName: name,
+        reason: `${name} could not be determined from the uploaded image(s).`,
+      }))
+  } else {
+    unresolvedAttributes = scenario?.unresolved ?? []
+  }
+
+  return { category, attributes, unresolvedAttributes }
 }

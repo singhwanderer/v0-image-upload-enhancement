@@ -83,21 +83,11 @@ const CATEGORY_ROUTING = {
     { display: "SPF Rating", source: "SPF Rating" },
     { display: "Code List for Formulation", source: "Code List for Formulation" },
   ],
-  Home: [
-    { display: "Bedding Size", source: "Bedding Size" },
-    { display: "Bedding Type", source: "Bedding Type" },
-    { display: "Code List for Cookware Type", source: "Code List for Cookware Type" },
-    { display: "Code List for Dinnerware Category", source: "Code List for Dinnerware Category" },
-    { display: "Code List for Flatware Type", source: "Code List for Flatware Type" },
-    { display: "Rug Type", source: "Rug Type" },
-    { display: "Towel Type", source: "Towel Type" },
-    { display: "Tableware Type", source: "Tableware Type" },
-    { display: "Shape", source: "Shape" },
-    { display: "Care Instructions Code", source: "Care Instructions Code" },
-  ],
 }
 
-const CATEGORY_ORDER = ["Shoes", "Apparel", "Bags", "Jewelry", "Beauty", "Home"]
+// Home is intentionally excluded: it has no GPC brick coverage in the brick matrix, so AI
+// extraction cannot scope its attributes to a single brick (see lib/gs1/generated-bricks.ts).
+const CATEGORY_ORDER = ["Shoes", "Apparel", "Bags", "Jewelry", "Beauty"]
 
 // ── CSV parsing (handles quoted fields) ─────────────────────────────────────
 function parseCsv(text) {

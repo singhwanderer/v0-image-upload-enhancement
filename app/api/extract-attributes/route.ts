@@ -1,12 +1,14 @@
 import { NextResponse } from "next/server"
 import { GoogleGenAI } from "@google/genai"
 import { getCategoryOptions } from "@/lib/gs1/generated-options"
+import { getBrick } from "@/lib/gs1/generated-bricks"
 
 // Server-only route. The GEMINI_API_KEY never reaches the client.
 export const runtime = "nodejs"
 export const maxDuration = 60
 
-const ALLOWED_CATEGORIES = ["Shoes", "Apparel", "Bags", "Jewelry", "Beauty", "Home"] as const
+// Home is excluded — it has no GPC brick coverage, so its attributes can't be brick-scoped.
+const ALLOWED_CATEGORIES = ["Shoes", "Apparel", "Bags", "Jewelry", "Beauty"] as const
 const ALLOWED_MIME_TYPES = ["image/jpeg", "image/jpg", "image/png", "image/webp"]
 const GEMINI_MODEL = "gemini-2.5-flash"
 
@@ -14,6 +16,8 @@ const GEMINI_MODEL = "gemini-2.5-flash"
 // Does not include status — that is a client-side lifecycle concern.
 export type ExtractionApiResponse = {
   category: string
+  brickCode?: string
+  brickName?: string
   imageCount: number
   imageNames: string[]
   attributes: {
@@ -92,14 +96,14 @@ export async function POST(request: Request) {
   }
 
   // 2. Parse request body
-  let body: { category?: unknown; images?: unknown }
+  let body: { category?: unknown; brick?: unknown; images?: unknown }
   try {
     body = await request.json()
   } catch {
     return NextResponse.json({ error: "Invalid JSON request body." }, { status: 400 })
   }
 
-  const { category, images } = body
+  const { category, brick: brickCodeRaw, images } = body
 
   // 3. Validate category
   if (
@@ -108,6 +112,16 @@ export async function POST(request: Request) {
   ) {
     return NextResponse.json(
       { error: `Invalid category. Allowed: ${ALLOWED_CATEGORIES.join(", ")}.` },
+      { status: 400 },
+    )
+  }
+
+  // 3b. Validate the brick (GPC classification). Required — extraction is always brick-scoped.
+  const brickCode = typeof brickCodeRaw === "string" ? brickCodeRaw.trim() : ""
+  const brick = brickCode ? getBrick(category, brickCode) : undefined
+  if (!brick) {
+    return NextResponse.json(
+      { error: "Invalid or missing brick for the selected category." },
       { status: 400 },
     )
   }
@@ -141,11 +155,15 @@ export async function POST(request: Request) {
     validatedImages.push({ fileName: fileName.trim(), imageBase64, mimeType })
   }
 
-  // 5. Load this category's GS1 options (never the full CSV, never other categories)
-  const options = getCategoryOptions(category)
+  // 5. Load this category's GS1 options (never the full CSV, never other categories), then
+  //    scope them to the chosen brick's valid Code List Names so extraction stays brick-consistent.
+  const allowedNames = new Set(brick.attributeCodeListNames)
+  const options = getCategoryOptions(category).filter(o => allowedNames.has(o.codeListName))
   if (options.length === 0) {
     return NextResponse.json<ExtractionApiResponse>({
       category,
+      brickCode: brick.code,
+      brickName: brick.name,
       imageCount: validatedImages.length,
       imageNames: validatedImages.map(i => i.fileName),
       attributes: [],
@@ -179,6 +197,9 @@ export async function POST(request: Request) {
   const prompt = `You are extracting one product-level set of GS1-style extended attributes from multiple images of the same product.
 
 Product category: ${category}
+GPC brick (product classification): ${brick.name} (${brick.code})
+
+Only the attributes listed below apply to this brick — do not suggest attributes for a different kind of product.
 
 You have been provided with ${validatedImages.length} image${validatedImages.length !== 1 ? "s" : ""} of the same product:
 ${imageListText}
@@ -349,6 +370,8 @@ Return JSON in exactly this shape:
   // 11. Product-level response
   return NextResponse.json<ExtractionApiResponse>({
     category,
+    brickCode: brick.code,
+    brickName: brick.name,
     imageCount: validatedImages.length,
     imageNames: validatedImages.map((i) => i.fileName),
     attributes: cleanAttributes,
