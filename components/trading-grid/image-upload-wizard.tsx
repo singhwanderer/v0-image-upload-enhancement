@@ -45,12 +45,20 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog"
+import {
+  Sheet,
+  SheetContent,
+  SheetHeader,
+  SheetTitle,
+} from "@/components/ui/sheet"
 import { cn } from "@/lib/utils"
 import { validateImageBatch, type ValidationError } from "./upload-validation"
 import useSWR from "swr"
-import type { CategoryOptions } from "@/lib/gs1/types"
+import type { CategoryOptions, AttributeDecision, ExtractedAttribute, UnresolvedAttribute } from "@/lib/gs1/types"
 import { buildMockExtraction } from "@/lib/gs1/mock-scenarios"
 import { getCategoryBricks, type Brick } from "@/lib/gs1/generated-bricks"
+import { useMediaSelection } from "./use-media-selection"
+import { AiAttributesTable } from "./ai-attributes-table"
 
 // Response shape from GET /api/attribute-options (declared locally so this client component
 // never imports server route code). Mirrors AttributeOptionsResponse in that route.
@@ -230,25 +238,6 @@ type UploadedFile = {
   type: string
   preview: string
   status: "uploading" | "complete" | "error"
-}
-
-// AI extended-attribute extraction types.
-// `decision` is tri-state: suggestions arrive "pending" and require an explicit Accept click to
-// count (Accept and Reject are shown as separate actions on every card).
-type AttributeDecision = "pending" | "accepted" | "rejected"
-
-type ExtractedAttribute = {
-  codeListName: string
-  attributeValue: string
-  code: string
-  confidence: number
-  reason: string
-  decision: AttributeDecision
-}
-
-type UnresolvedAttribute = {
-  codeListName: string
-  reason: string
 }
 
 // ExtractionApiResponse: product-level shape returned by POST /api/extract-attributes.
@@ -462,6 +451,16 @@ export function ImageUploadWizard({
   const [showProductMedia, setShowProductMedia] = useState(false)
   const [showDownloadModal, setShowDownloadModal] = useState(false)
   const [downloadPhase, setDownloadPhase] = useState<"select" | "preparing" | "complete">("select")
+  // Selection state for Product Media cards — drives selective download and (Supplier-only)
+  // bulk edit/delete gating.
+  const media = useMediaSelection()
+  const [bulkDeleteConfirmOpen, setBulkDeleteConfirmOpen] = useState(false)
+  const [bulkEditDialog, setBulkEditDialog] = useState<{
+    open: boolean
+    draft: typeof attributes
+    touched: Partial<Record<keyof typeof attributes, boolean>>
+  }>({ open: false, draft: {} as typeof attributes, touched: {} })
+  const [showAiAttributesDrawer, setShowAiAttributesDrawer] = useState(false)
   // activeImageIndex removed — supplier product-media uses stacked list (no active selection)
   // Inline validation errors from file drop/browse (Change 1)
   const [validationErrors, setValidationErrors] = useState<ValidationError[]>([])
@@ -792,6 +791,235 @@ export function ImageUploadWizard({
   // Accepted suggestions at the product level (only explicit Accept clicks count)
   const acceptedExtractedAttributes = aiExtraction?.attributes.filter(a => a.decision === "accepted") ?? []
 
+  // Editable AI results card — the same Accept/Reject/Edit UI used in Step 2, extracted into a
+  // render function so it can also be shown post-confirm in the "View AI Attributes" drawer
+  // (AI attributes are the primary editing surface, so that drawer stays editable, unlike the
+  // Retailer's read-only equivalent).
+  const renderAiResultsCard = () => (
+    isComplete && aiExtraction && (
+      <div className="flex flex-col gap-4">
+        {/* Results header */}
+        <div className="flex items-center justify-between">
+          <div className="flex flex-col gap-0.5">
+            <p className="text-sm text-foreground">
+              Category: <span className="font-medium">{aiExtraction.category}</span>
+              {aiExtraction.brickName && (
+                <>
+                  {" · "}Brick: <span className="font-medium">{aiExtraction.brickName}</span>
+                  {aiExtraction.brickCode && <span className="font-mono text-xs text-muted-foreground"> ({aiExtraction.brickCode})</span>}
+                </>
+              )}
+              <span className="text-muted-foreground">
+                {" "}· {acceptedExtractedAttributes.length} attribute{acceptedExtractedAttributes.length !== 1 ? "s" : ""} accepted
+              </span>
+            </p>
+            <p className="text-xs text-muted-foreground">
+              {aiExtraction.imageCount === 1
+                ? "1 image analyzed"
+                : `${aiExtraction.imageCount} images analyzed together`}
+              {aiExtraction.imageNames.length > 0 && (
+                <span> — {aiExtraction.imageNames.join(", ")}</span>
+              )}
+            </p>
+          </div>
+          <Button variant="ghost" size="sm" onClick={clearExtraction}>
+            Re-run
+          </Button>
+        </div>
+        {/* Fallback banner when Gemini was unavailable */}
+        {aiExtraction.fallbackUsed && (
+          <div className="flex items-center justify-between rounded border border-primary/30 bg-primary/5 px-3 py-2">
+            <div className="flex items-center gap-2">
+              <Info className="size-4 text-primary shrink-0" />
+              <p className="text-sm text-foreground">AI service unavailable — showing demo results.</p>
+            </div>
+            <Button variant="outline" size="sm" onClick={runExtraction}>Try again with AI</Button>
+          </div>
+        )}
+        <div className="flex items-start gap-2 rounded bg-muted/30 p-2">
+          <Info className="size-3.5 text-muted-foreground mt-0.5 shrink-0" />
+          <p className="text-xs text-muted-foreground">AI-generated attributes should be reviewed before saving. All images were analyzed together to produce this single product-level attribute set. AI attributes apply to all images of this product.</p>
+        </div>
+
+        {/* Product-level attribute cards */}
+        <div className="flex flex-col gap-3 rounded border border-border p-3">
+          {aiExtraction.attributes.length === 0 ? (
+            <p className="text-sm text-muted-foreground">No extended attributes were suggested for this category.</p>
+          ) : (
+            <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+              {aiExtraction.attributes.map((attr, idx) => {
+                const editing = aiEditing?.index === idx
+                return (
+                  <div
+                    key={`${attr.code}-${idx}`}
+                    className={cn(
+                      "flex flex-col gap-2 rounded border p-3",
+                      attr.decision === "accepted" ? "border-tg-success/40 bg-card"
+                        : attr.decision === "rejected" ? "border-border bg-muted/30 opacity-70"
+                        : "border-border bg-card"
+                    )}
+                  >
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="flex items-center gap-2 min-w-0">
+                        <span className="text-xs font-medium uppercase tracking-wide text-muted-foreground truncate">{attr.codeListName}</span>
+                        <span
+                          className={cn(
+                            "inline-flex shrink-0 items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium",
+                            attr.decision === "accepted" ? "bg-tg-success/15 text-tg-success"
+                              : attr.decision === "rejected" ? "bg-muted text-muted-foreground"
+                              : "bg-tg-warning/15 text-tg-warning"
+                          )}
+                        >
+                          {attr.decision === "accepted" ? <Check className="size-3" />
+                            : attr.decision === "rejected" ? <X className="size-3" />
+                            : <AlertCircle className="size-3" />}
+                          {attr.decision === "accepted" ? "Accepted" : attr.decision === "rejected" ? "Rejected" : "Pending review"}
+                        </span>
+                      </div>
+                      <span
+                        className={cn(
+                          "inline-flex shrink-0 items-center rounded-full px-2 py-0.5 text-xs font-medium",
+                          attr.confidence >= 0.85 ? "bg-tg-success/15 text-tg-success"
+                            : attr.confidence >= 0.75 ? "bg-tg-warning/15 text-tg-warning"
+                            : "bg-muted text-muted-foreground"
+                        )}
+                      >
+                        {Math.round(attr.confidence * 100)}%
+                      </span>
+                    </div>
+                    {editing ? (
+                      (() => {
+                        const allowed = valuesForCodeList(attr.codeListName)
+                        return (
+                          <div className="flex flex-col gap-2">
+                            <div className="flex flex-col gap-1">
+                              <Label className="text-xs text-muted-foreground">Attribute Value</Label>
+                              {allowed.length > 0 ? (
+                                <Select
+                                  value={allowed.some(v => v.value === attr.attributeValue) ? attr.attributeValue : undefined}
+                                  onValueChange={(v) => selectAttributeValue(idx, v)}
+                                >
+                                  <SelectTrigger className="h-8 bg-background">
+                                    <SelectValue placeholder="Select a value…" />
+                                  </SelectTrigger>
+                                  <SelectContent>
+                                    {allowed.map(v => (
+                                      <SelectItem key={v.code} value={v.value}>{v.value}</SelectItem>
+                                    ))}
+                                  </SelectContent>
+                                </Select>
+                              ) : (
+                                <Input
+                                  value={attr.attributeValue}
+                                  onChange={(e) => updateAttributeField(idx, "attributeValue", e.target.value)}
+                                  className="h-8 bg-background"
+                                  autoFocus
+                                />
+                              )}
+                            </div>
+                            <div className="flex flex-col gap-1">
+                              <Label className="text-xs text-muted-foreground">GS1 Code</Label>
+                              <Input
+                                value={attr.code}
+                                onChange={(e) => updateAttributeField(idx, "code", e.target.value)}
+                                readOnly={allowed.length > 0}
+                                className={cn("h-8 bg-background font-mono", allowed.length > 0 && "text-muted-foreground")}
+                              />
+                            </div>
+                            <Button size="sm" variant="outline" className="h-7 w-fit gap-1 px-2 text-xs" onClick={() => setAiEditing(null)}>
+                              <Check className="size-3" /> Done
+                            </Button>
+                          </div>
+                        )
+                      })()
+                    ) : (
+                      <>
+                        <p className="text-sm font-medium text-foreground">{attr.attributeValue}</p>
+                        <p className="text-xs text-muted-foreground">GS1 Code: <span className="font-mono text-foreground">{attr.code}</span></p>
+                      </>
+                    )}
+                    <p className="text-xs text-muted-foreground">{attr.reason}</p>
+                    <div className="flex items-center gap-1 pt-1">
+                      {/* Explicit review actions: Accept and Reject are always shown as
+                          separate buttons; the active decision is highlighted. Suggestions
+                          start "pending" and only count once Accept is clicked. */}
+                      <Button
+                        variant={attr.decision === "accepted" ? "default" : "outline"}
+                        size="sm"
+                        className="h-7 gap-1 px-2 text-xs"
+                        aria-pressed={attr.decision === "accepted"}
+                        onClick={() => setAttributeDecision(idx, attr.decision === "accepted" ? "pending" : "accepted")}
+                      >
+                        <Check className="size-3" /> Accept
+                      </Button>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className={cn(
+                          "h-7 gap-1 px-2 text-xs",
+                          attr.decision === "rejected"
+                            ? "border-destructive/50 bg-destructive/10 text-destructive"
+                            : "text-muted-foreground hover:text-destructive"
+                        )}
+                        aria-pressed={attr.decision === "rejected"}
+                        onClick={() => setAttributeDecision(idx, attr.decision === "rejected" ? "pending" : "rejected")}
+                      >
+                        <X className="size-3" /> Reject
+                      </Button>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="h-7 gap-1 px-2 text-xs"
+                        onClick={() => setAiEditing(editing ? null : { index: idx })}
+                      >
+                        <Pencil className="size-3" /> Edit
+                      </Button>
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+          )}
+
+          {/* Unresolved attributes — product level */}
+          {aiExtraction.unresolvedAttributes.length > 0 && (
+            <div className="flex flex-col gap-2 rounded border border-border bg-muted/20 p-3 mt-1">
+              <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Unresolved attributes</p>
+              <ul className="flex flex-col gap-2">
+                {aiExtraction.unresolvedAttributes.map((u, i) => {
+                  const options = valuesForCodeList(u.codeListName)
+                  return (
+                    <li key={i} className="flex items-start gap-2 text-sm">
+                      <AlertCircle className="size-3.5 text-tg-warning mt-0.5 shrink-0" />
+                      <div className="flex-1">
+                        <span className="text-foreground">{u.codeListName}: </span>
+                        <span className="text-muted-foreground">{u.reason}</span>
+                      </div>
+                      {options.length > 0 && (
+                        <select
+                          className="h-7 rounded border border-border bg-background px-2 text-xs text-foreground"
+                          defaultValue=""
+                          onChange={(e) => {
+                            if (e.target.value) resolveUnresolvedAttribute(i, u.codeListName, e.target.value)
+                          }}
+                        >
+                          <option value="" disabled>Add manually…</option>
+                          {options.map(o => (
+                            <option key={o.code} value={o.value}>{o.value}</option>
+                          ))}
+                        </select>
+                      )}
+                    </li>
+                  )
+                })}
+              </ul>
+            </div>
+          )}
+        </div>
+      </div>
+    )
+  )
+
   const handleDragOver = useCallback((e: React.DragEvent) => {
     e.preventDefault()
     setIsDragging(true)
@@ -839,6 +1067,239 @@ export function ImageUploadWizard({
   const removeFile = (fileId: string) => {
     setUploadedFiles(prev => prev.filter(f => f.id !== fileId))
     clearExtraction() // file list changed — stale product-level extraction is invalid
+  }
+
+  // Removes a set of confirmed images (single or bulk) and rebuilds attributesByImage against
+  // the new indices, since it's keyed by array index — without this, deleting an earlier image
+  // would silently shift every later image's per-image attributes onto the wrong image.
+  const deleteFilesByIds = (ids: Set<string>) => {
+    const oldIndexById = new Map(uploadedFiles.map((f, i) => [f.id, i]))
+    const remaining = uploadedFiles.filter(f => !ids.has(f.id))
+    const nextAttrsByImage: typeof attributesByImage = {}
+    remaining.forEach((f, newIdx) => {
+      const oldIdx = oldIndexById.get(f.id)
+      if (oldIdx !== undefined && attributesByImage[oldIdx]) nextAttrsByImage[newIdx] = attributesByImage[oldIdx]
+    })
+    setUploadedFiles(remaining)
+    setAttributesByImage(nextAttrsByImage)
+    clearExtraction() // file list changed — stale product-level extraction is invalid
+    media.prune(remaining.map(f => f.id))
+  }
+
+  // Opens the shared download modal. When presetIds has a single id (per-image download button),
+  // the selection is set to just that image; the modal still lists everything so the user can add
+  // more before confirming. With no presetIds (toolbar), the existing selection is respected.
+  const openDownloadModal = (presetIds?: string[]) => {
+    if (presetIds && presetIds.length > 0) media.selectOnly(presetIds[0])
+    setDownloadPhase("select")
+    setShowDownloadModal(true)
+  }
+
+  // Download Modal — Three-phase: Select → Preparing → Complete. Extracted into a render
+  // function (rather than inline JSX) because it must be reachable from both the post-confirm
+  // Product Media view and the pre-confirm Step 1 file grid, which are two separate `return`
+  // statements in this component; `showDownloadModal`/`downloadPhase` are already top-level
+  // state, so this is a pure JSX relocation with no behavior change.
+  const renderDownloadModal = () => {
+    const selectedFiles = uploadedFiles.filter(f => media.isChecked(f.id))
+    return showDownloadModal && (
+      <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+        <div className="w-full max-w-lg rounded border border-border bg-card shadow-xl">
+          {/* Modal Header */}
+          <div className="flex items-center justify-between border-b border-border bg-gradient-to-r from-tg-header-start to-tg-header-end px-4 py-3">
+            <h2 className="text-base font-semibold text-white">
+              {downloadPhase === "select" && "Download Images with Metadata"}
+              {downloadPhase === "preparing" && "Preparing Download"}
+              {downloadPhase === "complete" && "Download Complete"}
+            </h2>
+            <button
+              onClick={() => setShowDownloadModal(false)}
+              className="text-white/80 hover:text-white"
+            >
+              <X className="size-5" />
+            </button>
+          </div>
+
+          {/* Modal Content */}
+          <div className="p-6">
+            {/* Phase 1: Select */}
+            {downloadPhase === "select" && (
+              <>
+                {/* Download Summary */}
+                <div className="mb-6">
+                  <div className="flex items-center gap-3 mb-4">
+                    <div className="flex size-10 items-center justify-center rounded-full bg-primary/10">
+                      <Package className="size-5 text-primary" />
+                    </div>
+                    <div>
+                      <h3 className="font-medium text-foreground">Download Package</h3>
+                      <p className="text-sm text-muted-foreground">
+                        {uploadLevel === "product"
+                          ? "Product Level"
+                          : uploadLevel === "gtin"
+                          ? "Item Level (GTIN)"
+                          : "Product + Color Code Level"} images
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="rounded border border-border bg-muted/20 p-4">
+                    <div className="text-sm space-y-1 mb-4">
+                      <div className="flex justify-between">
+                        <span className="text-muted-foreground">Product:</span>
+                        <span className="font-medium text-foreground">{getAutoPopulatedData().productId}</span>
+                      </div>
+                      {uploadLevel === "gtin" && (
+                        <div className="flex justify-between">
+                          <span className="text-muted-foreground">GTIN:</span>
+                          <span className="font-medium text-foreground">{getAutoPopulatedData().selectedGtin}</span>
+                        </div>
+                      )}
+                      {uploadLevel === "product-color" && (
+                        <div className="flex justify-between">
+                          <span className="text-muted-foreground">Color Code:</span>
+                          <span className="font-medium text-foreground">{getAutoPopulatedData().colorCode}</span>
+                        </div>
+                      )}
+                      <div className="flex justify-between">
+                        <span className="text-muted-foreground">Total Images:</span>
+                        <span className="font-medium text-foreground">{selectedFiles.length} of {uploadedFiles.length}</span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Files to Download — reflects the selection already made on the Product Media
+                    grid/toolbar; no in-modal checkboxes, to keep selection to a single control. */}
+                <div className="mb-6">
+                  <h4 className="text-sm font-medium text-foreground mb-3">Package Contents:</h4>
+                  <div className="space-y-2 max-h-48 overflow-y-auto">
+                    {selectedFiles.map((file) => (
+                      <div key={file.id} className="flex items-center gap-3 rounded border border-border bg-card p-3">
+                        <div className="flex size-10 items-center justify-center rounded bg-muted">
+                          {file.preview ? (
+                            <img
+                              src={file.preview}
+                              alt=""
+                              className="size-10 rounded object-cover"
+                            />
+                          ) : (
+                            <FileImage className="size-5 text-muted-foreground" />
+                          )}
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-2">
+                            <FileImage className="size-4 text-primary shrink-0" />
+                            <span className="text-sm font-medium text-foreground truncate">{file.name}</span>
+                          </div>
+                          <div className="flex items-center gap-2 mt-0.5">
+                            <FileText className="size-4 text-tg-success shrink-0" />
+                            <span className="text-sm text-muted-foreground truncate">
+                              {file.name.replace(/\.[^/.]+$/, "")}_metadata.txt
+                            </span>
+                          </div>
+                        </div>
+                        <div className="text-right text-xs text-muted-foreground shrink-0">
+                          <div>{formatFileSize(file.size)}</div>
+                          <div>~2 KB</div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Info Note */}
+                <div className="mb-6 flex items-start gap-2 rounded bg-primary/5 p-3 text-sm">
+                  <FileText className="size-4 text-primary mt-0.5 shrink-0" />
+                  <div>
+                    <span className="font-medium text-foreground">Metadata files (.txt)</span>
+                    <span className="text-muted-foreground"> contain all image attributes including company info, product details, file properties, and GDSN attributes for each image.</span>
+                  </div>
+                </div>
+
+                {/* Actions */}
+                <div className="flex items-center justify-end gap-3">
+                  <Button variant="outline" onClick={() => setShowDownloadModal(false)}>
+                    Cancel
+                  </Button>
+                  <Button onClick={handleBulkDownload} disabled={selectedFiles.length === 0}>
+                    <Download className="size-4 mr-2" />
+                    Download {selectedFiles.length === uploadedFiles.length ? "All" : "Selected"} ({selectedFiles.length * 2} files)
+                  </Button>
+                </div>
+              </>
+            )}
+
+            {/* Phase 2: Preparing */}
+            {downloadPhase === "preparing" && (
+              <div className="py-8 flex flex-col items-center justify-center gap-4">
+                <div className="flex size-16 items-center justify-center rounded-full bg-primary/10">
+                  <Download className="size-8 text-primary animate-pulse" />
+                </div>
+                <div className="text-center">
+                  <h3 className="text-lg font-medium text-foreground">Preparing your download</h3>
+                  <p className="text-sm text-muted-foreground mt-1">
+                    Packaging {selectedFiles.length} images with metadata...
+                  </p>
+                </div>
+                <div className="w-48 h-1.5 rounded-full bg-muted overflow-hidden">
+                  <div className="h-full bg-primary rounded-full animate-[progress_1.5s_ease-in-out_infinite]" style={{ width: "60%" }} />
+                </div>
+              </div>
+            )}
+
+            {/* Phase 3: Complete */}
+            {downloadPhase === "complete" && (
+              <div className="text-center py-4">
+                <div className="flex size-16 items-center justify-center rounded-full bg-tg-success/10 mx-auto mb-4">
+                  <CheckCircle2 className="size-8 text-tg-success" />
+                </div>
+                <h3 className="text-lg font-medium text-foreground mb-2">Download Complete</h3>
+                <p className="text-sm text-muted-foreground mb-6">
+                  Your images and metadata files have been downloaded successfully.
+                </p>
+
+                {/* Downloaded Files Summary */}
+                <div className="rounded border border-border bg-muted/20 p-4 mb-6 text-left">
+                  <div className="text-sm font-medium text-foreground mb-3">Downloaded Files:</div>
+                  <div className="space-y-2 max-h-32 overflow-y-auto">
+                    {selectedFiles.map((file) => (
+                      <div key={file.id} className="text-sm">
+                        <div className="flex items-center gap-2 text-foreground">
+                          <Check className="size-4 text-tg-success" />
+                          <span>{file.name}</span>
+                        </div>
+                        <div className="flex items-center gap-2 text-muted-foreground ml-6">
+                          <Check className="size-4 text-tg-success" />
+                          <span>{file.name.replace(/\.[^/.]+$/, "")}_metadata.txt</span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Sample Metadata Preview */}
+                <div className="rounded border border-border bg-card p-4 mb-6 text-left">
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="text-sm font-medium text-foreground">Metadata Preview</span>
+                    <span className="text-xs text-muted-foreground">
+                      {selectedFiles[0]?.name.replace(/\.[^/.]+$/, "") || "image"}_metadata.txt
+                    </span>
+                  </div>
+                  <pre className="text-xs text-muted-foreground bg-muted/30 p-3 rounded overflow-x-auto max-h-40 overflow-y-auto font-mono">
+{selectedFiles[0] ? generateMetadataContent(selectedFiles[0], uploadedFiles.indexOf(selectedFiles[0])) : "No metadata available"}
+                  </pre>
+                </div>
+
+                <Button onClick={() => setShowDownloadModal(false)}>
+                  Close
+                </Button>
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+    )
   }
 
   const formatFileSize = (bytes: number) => {
@@ -1047,18 +1508,68 @@ End of Metadata Export
           </span>
         </div>
 
-        {/* Page-level toolbar — bulk download only; per-card Edit/Download are inline */}
-        <div className="flex items-center gap-1 border border-border bg-card p-1 w-fit">
-          <button 
-            className="p-1.5 hover:bg-muted border border-border" 
-            title="Download All"
-            onClick={() => {
-              setDownloadPhase("select")
-              setShowDownloadModal(true)
-            }}
-          >
-            <Download className="size-4 text-muted-foreground" />
-          </button>
+        {/* Page-level toolbar — selection, bulk download/edit/delete, AI attributes; per-card Edit/Download stay inline */}
+        <div className="flex items-center gap-2 border border-border bg-card p-1 w-fit">
+          {uploadedFiles.length > 0 && (
+            <label className="flex items-center gap-2 px-2 cursor-pointer select-none">
+              <Checkbox
+                checked={media.isAllSelected(uploadedFiles.map(f => f.id))}
+                onCheckedChange={(checked) =>
+                  checked ? media.selectAll(uploadedFiles.map(f => f.id)) : media.clear()
+                }
+              />
+              <span className="text-xs text-muted-foreground">
+                {media.selectedIds.size === 0
+                  ? `All ${uploadedFiles.length} selected`
+                  : `${media.selectedIds.size} selected`}
+              </span>
+            </label>
+          )}
+          <div className="flex items-center gap-1">
+            <button
+              className="p-1.5 hover:bg-muted border border-border"
+              title="Download"
+              onClick={() => openDownloadModal()}
+            >
+              <Download className="size-4 text-muted-foreground" />
+            </button>
+            <button
+              className="p-1.5 hover:bg-muted border border-border disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-transparent"
+              title="Bulk edit selected images"
+              disabled={uploadedFiles.length === 0}
+              onClick={() => {
+                const selectedFiles = uploadedFiles.filter(f => media.isChecked(f.id))
+                const fieldKeys = Object.keys(attributes) as Array<keyof typeof attributes>
+                const seed = { ...attributes }
+                fieldKeys.forEach((key) => {
+                  const values = new Set(selectedFiles.map(f => {
+                    const idx = uploadedFiles.indexOf(f)
+                    const attrs = applyToAll ? attributes : (attributesByImage[idx] || attributes)
+                    return attrs[key]
+                  }))
+                  seed[key] = values.size === 1 ? [...values][0] : ""
+                })
+                setBulkEditDialog({ open: true, draft: seed, touched: {} })
+              }}
+            >
+              <Pencil className="size-4 text-muted-foreground" />
+            </button>
+            <button
+              className="p-1.5 hover:bg-muted border border-border disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-transparent"
+              title="Delete selected images"
+              disabled={uploadedFiles.length === 0}
+              onClick={() => setBulkDeleteConfirmOpen(true)}
+            >
+              <Trash2 className="size-4 text-muted-foreground" />
+            </button>
+            <button
+              className="p-1.5 hover:bg-muted border border-border"
+              title="View AI Attributes"
+              onClick={() => setShowAiAttributesDrawer(true)}
+            >
+              <Sparkles className="size-4 text-muted-foreground" />
+            </button>
+          </div>
         </div>
 
         {/* Company Info Header */}
@@ -1185,18 +1696,19 @@ End of Metadata Export
                 <div key={file.id} id={`supplier-card-${idx}`} className="border border-border bg-card">
                   {/* Card header */}
                   <div className="flex items-center justify-between border-b border-border bg-muted/30 px-3 py-2">
-                    <span className="text-sm font-medium text-tg-link">{levelLabel}</span>
+                    <div className="flex items-center gap-2">
+                      <Checkbox
+                        checked={media.isChecked(file.id)}
+                        onCheckedChange={() => media.toggle(file.id, uploadedFiles.map(f => f.id))}
+                      />
+                      <span className="text-sm font-medium text-tg-link">{levelLabel}</span>
+                    </div>
                     {/* Per-card action toolbar: Edit pencil + per-card Download (Acceptance #1, #3) */}
                     <div className="flex items-center gap-1">
                       <button
                         className="p-1.5 hover:bg-muted rounded"
                         title="Download this image"
-                        onClick={() => {
-                          const link = document.createElement("a")
-                          link.href = file.preview
-                          link.download = file.name
-                          link.click()
-                        }}
+                        onClick={() => openDownloadModal([file.id])}
                       >
                         <Download className="size-3.5 text-muted-foreground" />
                       </button>
@@ -1382,8 +1894,7 @@ End of Metadata Export
                     variant="destructive"
                     onClick={() => {
                       const idx = editAttrDialog.fileIndex
-                      setUploadedFiles(prev => prev.filter((_, i) => i !== idx))
-                      clearExtraction() // file list changed — stale product-level extraction is invalid
+                      deleteFilesByIds(new Set([uploadedFiles[idx].id]))
                       setEditAttrDialog(prev => ({ ...prev, open: false }))
                       setEditDeleteConfirm(false)
                     }}
@@ -1565,6 +2076,136 @@ End of Metadata Export
           </DialogContent>
         </Dialog>
 
+        {/* Bulk Delete confirmation — mirrors the single-item delete step above. Uses
+            media.isChecked (not raw selectedIds) so it always targets exactly what the card
+            checkboxes visually show as checked, including the "nothing explicitly picked ⇒ all
+            checked" default — the file list below and the "deletes every image" warning make
+            that scope unambiguous before the user confirms. */}
+        <Dialog open={bulkDeleteConfirmOpen} onOpenChange={setBulkDeleteConfirmOpen}>
+          <DialogContent className="max-w-md">
+            {(() => {
+              const targetFiles = uploadedFiles.filter(f => media.isChecked(f.id))
+              return (
+                <>
+                  <DialogHeader>
+                    <DialogTitle>Delete {targetFiles.length} selected image{targetFiles.length !== 1 ? "s" : ""}</DialogTitle>
+                  </DialogHeader>
+                  <div className="flex flex-col gap-3 py-2">
+                    <p className="text-sm text-muted-foreground">
+                      Are you sure you want to delete the following image{targetFiles.length !== 1 ? "s" : ""} from{" "}
+                      <span className="font-medium text-foreground">{getAutoPopulatedData().productId}</span>?
+                    </p>
+                    <ul className="flex flex-col gap-1 max-h-40 overflow-y-auto rounded border border-border bg-muted/20 p-2">
+                      {targetFiles.map(f => (
+                        <li key={f.id} className="text-sm text-foreground truncate">{f.name}</li>
+                      ))}
+                    </ul>
+                    {targetFiles.length === uploadedFiles.length && (
+                      <div className="flex items-start gap-3 rounded border border-destructive/40 bg-destructive/5 p-3">
+                        <Trash2 className="size-4 text-destructive mt-0.5 shrink-0" />
+                        <p className="text-sm text-destructive">
+                          This deletes every image on <span className="font-medium">{getAutoPopulatedData().productId}</span>. The product will have zero images after deletion.
+                        </p>
+                      </div>
+                    )}
+                  </div>
+                  <div className="flex items-center justify-end gap-2 pt-2 border-t border-border">
+                    <Button variant="outline" onClick={() => setBulkDeleteConfirmOpen(false)}>
+                      Cancel
+                    </Button>
+                    <Button
+                      variant="destructive"
+                      onClick={() => {
+                        deleteFilesByIds(new Set(targetFiles.map(f => f.id)))
+                        setBulkDeleteConfirmOpen(false)
+                      }}
+                    >
+                      <Trash2 className="size-4 mr-2" />
+                      Delete {targetFiles.length} image{targetFiles.length !== 1 ? "s" : ""}
+                    </Button>
+                  </div>
+                </>
+              )
+            })()}
+          </DialogContent>
+        </Dialog>
+
+        {/* Bulk Edit — mixed-aware: fields where selected images differ show "Mixed" and are left
+            untouched on Save unless the user explicitly changes them, so divergent values aren't
+            silently clobbered. Manual GDSN attributes only — AI attributes are product-level and
+            edited via the AI Attributes drawer instead. Targets media.isChecked, matching the
+            visually-checked cards (same reasoning as Bulk Delete above). */}
+        <Dialog open={bulkEditDialog.open} onOpenChange={(o) => setBulkEditDialog(prev => ({ ...prev, open: o }))}>
+          <DialogContent className="max-w-xl max-h-[90vh] flex flex-col">
+            {(() => {
+              const targetIds = new Set(uploadedFiles.filter(f => media.isChecked(f.id)).map(f => f.id))
+              return (
+                <>
+                  <DialogHeader>
+                    <DialogTitle>Edit {targetIds.size} Selected Image{targetIds.size !== 1 ? "s" : ""}</DialogTitle>
+                    <p className="text-xs text-muted-foreground mt-0.5">
+                      Fields marked "Mixed" differ across the selected images. Only fields you change here will be applied — untouched fields keep each image's existing value.
+                    </p>
+                  </DialogHeader>
+                  <div className="overflow-y-auto flex-1 pr-1 py-2">
+                    <StepTwoForm
+                      currentAttrs={bulkEditDialog.draft}
+                      updateAttrs={(newAttrs) => {
+                        const changedKey = (Object.keys(newAttrs) as Array<keyof typeof attributes>).find(
+                          k => newAttrs[k] !== bulkEditDialog.draft[k]
+                        )
+                        setBulkEditDialog(prev => ({
+                          ...prev,
+                          draft: newAttrs,
+                          touched: changedKey ? { ...prev.touched, [changedKey]: true } : prev.touched,
+                        }))
+                      }}
+                      advancedOpen={advancedOpen}
+                      setAdvancedOpen={setAdvancedOpen}
+                      uploadLevel={uploadLevel}
+                      autoData={getAutoPopulatedData()}
+                    />
+                  </div>
+                  <div className="flex items-center justify-end gap-2 pt-3 border-t border-border">
+                    <Button variant="outline" onClick={() => setBulkEditDialog(prev => ({ ...prev, open: false }))}>
+                      Cancel
+                    </Button>
+                    <Button
+                      disabled={Object.keys(bulkEditDialog.touched).length === 0}
+                      onClick={() => {
+                        const touchedKeys = (Object.keys(bulkEditDialog.touched) as Array<keyof typeof attributes>)
+                          .filter(k => bulkEditDialog.touched[k])
+                        setAttributesByImage(prev => {
+                          const next = { ...prev }
+                          uploadedFiles.forEach((f, idx) => {
+                            const existing = applyToAll ? attributes : (prev[idx] || attributes)
+                            if (!targetIds.has(f.id)) {
+                              // Not part of this bulk edit — snapshot its current effective value so it
+                              // keeps displaying correctly once applyToAll flips to false below.
+                              next[idx] = next[idx] || existing
+                              return
+                            }
+                            const merged = { ...existing }
+                            touchedKeys.forEach((k) => { merged[k] = bulkEditDialog.draft[k] })
+                            next[idx] = merged
+                          })
+                          return next
+                        })
+                        // attributesByImage is only read in per-image mode — a bulk edit on a subset
+                        // implies per-image mode, otherwise the edit would have no visible effect.
+                        if (applyToAll) setApplyToAll(false)
+                        setBulkEditDialog({ open: false, draft: {} as typeof attributes, touched: {} })
+                      }}
+                    >
+                      Save
+                    </Button>
+                  </div>
+                </>
+              )
+            })()}
+          </DialogContent>
+        </Dialog>
+
         {/* Action Buttons — single Done button returns to landing */}
         <div className="flex items-center justify-end gap-3 pt-4">
           <Button onClick={onComplete}>
@@ -1572,204 +2213,25 @@ End of Metadata Export
           </Button>
         </div>
 
-        {/* Download Modal — Three-phase: Select → Preparing → Complete */}
-        {showDownloadModal && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
-            <div className="w-full max-w-lg rounded border border-border bg-card shadow-xl">
-              {/* Modal Header */}
-              <div className="flex items-center justify-between border-b border-border bg-gradient-to-r from-tg-header-start to-tg-header-end px-4 py-3">
-                <h2 className="text-base font-semibold text-white">
-                  {downloadPhase === "select" && "Download Images with Metadata"}
-                  {downloadPhase === "preparing" && "Preparing Download"}
-                  {downloadPhase === "complete" && "Download Complete"}
-                </h2>
-                <button 
-                  onClick={() => setShowDownloadModal(false)}
-                  className="text-white/80 hover:text-white"
-                >
-                  <X className="size-5" />
-                </button>
-              </div>
-
-              {/* Modal Content */}
-              <div className="p-6">
-                {/* Phase 1: Select */}
-                {downloadPhase === "select" && (
-                  <>
-                    {/* Download Summary */}
-                    <div className="mb-6">
-                      <div className="flex items-center gap-3 mb-4">
-                        <div className="flex size-10 items-center justify-center rounded-full bg-primary/10">
-                          <Package className="size-5 text-primary" />
-                        </div>
-                        <div>
-                          <h3 className="font-medium text-foreground">Download Package</h3>
-                          <p className="text-sm text-muted-foreground">
-                            {uploadLevel === "product" 
-                              ? "Product Level" 
-                              : uploadLevel === "gtin"
-                              ? "Item Level (GTIN)"
-                              : "Product + Color Code Level"} images
-                          </p>
-                        </div>
-                      </div>
-
-                      <div className="rounded border border-border bg-muted/20 p-4">
-                        <div className="text-sm space-y-1 mb-4">
-                          <div className="flex justify-between">
-                            <span className="text-muted-foreground">Product:</span>
-                            <span className="font-medium text-foreground">{getAutoPopulatedData().productId}</span>
-                          </div>
-                          {uploadLevel === "gtin" && (
-                            <div className="flex justify-between">
-                              <span className="text-muted-foreground">GTIN:</span>
-                              <span className="font-medium text-foreground">{getAutoPopulatedData().selectedGtin}</span>
-                            </div>
-                          )}
-                          {uploadLevel === "product-color" && (
-                            <div className="flex justify-between">
-                              <span className="text-muted-foreground">Color Code:</span>
-                              <span className="font-medium text-foreground">{getAutoPopulatedData().colorCode}</span>
-                            </div>
-                          )}
-                          <div className="flex justify-between">
-                            <span className="text-muted-foreground">Total Images:</span>
-                            <span className="font-medium text-foreground">{uploadedFiles.length}</span>
-                          </div>
-                        </div>
-                      </div>
-                    </div>
-
-                    {/* Files to Download */}
-                    <div className="mb-6">
-                      <h4 className="text-sm font-medium text-foreground mb-3">Package Contents:</h4>
-                      <div className="space-y-2 max-h-48 overflow-y-auto">
-                        {uploadedFiles.map((file) => (
-                          <div key={file.id} className="flex items-center gap-3 rounded border border-border bg-card p-3">
-                            <div className="flex size-10 items-center justify-center rounded bg-muted">
-                              {file.preview ? (
-                                <img 
-                                  src={file.preview} 
-                                  alt="" 
-                                  className="size-10 rounded object-cover"
-                                />
-                              ) : (
-                                <FileImage className="size-5 text-muted-foreground" />
-                              )}
-                            </div>
-                            <div className="flex-1 min-w-0">
-                              <div className="flex items-center gap-2">
-                                <FileImage className="size-4 text-primary shrink-0" />
-                                <span className="text-sm font-medium text-foreground truncate">{file.name}</span>
-                              </div>
-                              <div className="flex items-center gap-2 mt-0.5">
-                                <FileText className="size-4 text-tg-success shrink-0" />
-                                <span className="text-sm text-muted-foreground truncate">
-                                  {file.name.replace(/\.[^/.]+$/, "")}_metadata.txt
-                                </span>
-                              </div>
-                            </div>
-                            <div className="text-right text-xs text-muted-foreground shrink-0">
-                              <div>{formatFileSize(file.size)}</div>
-                              <div>~2 KB</div>
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-
-                    {/* Info Note */}
-                    <div className="mb-6 flex items-start gap-2 rounded bg-primary/5 p-3 text-sm">
-                      <FileText className="size-4 text-primary mt-0.5 shrink-0" />
-                      <div>
-                        <span className="font-medium text-foreground">Metadata files (.txt)</span>
-                        <span className="text-muted-foreground"> contain all image attributes including company info, product details, file properties, and GDSN attributes for each image.</span>
-                      </div>
-                    </div>
-
-                    {/* Actions */}
-                    <div className="flex items-center justify-end gap-3">
-                      <Button variant="outline" onClick={() => setShowDownloadModal(false)}>
-                        Cancel
-                      </Button>
-                      <Button onClick={handleBulkDownload}>
-                        <Download className="size-4 mr-2" />
-                        Download All ({uploadedFiles.length * 2} files)
-                      </Button>
-                    </div>
-                  </>
-                )}
-
-                {/* Phase 2: Preparing */}
-                {downloadPhase === "preparing" && (
-                  <div className="py-8 flex flex-col items-center justify-center gap-4">
-                    <div className="flex size-16 items-center justify-center rounded-full bg-primary/10">
-                      <Download className="size-8 text-primary animate-pulse" />
-                    </div>
-                    <div className="text-center">
-                      <h3 className="text-lg font-medium text-foreground">Preparing your download</h3>
-                      <p className="text-sm text-muted-foreground mt-1">
-                        Packaging {uploadedFiles.length} images with metadata...
-                      </p>
-                    </div>
-                    <div className="w-48 h-1.5 rounded-full bg-muted overflow-hidden">
-                      <div className="h-full bg-primary rounded-full animate-[progress_1.5s_ease-in-out_infinite]" style={{ width: "60%" }} />
-                    </div>
-                  </div>
-                )}
-
-                {/* Phase 3: Complete */}
-                {downloadPhase === "complete" && (
-                  <div className="text-center py-4">
-                    <div className="flex size-16 items-center justify-center rounded-full bg-tg-success/10 mx-auto mb-4">
-                      <CheckCircle2 className="size-8 text-tg-success" />
-                    </div>
-                    <h3 className="text-lg font-medium text-foreground mb-2">Download Complete</h3>
-                    <p className="text-sm text-muted-foreground mb-6">
-                      Your images and metadata files have been downloaded successfully.
-                    </p>
-
-                    {/* Downloaded Files Summary */}
-                    <div className="rounded border border-border bg-muted/20 p-4 mb-6 text-left">
-                      <div className="text-sm font-medium text-foreground mb-3">Downloaded Files:</div>
-                      <div className="space-y-2 max-h-32 overflow-y-auto">
-                        {uploadedFiles.map((file) => (
-                          <div key={file.id} className="text-sm">
-                            <div className="flex items-center gap-2 text-foreground">
-                              <Check className="size-4 text-tg-success" />
-                              <span>{file.name}</span>
-                            </div>
-                            <div className="flex items-center gap-2 text-muted-foreground ml-6">
-                              <Check className="size-4 text-tg-success" />
-                              <span>{file.name.replace(/\.[^/.]+$/, "")}_metadata.txt</span>
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-
-                    {/* Sample Metadata Preview */}
-                    <div className="rounded border border-border bg-card p-4 mb-6 text-left">
-                      <div className="flex items-center justify-between mb-2">
-                        <span className="text-sm font-medium text-foreground">Metadata Preview</span>
-                        <span className="text-xs text-muted-foreground">
-                          {uploadedFiles[0]?.name.replace(/\.[^/.]+$/, "") || "image"}_metadata.txt
-                        </span>
-                      </div>
-                      <pre className="text-xs text-muted-foreground bg-muted/30 p-3 rounded overflow-x-auto max-h-40 overflow-y-auto font-mono">
-{uploadedFiles[0] ? generateMetadataContent(uploadedFiles[0], 0) : "No metadata available"}
-                      </pre>
-                    </div>
-
-                    <Button onClick={() => setShowDownloadModal(false)}>
-                      Close
-                    </Button>
-                  </div>
-                )}
-              </div>
+        {/* View AI Attributes drawer — editable (AI is the primary editing surface, unlike
+            manual GDSN attributes). Reuses the same Accept/Reject/Edit card as Step 2. */}
+        <Sheet open={showAiAttributesDrawer} onOpenChange={setShowAiAttributesDrawer}>
+          <SheetContent className="sm:max-w-xl overflow-y-auto">
+            <SheetHeader>
+              <SheetTitle className="flex items-center gap-2">
+                <Sparkles className="size-4 text-primary" />
+                AI-Extracted Attributes
+              </SheetTitle>
+            </SheetHeader>
+            <div className="px-4 pb-4">
+              {hasExtraction ? renderAiResultsCard() : (
+                <AiAttributesTable attributes={[]} />
+              )}
             </div>
-          </div>
-        )}
+          </SheetContent>
+        </Sheet>
+
+        {renderDownloadModal()}
       </div>
     )
   }
@@ -2249,12 +2711,7 @@ End of Metadata Export
                       </div>
                       <div className="absolute inset-0 flex items-center justify-center gap-2 bg-black/50 opacity-0 transition-opacity group-hover:opacity-100">
                         <button
-                          onClick={() => {
-                            const link = document.createElement('a')
-                            link.href = file.preview
-                            link.download = file.name
-                            link.click()
-                          }}
+                          onClick={() => openDownloadModal([file.id])}
                           className="rounded bg-primary p-1.5 text-white hover:bg-primary/90"
                           title="Download image"
                         >
@@ -2437,229 +2894,7 @@ End of Metadata Export
                     </div>
                   )}
 
-                  {/* Product-level results — one consolidated set for all uploaded images */}
-                  {isComplete && aiExtraction && (
-                    <div className="flex flex-col gap-4">
-                      {/* Results header */}
-                      <div className="flex items-center justify-between">
-                        <div className="flex flex-col gap-0.5">
-                          <p className="text-sm text-foreground">
-                            Category: <span className="font-medium">{aiExtraction.category}</span>
-                            {aiExtraction.brickName && (
-                              <>
-                                {" · "}Brick: <span className="font-medium">{aiExtraction.brickName}</span>
-                                {aiExtraction.brickCode && <span className="font-mono text-xs text-muted-foreground"> ({aiExtraction.brickCode})</span>}
-                              </>
-                            )}
-                            <span className="text-muted-foreground">
-                              {" "}· {acceptedExtractedAttributes.length} attribute{acceptedExtractedAttributes.length !== 1 ? "s" : ""} accepted
-                            </span>
-                          </p>
-                          <p className="text-xs text-muted-foreground">
-                            {aiExtraction.imageCount === 1
-                              ? "1 image analyzed"
-                              : `${aiExtraction.imageCount} images analyzed together`}
-                            {aiExtraction.imageNames.length > 0 && (
-                              <span> — {aiExtraction.imageNames.join(", ")}</span>
-                            )}
-                          </p>
-                        </div>
-                        <Button variant="ghost" size="sm" onClick={clearExtraction}>
-                          Re-run
-                        </Button>
-                      </div>
-                      {/* Fallback banner when Gemini was unavailable */}
-                      {aiExtraction.fallbackUsed && (
-                        <div className="flex items-center justify-between rounded border border-primary/30 bg-primary/5 px-3 py-2">
-                          <div className="flex items-center gap-2">
-                            <Info className="size-4 text-primary shrink-0" />
-                            <p className="text-sm text-foreground">AI service unavailable — showing demo results.</p>
-                          </div>
-                          <Button variant="outline" size="sm" onClick={runExtraction}>Try again with AI</Button>
-                        </div>
-                      )}
-                      <div className="flex items-start gap-2 rounded bg-muted/30 p-2">
-                        <Info className="size-3.5 text-muted-foreground mt-0.5 shrink-0" />
-                        <p className="text-xs text-muted-foreground">AI-generated attributes should be reviewed before saving. All images were analyzed together to produce this single product-level attribute set.</p>
-                      </div>
-
-                      {/* Product-level attribute cards */}
-                      <div className="flex flex-col gap-3 rounded border border-border p-3">
-                        {aiExtraction.attributes.length === 0 ? (
-                          <p className="text-sm text-muted-foreground">No extended attributes were suggested for this category.</p>
-                        ) : (
-                          <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
-                            {aiExtraction.attributes.map((attr, idx) => {
-                              const editing = aiEditing?.index === idx
-                              return (
-                                <div
-                                  key={`${attr.code}-${idx}`}
-                                  className={cn(
-                                    "flex flex-col gap-2 rounded border p-3",
-                                    attr.decision === "accepted" ? "border-tg-success/40 bg-card"
-                                      : attr.decision === "rejected" ? "border-border bg-muted/30 opacity-70"
-                                      : "border-border bg-card"
-                                  )}
-                                >
-                                  <div className="flex items-center justify-between gap-2">
-                                    <div className="flex items-center gap-2 min-w-0">
-                                      <span className="text-xs font-medium uppercase tracking-wide text-muted-foreground truncate">{attr.codeListName}</span>
-                                      <span
-                                        className={cn(
-                                          "inline-flex shrink-0 items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium",
-                                          attr.decision === "accepted" ? "bg-tg-success/15 text-tg-success"
-                                            : attr.decision === "rejected" ? "bg-muted text-muted-foreground"
-                                            : "bg-tg-warning/15 text-tg-warning"
-                                        )}
-                                      >
-                                        {attr.decision === "accepted" ? <Check className="size-3" />
-                                          : attr.decision === "rejected" ? <X className="size-3" />
-                                          : <AlertCircle className="size-3" />}
-                                        {attr.decision === "accepted" ? "Accepted" : attr.decision === "rejected" ? "Rejected" : "Pending review"}
-                                      </span>
-                                    </div>
-                                    <span
-                                      className={cn(
-                                        "inline-flex shrink-0 items-center rounded-full px-2 py-0.5 text-xs font-medium",
-                                        attr.confidence >= 0.85 ? "bg-tg-success/15 text-tg-success"
-                                          : attr.confidence >= 0.75 ? "bg-tg-warning/15 text-tg-warning"
-                                          : "bg-muted text-muted-foreground"
-                                      )}
-                                    >
-                                      {Math.round(attr.confidence * 100)}%
-                                    </span>
-                                  </div>
-                                  {editing ? (
-                                    (() => {
-                                      const allowed = valuesForCodeList(attr.codeListName)
-                                      return (
-                                        <div className="flex flex-col gap-2">
-                                          <div className="flex flex-col gap-1">
-                                            <Label className="text-xs text-muted-foreground">Attribute Value</Label>
-                                            {allowed.length > 0 ? (
-                                              <Select
-                                                value={allowed.some(v => v.value === attr.attributeValue) ? attr.attributeValue : undefined}
-                                                onValueChange={(v) => selectAttributeValue(idx, v)}
-                                              >
-                                                <SelectTrigger className="h-8 bg-background">
-                                                  <SelectValue placeholder="Select a value…" />
-                                                </SelectTrigger>
-                                                <SelectContent>
-                                                  {allowed.map(v => (
-                                                    <SelectItem key={v.code} value={v.value}>{v.value}</SelectItem>
-                                                  ))}
-                                                </SelectContent>
-                                              </Select>
-                                            ) : (
-                                              <Input
-                                                value={attr.attributeValue}
-                                                onChange={(e) => updateAttributeField(idx, "attributeValue", e.target.value)}
-                                                className="h-8 bg-background"
-                                                autoFocus
-                                              />
-                                            )}
-                                          </div>
-                                          <div className="flex flex-col gap-1">
-                                            <Label className="text-xs text-muted-foreground">GS1 Code</Label>
-                                            <Input
-                                              value={attr.code}
-                                              onChange={(e) => updateAttributeField(idx, "code", e.target.value)}
-                                              readOnly={allowed.length > 0}
-                                              className={cn("h-8 bg-background font-mono", allowed.length > 0 && "text-muted-foreground")}
-                                            />
-                                          </div>
-                                          <Button size="sm" variant="outline" className="h-7 w-fit gap-1 px-2 text-xs" onClick={() => setAiEditing(null)}>
-                                            <Check className="size-3" /> Done
-                                          </Button>
-                                        </div>
-                                      )
-                                    })()
-                                  ) : (
-                                    <>
-                                      <p className="text-sm font-medium text-foreground">{attr.attributeValue}</p>
-                                      <p className="text-xs text-muted-foreground">GS1 Code: <span className="font-mono text-foreground">{attr.code}</span></p>
-                                    </>
-                                  )}
-                                  <p className="text-xs text-muted-foreground">{attr.reason}</p>
-                                  <div className="flex items-center gap-1 pt-1">
-                                    {/* Explicit review actions: Accept and Reject are always shown as
-                                        separate buttons; the active decision is highlighted. Suggestions
-                                        start "pending" and only count once Accept is clicked. */}
-                                    <Button
-                                      variant={attr.decision === "accepted" ? "default" : "outline"}
-                                      size="sm"
-                                      className="h-7 gap-1 px-2 text-xs"
-                                      aria-pressed={attr.decision === "accepted"}
-                                      onClick={() => setAttributeDecision(idx, attr.decision === "accepted" ? "pending" : "accepted")}
-                                    >
-                                      <Check className="size-3" /> Accept
-                                    </Button>
-                                    <Button
-                                      variant="outline"
-                                      size="sm"
-                                      className={cn(
-                                        "h-7 gap-1 px-2 text-xs",
-                                        attr.decision === "rejected"
-                                          ? "border-destructive/50 bg-destructive/10 text-destructive"
-                                          : "text-muted-foreground hover:text-destructive"
-                                      )}
-                                      aria-pressed={attr.decision === "rejected"}
-                                      onClick={() => setAttributeDecision(idx, attr.decision === "rejected" ? "pending" : "rejected")}
-                                    >
-                                      <X className="size-3" /> Reject
-                                    </Button>
-                                    <Button
-                                      variant="outline"
-                                      size="sm"
-                                      className="h-7 gap-1 px-2 text-xs"
-                                      onClick={() => setAiEditing(editing ? null : { index: idx })}
-                                    >
-                                      <Pencil className="size-3" /> Edit
-                                    </Button>
-                                  </div>
-                                </div>
-                              )
-                            })}
-                          </div>
-                        )}
-
-                        {/* Unresolved attributes — product level */}
-                        {aiExtraction.unresolvedAttributes.length > 0 && (
-                          <div className="flex flex-col gap-2 rounded border border-border bg-muted/20 p-3 mt-1">
-                            <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Unresolved attributes</p>
-                            <ul className="flex flex-col gap-2">
-                              {aiExtraction.unresolvedAttributes.map((u, i) => {
-                                const options = valuesForCodeList(u.codeListName)
-                                return (
-                                  <li key={i} className="flex items-start gap-2 text-sm">
-                                    <AlertCircle className="size-3.5 text-tg-warning mt-0.5 shrink-0" />
-                                    <div className="flex-1">
-                                      <span className="text-foreground">{u.codeListName}: </span>
-                                      <span className="text-muted-foreground">{u.reason}</span>
-                                    </div>
-                                    {options.length > 0 && (
-                                      <select
-                                        className="h-7 rounded border border-border bg-background px-2 text-xs text-foreground"
-                                        defaultValue=""
-                                        onChange={(e) => {
-                                          if (e.target.value) resolveUnresolvedAttribute(i, u.codeListName, e.target.value)
-                                        }}
-                                      >
-                                        <option value="" disabled>Add manually…</option>
-                                        {options.map(o => (
-                                          <option key={o.code} value={o.value}>{o.value}</option>
-                                        ))}
-                                      </select>
-                                    )}
-                                  </li>
-                                )
-                              })}
-                            </ul>
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                  )}
+                  {renderAiResultsCard()}
                 </div>
               )}
             </div>
@@ -2974,49 +3209,14 @@ End of Metadata Export
                   <Sparkles className="size-4 text-primary" />
                   <h3 className="text-sm font-semibold text-foreground">AI-Extracted Product Attributes</h3>
                 </div>
-                {/* Product-level meta */}
-                <div className="flex flex-wrap gap-x-4 gap-y-1 mb-3">
-                  <p className="text-xs text-muted-foreground">
-                    Category: <span className="font-medium text-foreground">{aiExtraction.category}</span>
-                  </p>
-                  {aiExtraction.brickName && (
-                    <p className="text-xs text-muted-foreground">
-                      Brick: <span className="font-medium text-foreground">{aiExtraction.brickName}</span>
-                      {aiExtraction.brickCode && <span className="font-mono"> ({aiExtraction.brickCode})</span>}
-                    </p>
-                  )}
-                  <p className="text-xs text-muted-foreground">
-                    Images analyzed: <span className="font-medium text-foreground">{aiExtraction.imageCount}</span>
-                    {aiExtraction.imageNames.length > 0 && (
-                      <span> ({aiExtraction.imageNames.join(", ")})</span>
-                    )}
-                  </p>
-                </div>
-                <div className="overflow-x-auto">
-                  <table className="w-full text-sm">
-                    <thead className="bg-muted/30">
-                      <tr>
-                        <th className="px-3 py-2 text-left font-medium text-foreground">Code List Name</th>
-                        <th className="px-3 py-2 text-left font-medium text-foreground">Attribute Value</th>
-                        <th className="px-3 py-2 text-left font-medium text-foreground">GS1 Code</th>
-                        <th className="px-3 py-2 text-left font-medium text-foreground">Confidence</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {acceptedExtractedAttributes.map((attr, idx) => (
-                        <tr key={`${attr.code}-${idx}`} className="border-t border-border">
-                          <td className="px-3 py-2 text-foreground">{attr.codeListName}</td>
-                          <td className="px-3 py-2 text-foreground">{attr.attributeValue}</td>
-                          <td className="px-3 py-2 font-mono text-foreground">{attr.code}</td>
-                          <td className="px-3 py-2 text-muted-foreground">{Math.round(attr.confidence * 100)}%</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-                <p className="mt-3 text-xs text-muted-foreground">
-                  These product-level extended attributes are stored separately from image attributes.
-                </p>
+                <AiAttributesTable
+                  attributes={acceptedExtractedAttributes}
+                  category={aiExtraction.category}
+                  brickName={aiExtraction.brickName}
+                  brickCode={aiExtraction.brickCode}
+                  imageCount={aiExtraction.imageCount}
+                  imageNames={aiExtraction.imageNames}
+                />
               </div>
             )}
 
@@ -3089,6 +3289,8 @@ End of Metadata Export
           </Button>
         </div>
       </div>
+
+      {renderDownloadModal()}
     </div>
   )
 }

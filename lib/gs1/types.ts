@@ -26,3 +26,23 @@ export type CodeListOptions = {
 
 // The full set of relevant Code Lists (and their values) for one product category.
 export type CategoryOptions = CodeListOptions[]
+
+// AI extended-attribute extraction types, shared between the Supplier upload wizard and the
+// Retailer browser (so both can render the same attribute table/drawer against the same shape).
+// `decision` is tri-state: suggestions arrive "pending" and require an explicit Accept click to
+// count (Accept and Reject are shown as separate actions on every card).
+export type AttributeDecision = "pending" | "accepted" | "rejected"
+
+export type ExtractedAttribute = {
+  codeListName: string
+  attributeValue: string
+  code: string
+  confidence: number
+  reason: string
+  decision: AttributeDecision
+}
+
+export type UnresolvedAttribute = {
+  codeListName: string
+  reason: string
+}
