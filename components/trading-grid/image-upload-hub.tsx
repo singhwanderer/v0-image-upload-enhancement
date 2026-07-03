@@ -1,7 +1,7 @@
 "use client"
 
 import { useState } from "react"
-import { Upload, Search, FileImage, ArrowRight, Info, ChevronDown, Filter, Download, Package, Palette, Barcode, CheckCircle2, X, BookOpen, FileText, Check } from "lucide-react"
+import { Upload, Search, FileImage, ArrowRight, Info, ChevronDown, Filter, Download, Package, Palette, Barcode, CheckCircle2, X, BookOpen, FileText, Check, Sparkles } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
 import {
@@ -17,9 +17,18 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog"
+import {
+  Sheet,
+  SheetContent,
+  SheetHeader,
+  SheetTitle,
+} from "@/components/ui/sheet"
 import { Label } from "@/components/ui/label"
 import { Checkbox } from "@/components/ui/checkbox"
 import { cn } from "@/lib/utils"
+import type { ExtractedAttribute } from "@/lib/gs1/types"
+import { useMediaSelection } from "./use-media-selection"
+import { AiAttributesTable } from "./ai-attributes-table"
 
 interface ImageUploadLandingProps {
   onUploadClick: (level: "product" | "product-color" | "gtin") => void
@@ -57,6 +66,17 @@ const selectionCodeDescription = (code: string | null): string =>
 const MOCK_IMAGES = [
   { fileName: "sneaker-front.jpg", fileType: "JPG-JPEG", imageType: "SI-Still Shot", purpose: "INT-Internet", orientation: "PRI-Primary", locationType: "ACL", createDate: "Apr 7, 2026", previewSrc: "/mock/sneaker-front.jpg" },
   { fileName: "sneaker-side.jpg", fileType: "JPG-JPEG", imageType: "SI-Still Shot", purpose: "INT-Internet", orientation: "PRI-Primary", locationType: "ACL", createDate: "Apr 13, 2026", lastUpdate: "Apr 23, 2026", previewSrc: "/mock/sneaker-side.jpg" },
+]
+
+// Representative AI-extracted attributes for the retailer's read-only "View AI Attributes"
+// drawer. Retailer and Supplier are independent mock portals with no shared store in this
+// prototype, so there's no real session to read a supplier's actual extraction from — this
+// fixture stands in for parity with the Supplier's editable drawer.
+const MOCK_AI_ATTRIBUTES: ExtractedAttribute[] = [
+  { codeListName: "Shoe Type", attributeValue: "Athletic/Running", code: "ATH", confidence: 0.91, reason: "Mesh upper and cushioned midsole visible.", decision: "accepted" },
+  { codeListName: "Closure Type", attributeValue: "Lace-up", code: "LAC", confidence: 0.88, reason: "Laces visible across the vamp.", decision: "accepted" },
+  { codeListName: "Toe Shape", attributeValue: "Round", code: "RND", confidence: 0.79, reason: "Rounded toe box in profile.", decision: "accepted" },
+  { codeListName: "Gender", attributeValue: "Unisex", code: "UNI", confidence: 0.7, reason: "Neutral colorway; verify.", decision: "accepted" },
 ]
 
 export function ImageUploadLanding({ onUploadClick }: ImageUploadLandingProps) {
@@ -310,12 +330,14 @@ export function RetailerImageBrowser() {
   const [downloadPhase, setDownloadPhase] = useState<"select" | "preparing" | "complete">("select")
   // Lightbox: full-size view of a single product-media image
   const [lightboxImage, setLightboxImage] = useState<{ src: string; fileName: string } | null>(null)
+  // Selection state for selective download (Retailer stays read-only — no edit/delete).
+  const media = useMediaSelection()
+  const [showAiAttributesDrawer, setShowAiAttributesDrawer] = useState(false)
 
-  const downloadSingleImage = (src: string, fileName: string) => {
-    const link = document.createElement("a")
-    link.href = src
-    link.download = fileName
-    link.click()
+  const openDownloadModal = (presetIds?: string[]) => {
+    if (presetIds && presetIds.length > 0) media.selectOnly(presetIds[0])
+    setDownloadPhase("select")
+    setShowDownloadModal(true)
   }
 
 
@@ -634,19 +656,34 @@ export function RetailerImageBrowser() {
 
   // Product Media View (read-only for retailer)
   if (currentView === "product-media") {
+    const selectedImages = MOCK_IMAGES.filter(img => media.isChecked(img.fileName))
     return (
       <div className="flex flex-col gap-6">
         {renderBreadcrumb()}
         
-        {/* Toolbar */}
-        <div className="flex items-center gap-1 border border-border bg-card p-1 w-fit">
-          <button className="p-1.5 hover:bg-muted" title="Download" onClick={() => {
-            setDownloadPhase("select")
-            setShowDownloadModal(true)
-          }}>
-            <Download className="size-4 text-muted-foreground" />
-          </button>
-
+        {/* Toolbar — selection + download + AI attributes; read-only (no edit/delete) */}
+        <div className="flex items-center gap-2 border border-border bg-card p-1 w-fit">
+          <label className="flex items-center gap-2 px-2 cursor-pointer select-none">
+            <Checkbox
+              checked={media.isAllSelected(MOCK_IMAGES.map(i => i.fileName))}
+              onCheckedChange={(checked) =>
+                checked ? media.selectAll(MOCK_IMAGES.map(i => i.fileName)) : media.clear()
+              }
+            />
+            <span className="text-xs text-muted-foreground">
+              {media.selectedIds.size === 0
+                ? `All ${MOCK_IMAGES.length} selected`
+                : `${media.selectedIds.size} selected`}
+            </span>
+          </label>
+          <div className="flex items-center gap-1">
+            <button className="p-1.5 hover:bg-muted" title="Download" onClick={() => openDownloadModal()}>
+              <Download className="size-4 text-muted-foreground" />
+            </button>
+            <button className="p-1.5 hover:bg-muted" title="View AI Attributes" onClick={() => setShowAiAttributesDrawer(true)}>
+              <Sparkles className="size-4 text-muted-foreground" />
+            </button>
+          </div>
         </div>
 
         {/* Context Info */}
@@ -682,13 +719,19 @@ export function RetailerImageBrowser() {
         <div className="flex flex-col gap-3">
           {MOCK_IMAGES.map((img, idx) => (
             <div key={idx} id={`retailer-card-${idx}`} className="border border-border bg-card">
-              {/* Card header — read-only (no edit), but download is available per image */}
+              {/* Card header — read-only (no edit/delete), but selection + download are available per image */}
               <div className="flex items-center justify-between border-b border-border bg-muted/30 px-3 py-2">
-                <span className="text-sm font-medium text-tg-link">Product Level Image</span>
+                <div className="flex items-center gap-2">
+                  <Checkbox
+                    checked={media.isChecked(img.fileName)}
+                    onCheckedChange={() => media.toggle(img.fileName, MOCK_IMAGES.map(i => i.fileName))}
+                  />
+                  <span className="text-sm font-medium text-tg-link">Product Level Image</span>
+                </div>
                 <button
                   className="p-1.5 hover:bg-muted rounded"
                   title="Download this image"
-                  onClick={() => downloadSingleImage(img.previewSrc, img.fileName)}
+                  onClick={() => openDownloadModal([img.fileName])}
                 >
                   <Download className="size-3.5 text-muted-foreground" />
                 </button>
@@ -789,17 +832,18 @@ export function RetailerImageBrowser() {
                           </div>
                           <div className="flex justify-between">
                             <span className="text-muted-foreground">Total Images:</span>
-                            <span className="font-medium text-foreground">{MOCK_IMAGES.length}</span>
+                            <span className="font-medium text-foreground">{selectedImages.length} of {MOCK_IMAGES.length}</span>
                           </div>
                         </div>
                       </div>
                     </div>
 
-                    {/* Files to Download */}
+                    {/* Files to Download — reflects the selection already made on the Product
+                        Media grid/toolbar; no in-modal checkboxes, to keep selection to a single control. */}
                     <div className="mb-6">
                       <h4 className="text-sm font-medium text-foreground mb-3">Package Contents:</h4>
                       <div className="space-y-2 max-h-48 overflow-y-auto">
-                        {MOCK_IMAGES.map((img, idx) => (
+                        {selectedImages.map((img, idx) => (
                           <div key={idx} className="flex items-center gap-3 rounded border border-border bg-card p-3">
                             <div className="flex size-10 items-center justify-center rounded bg-muted">
                               <FileImage className="size-5 text-muted-foreground" />
@@ -839,15 +883,18 @@ export function RetailerImageBrowser() {
                       <Button variant="outline" onClick={() => setShowDownloadModal(false)}>
                         Cancel
                       </Button>
-                      <Button onClick={() => {
-                        setDownloadPhase("preparing")
-                        // Simulate preparation delay
-                        setTimeout(() => {
-                          setDownloadPhase("complete")
-                        }, 1500)
-                      }}>
+                      <Button
+                        disabled={selectedImages.length === 0}
+                        onClick={() => {
+                          setDownloadPhase("preparing")
+                          // Simulate preparation delay
+                          setTimeout(() => {
+                            setDownloadPhase("complete")
+                          }, 1500)
+                        }}
+                      >
                         <Download className="size-4 mr-2" />
-                        Download All ({MOCK_IMAGES.length * 2} files)
+                        Download {selectedImages.length === MOCK_IMAGES.length ? "All" : "Selected"} ({selectedImages.length * 2} files)
                       </Button>
                     </div>
                   </>
@@ -862,7 +909,7 @@ export function RetailerImageBrowser() {
                     <div className="text-center">
                       <h3 className="text-lg font-medium text-foreground">Preparing your download</h3>
                       <p className="text-sm text-muted-foreground mt-1">
-                        Packaging {MOCK_IMAGES.length} images with metadata...
+                        Packaging {selectedImages.length} images with metadata...
                       </p>
                     </div>
                     <div className="w-48 h-1.5 rounded-full bg-muted overflow-hidden">
@@ -886,7 +933,7 @@ export function RetailerImageBrowser() {
                     <div className="rounded border border-border bg-muted/20 p-4 mb-6 text-left">
                       <div className="text-sm font-medium text-foreground mb-3">Downloaded Files:</div>
                       <div className="space-y-2 max-h-32 overflow-y-auto">
-                        {MOCK_IMAGES.map((img, idx) => (
+                        {selectedImages.map((img, idx) => (
                           <div key={idx} className="text-sm">
                             <div className="flex items-center gap-2 text-foreground">
                               <Check className="size-4 text-tg-success" />
@@ -906,7 +953,7 @@ export function RetailerImageBrowser() {
                       <div className="flex items-center justify-between mb-2">
                         <span className="text-sm font-medium text-foreground">Metadata Preview</span>
                         <span className="text-xs text-muted-foreground">
-                          {MOCK_IMAGES[0]?.fileName.replace(/\.[^/.]+$/, "") || "image"}_metadata.txt
+                          {selectedImages[0]?.fileName.replace(/\.[^/.]+$/, "") || "image"}_metadata.txt
                         </span>
                       </div>
                       <pre className="text-xs text-muted-foreground bg-muted/30 p-3 rounded overflow-x-auto max-h-40 overflow-y-auto font-mono">
@@ -923,10 +970,10 @@ Product ID: ${selectedProduct?.id || "RUNCOOL-GRY-M"}
 Selection Code: ${selectedSelectionCode || "001"} - ${selectionCodeDescription(selectedSelectionCode)}
 
 IMAGE DETAILS
-File Name: ${MOCK_IMAGES[0]?.fileName || "sneaker-front.jpg"}
-Image Type: ${MOCK_IMAGES[0]?.imageType || "SI-Still Shot"}
-Purpose: ${MOCK_IMAGES[0]?.purpose || "INT-Internet"}
-Orientation: ${MOCK_IMAGES[0]?.orientation || "PRI-Primary"}`}
+File Name: ${selectedImages[0]?.fileName || "sneaker-front.jpg"}
+Image Type: ${selectedImages[0]?.imageType || "SI-Still Shot"}
+Purpose: ${selectedImages[0]?.purpose || "INT-Internet"}
+Orientation: ${selectedImages[0]?.orientation || "PRI-Primary"}`}
                       </pre>
                     </div>
 
@@ -962,6 +1009,26 @@ Orientation: ${MOCK_IMAGES[0]?.orientation || "PRI-Primary"}`}
             <span className="absolute bottom-4 text-sm text-white/80">{lightboxImage.fileName}</span>
           </div>
         )}
+
+        {/* View AI Attributes drawer — read-only (retailers don't own the attributes) */}
+        <Sheet open={showAiAttributesDrawer} onOpenChange={setShowAiAttributesDrawer}>
+          <SheetContent className="sm:max-w-xl overflow-y-auto">
+            <SheetHeader>
+              <SheetTitle className="flex items-center gap-2">
+                <Sparkles className="size-4 text-primary" />
+                AI-Extracted Attributes
+              </SheetTitle>
+            </SheetHeader>
+            <div className="px-4 pb-4">
+              <AiAttributesTable
+                attributes={MOCK_AI_ATTRIBUTES}
+                category="Shoes"
+                imageCount={MOCK_IMAGES.length}
+                imageNames={MOCK_IMAGES.map(i => i.fileName)}
+              />
+            </div>
+          </SheetContent>
+        </Sheet>
       </div>
     )
   }
