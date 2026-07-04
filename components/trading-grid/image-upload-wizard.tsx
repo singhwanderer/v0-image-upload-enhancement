@@ -53,6 +53,7 @@ import {
 } from "@/components/ui/sheet"
 import { cn } from "@/lib/utils"
 import { validateImageBatch, type ValidationError } from "./upload-validation"
+import { measureImageFile, type MeasuredImageMetadata } from "./image-metadata"
 import useSWR from "swr"
 import type { CategoryOptions, AttributeDecision, ExtractedAttribute, UnresolvedAttribute } from "@/lib/gs1/types"
 import { buildMockExtraction } from "@/lib/gs1/mock-scenarios"
@@ -238,6 +239,9 @@ type UploadedFile = {
   type: string
   preview: string
   status: "uploading" | "complete" | "error"
+  // Auto-captured at staging by decoding the file itself (no AI, no manual entry).
+  // Absent while measurement is in flight; fields are null when unreadable.
+  measured?: MeasuredImageMetadata
 }
 
 // ExtractionApiResponse: product-level shape returned by POST /api/extract-attributes.
@@ -280,16 +284,28 @@ type StepTwoFormProps = {
   currentAttrs: {
     imageType: string; purpose: string; orientation: string; locationType: string;
     externalLocation: string; imageStyle: string; facing: string; angle: string;
-    clippingPath: string; imageDescription: string; pixelDensity: string; height: string; width: string;
+    clippingPath: string; imageDescription: string;
   }
   updateAttrs: (a: StepTwoFormProps["currentAttrs"]) => void
   advancedOpen: boolean
   setAdvancedOpen: (v: boolean) => void
   uploadLevel: "product" | "product-color" | "gtin"
   autoData: { colorCode: string; selectedGtin: string }
+  // Auto-captured per-file facts (dimensions/DPI) shown read-only. Omitted in bulk edit,
+  // where no single file is in context — measured facts are never bulk-editable.
+  measuredFiles?: { name: string; measured?: MeasuredImageMetadata }[]
 }
 
-function StepTwoForm({ currentAttrs, updateAttrs, advancedOpen, setAdvancedOpen, uploadLevel, autoData }: StepTwoFormProps) {
+// Read-only summary of a file's decoded dimensions/DPI. undefined = measurement in flight.
+function formatMeasured(m?: MeasuredImageMetadata): string {
+  if (!m) return "Measuring…"
+  const dims = m.width && m.height ? `${m.width} × ${m.height} px` : null
+  const dpi = m.dpi ? `${m.dpi} DPI` : null
+  if (!dims && !dpi) return "Not readable from file"
+  return [dims, dpi].filter(Boolean).join(" · ")
+}
+
+function StepTwoForm({ currentAttrs, updateAttrs, advancedOpen, setAdvancedOpen, uploadLevel, autoData, measuredFiles }: StepTwoFormProps) {
   return (
     <div className="flex flex-col gap-4">
       {/* Auto-populated fields (read-only) */}
@@ -374,12 +390,34 @@ function StepTwoForm({ currentAttrs, updateAttrs, advancedOpen, setAdvancedOpen,
 
       <div className="border-t border-border" />
 
-      {/* Optional attributes disclosure (8 fields) (Change 3a) */}
+      {/* Measured from file — auto-captured by decoding each staged binary (no AI, no typing).
+          Always visible: these facts should never hide behind the optional disclosure. */}
+      {measuredFiles && measuredFiles.length > 0 && (
+        <div className="flex flex-col gap-1.5 rounded border border-border bg-muted/20 p-3">
+          <div className="flex items-center gap-2">
+            <span className="text-xs font-semibold uppercase tracking-wide text-foreground">Measured from file</span>
+            <span className="rounded bg-primary/10 px-1.5 py-0.5 text-xs font-medium text-primary">Auto-captured</span>
+          </div>
+          <div className="flex flex-col gap-0.5 max-h-24 overflow-y-auto">
+            {measuredFiles.map((f, i) => (
+              <div key={i} className="flex items-center gap-2 text-xs">
+                <span className="truncate max-w-[220px] text-muted-foreground" title={f.name}>{f.name}</span>
+                <span className="font-medium text-foreground">{formatMeasured(f.measured)}</span>
+              </div>
+            ))}
+          </div>
+          <p className="text-xs text-muted-foreground">
+            Dimensions and DPI are read directly from each image file — no manual entry needed.
+          </p>
+        </div>
+      )}
+
+      {/* Optional attributes disclosure (5 fields) (Change 3a) */}
       <Collapsible open={advancedOpen} onOpenChange={setAdvancedOpen}>
         <CollapsibleTrigger asChild>
           <button className="flex w-full items-center gap-2 rounded border border-border bg-muted/30 px-4 py-3 text-left text-sm font-medium text-foreground hover:bg-muted/50">
             <ChevronDown className={cn("size-4 transition-transform", advancedOpen && "rotate-180")} />
-            {advancedOpen ? "Optional attributes (8) — collapse" : "Optional attributes (8) — expand"}
+            {advancedOpen ? "Optional attributes (5) — collapse" : "Optional attributes (5) — expand"}
           </button>
         </CollapsibleTrigger>
         <CollapsibleContent>
@@ -412,18 +450,6 @@ function StepTwoForm({ currentAttrs, updateAttrs, advancedOpen, setAdvancedOpen,
             <div className="flex flex-col gap-2 md:col-span-2">
               <Label className="text-sm font-medium">Image Description</Label>
               <Input value={currentAttrs.imageDescription} onChange={(e) => updateAttrs({ ...currentAttrs, imageDescription: e.target.value })} placeholder="Enter description..." className="bg-background" />
-            </div>
-            <div className="flex flex-col gap-2">
-              <Label className="text-xs text-muted-foreground">Pixel Density (DPI)</Label>
-              <Input value={currentAttrs.pixelDensity} onChange={(e) => updateAttrs({ ...currentAttrs, pixelDensity: e.target.value })} placeholder="e.g. 300" className="bg-background" type="number" min="1" />
-            </div>
-            <div className="flex flex-col gap-2">
-              <Label className="text-xs text-muted-foreground">Height (px)</Label>
-              <Input value={currentAttrs.height} onChange={(e) => updateAttrs({ ...currentAttrs, height: e.target.value })} placeholder="e.g. 2400" className="bg-background" type="number" min="1" />
-            </div>
-            <div className="flex flex-col gap-2">
-              <Label className="text-xs text-muted-foreground">Width (px)</Label>
-              <Input value={currentAttrs.width} onChange={(e) => updateAttrs({ ...currentAttrs, width: e.target.value })} placeholder="e.g. 2400" className="bg-background" type="number" min="1" />
             </div>
           </div>
         </CollapsibleContent>
@@ -534,9 +560,8 @@ export function ImageUploadWizard({
     angle: "",
     clippingPath: "",
     imageDescription: "",
-    pixelDensity: "",
-    height: "",
-    width: "",
+    // pixel density / height / width are NOT attributes: they are per-file facts,
+    // auto-captured into UploadedFile.measured at staging (see image-metadata.ts).
   })
   
   // Per-image attributes (when applyToAll is false)
@@ -1050,6 +1075,13 @@ export function ImageUploadWizard({
       status: "complete" as const,
     }))
     setUploadedFiles(prev => [...prev, ...newFiles])
+    // Auto-capture dimensions/DPI by decoding each staged file (deterministic, no AI).
+    // Patched by id so a file deleted mid-measurement is a no-op, never resurrected.
+    newFiles.forEach(({ id, file }) => {
+      void measureImageFile(file).then(measured => {
+        setUploadedFiles(prev => prev.map(f => (f.id === id ? { ...f, measured } : f)))
+      })
+    })
   }, [])
 
   const handleDrop = useCallback((e: React.DragEvent) => {
@@ -1368,9 +1400,9 @@ Purpose:             ${PURPOSE_OPTIONS.find(o => o.value === fileAttrs.purpose)?
 Orientation:         ${ORIENTATION_OPTIONS.find(o => o.value === fileAttrs.orientation)?.label || "Not specified"}
 Location Type:       ${LOCATION_TYPE_OPTIONS.find(o => o.value === fileAttrs.locationType)?.label || "Not specified"}
 External Location:   ${fileAttrs.externalLocation || "N/A"}
-Pixel Density (DPI): ${fileAttrs.pixelDensity || "N/A"}
-Height:              ${fileAttrs.height || "N/A"}
-Width:               ${fileAttrs.width || "N/A"}
+Pixel Density (DPI): ${file.measured?.dpi ?? "N/A"} (measured from file)
+Height:              ${file.measured?.height != null ? `${file.measured.height} px` : "N/A"} (measured from file)
+Width:               ${file.measured?.width != null ? `${file.measured.width} px` : "N/A"} (measured from file)
 Image Style:         ${IMAGE_STYLE_OPTIONS.find(o => o.value === fileAttrs.imageStyle)?.label || "Not specified"}
 Facing (GDSN):       ${FACING_OPTIONS.find(o => o.value === fileAttrs.facing)?.label || "Not specified"}
 Angle:               ${ANGLE_OPTIONS.find(o => o.value === fileAttrs.angle)?.label || "Not specified"}
@@ -1777,15 +1809,15 @@ End of Metadata Export
                       </div>
                       <div className="flex border-b border-border">
                         <div className="w-44 bg-muted/20 px-3 py-2 font-medium text-foreground shrink-0">Pixel Density (DPI):</div>
-                        <div className="flex-1 px-3 py-2 text-foreground">{cardAttrs.pixelDensity || ""}</div>
+                        <div className="flex-1 px-3 py-2 text-foreground">{file.measured?.dpi ?? ""}</div>
                       </div>
                       <div className="flex border-b border-border">
                         <div className="w-44 bg-muted/20 px-3 py-2 font-medium text-foreground shrink-0">Height:</div>
-                        <div className="flex-1 px-3 py-2 text-foreground">{cardAttrs.height || ""}</div>
+                        <div className="flex-1 px-3 py-2 text-foreground">{file.measured?.height != null ? `${file.measured.height} px` : ""}</div>
                       </div>
                       <div className="flex border-b border-border">
                         <div className="w-44 bg-muted/20 px-3 py-2 font-medium text-foreground shrink-0">Width:</div>
-                        <div className="flex-1 px-3 py-2 text-foreground">{cardAttrs.width || ""}</div>
+                        <div className="flex-1 px-3 py-2 text-foreground">{file.measured?.width != null ? `${file.measured.width} px` : ""}</div>
                       </div>
                       <div className="flex border-b border-border">
                         <div className="w-44 bg-muted/20 px-3 py-2 font-medium text-foreground shrink-0">Image Style:</div>
@@ -2001,6 +2033,9 @@ End of Metadata Export
                       setAdvancedOpen={setAdvancedOpen}
                       uploadLevel={uploadLevel}
                       autoData={getAutoPopulatedData()}
+                      measuredFiles={uploadedFiles[editAttrDialog.fileIndex]
+                        ? [{ name: uploadedFiles[editAttrDialog.fileIndex].name, measured: uploadedFiles[editAttrDialog.fileIndex].measured }]
+                        : []}
                     />
                   </div>
                 </div>
@@ -2050,6 +2085,10 @@ End of Metadata Export
                             status: "complete",
                           }
                           setUploadedFiles(prev => prev.map((u, i) => i === editAttrDialog.fileIndex ? newFile : u))
+                          // Re-measure the replacement binary — its dimensions/DPI supersede the old file's.
+                          void measureImageFile(f).then(measured => {
+                            setUploadedFiles(prev => prev.map(u => (u.id === newFile.id ? { ...u, measured } : u)))
+                          })
                           clearExtraction() // replaced image invalidates the product-level extraction
                           setPendingReplaceFile(null)
                         }
@@ -3011,6 +3050,9 @@ End of Metadata Export
                     setAdvancedOpen={setAdvancedOpen}
                     uploadLevel={uploadLevel}
                     autoData={getAutoPopulatedData()}
+                    measuredFiles={uploadedFiles[activeAttributeImageIndex]
+                      ? [{ name: uploadedFiles[activeAttributeImageIndex].name, measured: uploadedFiles[activeAttributeImageIndex].measured }]
+                      : []}
                   />
                 </div>
               </div>
@@ -3040,6 +3082,7 @@ End of Metadata Export
                   setAdvancedOpen={setAdvancedOpen}
                   uploadLevel={uploadLevel}
                   autoData={getAutoPopulatedData()}
+                  measuredFiles={uploadedFiles.map(f => ({ name: f.name, measured: f.measured }))}
                 />
               </div>
             )}
