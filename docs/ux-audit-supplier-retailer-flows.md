@@ -188,12 +188,14 @@ Instead, add a dedicated left-nav item — supplier: **Media Library**, retailer
 
 The Vendor List's own inline search chrome stays scoped narrowly to filtering the vendor table by name/account number — it never tries to double as this cross-vendor image search. Two boxes, two unambiguous scopes.
 
+**Results are always product-grouped — with or without a query.** Browse Images renders one card per product, never a flat interleaved image grid. Landing on the page with nothing typed or faceted shows every product as a card — that alone is the answer to "let me just view everything without searching"; there's no separate browse mode, only the unfiltered state of the same grid. Each card shows a single representative thumbnail (preferring the image marked Primary/PRI orientation, since that field already exists in the data), the product ID + description, a vendor tag (results span all vendors), and an image-count badge, plus a **"View all N images"** action. Clicking it navigates into the same Product Media screen the drill-down already uses (`image-upload-hub.tsx:658-1020` — lightbox, AI attributes drawer, download modal, selection bar, all reused as-is), with a breadcrumb reading `Browse Images > [Product]` so back returns to the filtered grid, not to Vendor List. Search and facets narrow which product cards surface but reset once inside a product's own view — opening a product always shows its full image set regardless of which facet got you there, keeping the model simple: facets are for finding the product, not for filtering once you're looking at it. (Flagged, not solved here: at real scale the zero-filter landing grid needs pagination/infinite scroll and a default sort — recency is the natural default.)
+
 **Example user flow** — a buyer needs front-facing shots from APEX for the spring reset:
 
-1. Clicks **Browse Images** in the left nav (image icon, top of Catalogue) → lands on a page subtitled "Search images by product or GTIN, across all vendors," with an all-images grid below.
-2. Types "apex running" into the search box (placeholder: "Search by product, GTIN, or SKU..."); applies facets *Image Type = Product Image*, *Orientation = Front (PRI)*, *Selection Code = 001 Spring Running Line* → 24 matches.
-3. Selects via visible card checkboxes; a persistent bar reads *"6 of 24 selected · Clear · Download."*
-4. Download → single confirm ("Download 6 images") with one optional toggle *"Include metadata file"* → progress and completion as a toast. Done.
+1. Clicks **Browse Images** in the left nav (image icon, top of Catalogue) → lands on a page subtitled "Search images by product or GTIN, across all vendors," with every product shown as a card by default.
+2. Types "apex running" into the search box (placeholder: "Search by product, GTIN, or SKU..."); applies facets *Image Type = Product Image*, *Orientation = Front (PRI)*, *Selection Code = 001 Spring Running Line* → the grid narrows to 4 matching product cards.
+3. Clicks **"View all 6 images"** on the Cool Runner card → navigates to that product's Product Media screen (same lightbox/selection/download primitives as the drill-down today), now showing its full image set.
+4. Selects via visible checkboxes; a persistent bar reads *"6 of 6 selected · Clear · Download."* Download → single confirm ("Download 6 images") with one optional toggle *"Include metadata file"* → progress and completion as a toast. Done.
 
 #### P1.2 Selection, download, and feedback fixes — effort S–M
 
@@ -230,7 +232,7 @@ Deliberately **out of scope** (stakeholder decision): connecting supplier submis
 | P0 | Prefill/lock SI · INT · JPG in manual wizard; add LMI; align level model to product/item + color_code | S | ease |
 | P0 | Compact AI review (summary + exceptions) with Accept-all; AI prefills orientation; auto-suggest brick | S–M | ease |
 | P0 | 500 KB + JPG-only validation, copy fixes, 4-vs-3 step numbering, filename character check | XS | trust |
-| P1 | Media Library / Browse Images: dedicated, icon-led nav item (first in Catalogue) + self-describing landing page + attribute-faceted grid — distinct from Advanced Search | M–L | retailer value |
+| P1 | Media Library / Browse Images: dedicated, icon-led nav item (first in Catalogue) + self-describing landing page + product-grouped, attribute-faceted grid (view-all-N-images per card, no query required) — distinct from Advanced Search | M–L | retailer value |
 | P1 | Explicit selection model, simplified download modal, functional Export, mounted toasts | S–M | retailer value |
 | P1 | Bulk edit: mixed-value states + impact preview (grid editor later) | M | scale |
 | P2 | Filename-convention auto-assign in interactive wizard | M | scale |
