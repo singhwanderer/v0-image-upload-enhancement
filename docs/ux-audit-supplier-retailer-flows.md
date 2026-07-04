@@ -180,14 +180,18 @@ The inline footprint shrinks from ~50% of the step to a few rows and stays const
 
 ### P1 — Make the retailer side real
 
-#### P1.1 "Browse Images" as a first-class nav item + faceted search — effort M–L
+#### P1.1 "Browse Images" as a first-class, self-explanatory nav item + faceted search — effort M–L
 
-Today the only path to any image is the 4-click drill-down. Add a left-nav item — supplier: **Media Library**, retailer: **Browse Images** — landing on a searchable, attribute-faceted grid across vendors and products; the drill-down remains as the secondary, account-oriented path. This is where captured attributes finally earn their keep as facets (fixes R1/R2).
+Today the only path to any image is the 4-click drill-down, and a plain search box bolted onto the Vendor List page wouldn't fix that — sitting above a vendor table, it would read as a filter on that table, not as a global search across every vendor's products. (This is a distinct capability from **Advanced Search**, an existing power-user nav entry that stays untouched and out of scope here.)
+
+Instead, add a dedicated left-nav item — supplier: **Media Library**, retailer: **Browse Images** — made unmistakable through three reinforcing signals rather than relying on the label alone: (1) paired with the same `ImageIcon` the supplier's "Image Upload" nav item already uses, so an image glyph sits next to the word "Images"; (2) placed first in the Catalogue nav section, above "Vendor List"/"Selection Code List," signaling it's the primary way in, not a buried extra; (3) the destination page itself states its scope the instant it loads — a one-line subtitle under the page title ("Search images by product or GTIN, across all vendors") plus a search input whose placeholder says the same thing directly ("Search by product, GTIN, or SKU..."). It lands on a searchable, attribute-faceted grid across vendors and products; the drill-down remains the secondary, account-oriented path. This is where captured attributes finally earn their keep as facets (fixes R1/R2).
+
+The Vendor List's own inline search chrome stays scoped narrowly to filtering the vendor table by name/account number — it never tries to double as this cross-vendor image search. Two boxes, two unambiguous scopes.
 
 **Example user flow** — a buyer needs front-facing shots from APEX for the spring reset:
 
-1. Clicks **Browse Images** in the left nav → all-images grid.
-2. Types "apex running"; applies facets *Image Type = Product Image*, *Orientation = Front (PRI)*, *Selection Code = 001 Spring Running Line* → 24 matches.
+1. Clicks **Browse Images** in the left nav (image icon, top of Catalogue) → lands on a page subtitled "Search images by product or GTIN, across all vendors," with an all-images grid below.
+2. Types "apex running" into the search box (placeholder: "Search by product, GTIN, or SKU..."); applies facets *Image Type = Product Image*, *Orientation = Front (PRI)*, *Selection Code = 001 Spring Running Line* → 24 matches.
 3. Selects via visible card checkboxes; a persistent bar reads *"6 of 24 selected · Clear · Download."*
 4. Download → single confirm ("Download 6 images") with one optional toggle *"Include metadata file"* → progress and completion as a toast. Done.
 
@@ -226,7 +230,7 @@ Deliberately **out of scope** (stakeholder decision): connecting supplier submis
 | P0 | Prefill/lock SI · INT · JPG in manual wizard; add LMI; align level model to product/item + color_code | S | ease |
 | P0 | Compact AI review (summary + exceptions) with Accept-all; AI prefills orientation; auto-suggest brick | S–M | ease |
 | P0 | 500 KB + JPG-only validation, copy fixes, 4-vs-3 step numbering, filename character check | XS | trust |
-| P1 | Media Library / Browse Images nav + attribute-faceted grid | M–L | retailer value |
+| P1 | Media Library / Browse Images: dedicated, icon-led nav item (first in Catalogue) + self-describing landing page + attribute-faceted grid — distinct from Advanced Search | M–L | retailer value |
 | P1 | Explicit selection model, simplified download modal, functional Export, mounted toasts | S–M | retailer value |
 | P1 | Bulk edit: mixed-value states + impact preview (grid editor later) | M | scale |
 | P2 | Filename-convention auto-assign in interactive wizard | M | scale |
