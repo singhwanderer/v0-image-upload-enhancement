@@ -1,16 +1,9 @@
 "use client"
 
 import { useState } from "react"
-import { Upload, Search, FileImage, ArrowRight, Info, ChevronDown, Filter, Download, Package, Palette, Barcode, CheckCircle2, X, BookOpen, FileText, Check, Sparkles } from "lucide-react"
+import { Upload, FileImage, ArrowRight, Info, Download, Package, Palette, Barcode, CheckCircle2, X, BookOpen, FileText, Check, Sparkles } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select"
 import {
   Dialog,
   DialogContent,
@@ -29,7 +22,7 @@ import { cn } from "@/lib/utils"
 import type { ExtractedAttribute } from "@/lib/gs1/types"
 import { useMediaSelection } from "./use-media-selection"
 import { AiAttributesTable } from "./ai-attributes-table"
-import { buildImageMetadataCsv, downloadCsv, csvPreview, type ImageMetadataRow } from "./metadata-csv"
+import { buildImageMetadataCsv, buildTableCsv, downloadCsv, csvPreview, type ImageMetadataRow } from "./metadata-csv"
 
 // "SI-Still Shot" → "SI": the mock fixtures store display labels; the CSV carries codes.
 const codeOf = (label: string): string => label.split("-")[0] ?? label
@@ -430,17 +423,16 @@ export function RetailerImageBrowser() {
         <div className="flex items-start justify-between">
           <h1 className="text-xl font-semibold text-foreground">Vendor List</h1>
           <div className="flex items-center gap-1 border border-border bg-card p-1">
-            <button className="p-1.5 hover:bg-muted" title="Export">
+            <button
+              className="p-1.5 hover:bg-muted"
+              title="Export vendor list as CSV"
+              onClick={() => downloadCsv("vendor_list.csv", buildTableCsv(
+                ["trading_partner_name", "account_number", "selection_codes", "products"],
+                MOCK_VENDORS.map(v => [v.name, v.accountNumber, String(v.selectionCodes), String(v.products)])
+              ))}
+            >
               <Download className="size-4 text-muted-foreground" />
             </button>
-          </div>
-        </div>
-
-        {/* Search */}
-        <div className="rounded border border-border bg-tg-section-header p-3">
-          <div className="flex items-center gap-2 text-sm font-medium text-foreground">
-            <Search className="size-4" />
-            Search
           </div>
         </div>
 
@@ -484,7 +476,14 @@ export function RetailerImageBrowser() {
         <div className="flex items-start justify-between">
           <h1 className="text-xl font-semibold text-foreground">Selection Code List</h1>
           <div className="flex items-center gap-1 border border-border bg-card p-1">
-            <button className="p-1.5 hover:bg-muted" title="Export">
+            <button
+              className="p-1.5 hover:bg-muted"
+              title="Export selection codes as CSV"
+              onClick={() => downloadCsv("selection_codes.csv", buildTableCsv(
+                ["selection_code", "description", "total_products"],
+                SELECTION_CODES.map(({ code, description }, idx) => [code, description, String(idx === 0 ? MOCK_PRODUCTS.length : 14 + idx * 3)])
+              ))}
+            >
               <Download className="size-4 text-muted-foreground" />
             </button>
           </div>
@@ -542,7 +541,14 @@ export function RetailerImageBrowser() {
         <div className="flex items-start justify-between">
           <h1 className="text-xl font-semibold text-foreground">Product List</h1>
           <div className="flex items-center gap-1 border border-border bg-card p-1">
-            <button className="p-1.5 hover:bg-muted" title="Export">
+            <button
+              className="p-1.5 hover:bg-muted"
+              title="Export product list as CSV"
+              onClick={() => downloadCsv("product_list.csv", buildTableCsv(
+                ["product", "description", "create_date", "last_update_date", "gtins", "images"],
+                MOCK_PRODUCTS.map(p => [p.id, p.description, p.createDate, p.lastUpdate, String(p.gtins), String(p.images)])
+              ))}
+            >
               <Download className="size-4 text-muted-foreground" />
             </button>
           </div>
@@ -570,49 +576,17 @@ export function RetailerImageBrowser() {
           </div>
         </div>
 
-        {/* View Selector */}
-        <div className="flex items-center gap-4">
-          <span className="text-sm font-medium text-muted-foreground">View:</span>
-          <Select defaultValue="catalogue">
-            <SelectTrigger className="w-40">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="catalogue">Catalogue</SelectItem>
-              <SelectItem value="grid">Grid</SelectItem>
-            </SelectContent>
-          </Select>
-        </div>
-
-        {/* Filter */}
-        <div className="rounded border border-border bg-tg-section-header p-3">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-2 text-sm font-medium text-foreground">
-              <Filter className="size-4" />
-              Filter
-            </div>
-            <span className="text-xs text-tg-link cursor-pointer hover:underline">Clear Filter</span>
-          </div>
-        </div>
-
-        {/* Pagination */}
-        <div className="flex items-center justify-end gap-2 text-sm text-muted-foreground">
+        {/* Record count — pagination chrome removed: all mock products fit one page (P1.4) */}
+        <div className="flex items-center justify-end text-sm text-muted-foreground">
           <span>1-{MOCK_PRODUCTS.length} of {MOCK_PRODUCTS.length} records</span>
-          <div className="flex items-center gap-1">
-            <Button variant="outline" size="sm" disabled>&lt;&lt;</Button>
-            <Button variant="outline" size="sm" disabled>&lt;</Button>
-            <span className="px-2">1</span>
-            <Button variant="outline" size="sm" disabled>&gt;</Button>
-            <Button variant="outline" size="sm" disabled>&gt;&gt;</Button>
-          </div>
         </div>
 
-        {/* Product Table */}
+        {/* Product Table — leading thumbnail: an image browser should show images (P1.4) */}
         <div className="rounded border border-border">
           <table className="w-full text-sm">
             <thead className="bg-tg-table-header text-left">
               <tr>
-                <th className="w-8 px-3 py-2"></th>
+                <th className="w-16 px-3 py-2 font-medium text-foreground">Image</th>
                 <th className="px-3 py-2 font-medium text-foreground">Product</th>
                 <th className="px-3 py-2 font-medium text-foreground">Description</th>
                 <th className="px-3 py-2 font-medium text-foreground">Create Date</th>
@@ -624,14 +598,25 @@ export function RetailerImageBrowser() {
             </thead>
             <tbody>
               {MOCK_PRODUCTS.map((product) => (
-                <tr 
-                  key={product.id} 
+                <tr
+                  key={product.id}
                   className="border-t border-border hover:bg-muted/50"
                 >
                   <td className="px-3 py-2">
-                    <input type="checkbox" className="size-4" />
+                    {product.images > 0 ? (
+                      <img
+                        src={MOCK_IMAGES[0].previewSrc}
+                        alt={product.description}
+                        className="size-10 rounded border border-border object-cover cursor-pointer"
+                        onClick={() => handleProductSelect(product)}
+                      />
+                    ) : (
+                      <div className="flex size-10 items-center justify-center rounded border border-border bg-muted/30">
+                        <FileImage className="size-5 text-muted-foreground/50" />
+                      </div>
+                    )}
                   </td>
-                  <td 
+                  <td
                     className="px-3 py-2 text-tg-link hover:underline cursor-pointer"
                     onClick={() => handleProductSelect(product)}
                   >
@@ -686,8 +671,13 @@ export function RetailerImageBrowser() {
             <button className="p-1.5 hover:bg-muted" title="Download" onClick={() => openDownloadModal()}>
               <Download className="size-4 text-muted-foreground" />
             </button>
-            <button className="p-1.5 hover:bg-muted" title="View AI Attributes" onClick={() => setShowAiAttributesDrawer(true)}>
+            <button
+              className="flex items-center gap-1.5 p-1.5 hover:bg-muted"
+              title="View AI Attributes"
+              onClick={() => setShowAiAttributesDrawer(true)}
+            >
               <Sparkles className="size-4 text-muted-foreground" />
+              <span className="text-xs text-muted-foreground">AI Attributes</span>
             </button>
           </div>
         </div>
@@ -744,35 +734,55 @@ export function RetailerImageBrowser() {
               </div>
               {/* Card body: attributes 60% left, preview placeholder 40% right */}
               <div className="flex">
-                {/* Left: attribute table */}
+                {/* Left: attribute table — empty rows are suppressed behind a count so the
+                    populated fields stay prominent instead of drowning in blanks (P1.4 / R1) */}
                 <div className="w-3/5 border-r border-border text-sm">
-                  {[
-                    { label: "File Name:", value: img.fileName, link: false },
-                    { label: "File Type:", value: img.fileType, link: false },
-                    { label: "Image Type:", value: img.imageType, link: true },
-                    { label: "Purpose:", value: img.purpose, link: true },
-                    { label: "Orientation:", value: img.orientation, link: true },
-                    { label: "Location Type:", value: img.locationType, link: false },
-                    { label: "External Location:", value: "", link: false },
-                    { label: "File Size:", value: "", link: false },
-                    { label: "Pixel Density (DPI):", value: "", link: false },
-                    { label: "Height:", value: "", link: false },
-                    { label: "Width:", value: "", link: false },
-                    { label: "Image Style:", value: "", link: false },
-                    { label: "Facing (GDSN):", value: "", link: false },
-                    { label: "Angle:", value: "", link: false },
-                    { label: "Clipping Path:", value: "", link: false },
-                    { label: "Image Description:", value: "", link: false },
-                    { label: "Create Date:", value: img.createDate, link: false },
-                    { label: "Last Update Date:", value: img.lastUpdate || "", link: false },
-                  ].map((row, rowIdx) => (
-                    <div key={rowIdx} className="flex border-b border-border last:border-b-0">
-                      <div className="w-44 bg-muted/20 px-3 py-2 font-medium text-foreground shrink-0">{row.label}</div>
-                      <div className={cn("flex-1 px-3 py-2", row.link ? "text-tg-link" : "text-foreground")}>
-                        {row.value}
-                      </div>
-                    </div>
-                  ))}
+                  {(() => {
+                    const allRows = [
+                      { label: "File Name:", value: img.fileName, link: false },
+                      { label: "File Type:", value: img.fileType, link: false },
+                      { label: "Image Type:", value: img.imageType, link: true },
+                      { label: "Purpose:", value: img.purpose, link: true },
+                      { label: "Orientation:", value: img.orientation, link: true },
+                      { label: "Location Type:", value: img.locationType, link: false },
+                      { label: "External Location:", value: "", link: false },
+                      { label: "File Size:", value: "", link: false },
+                      { label: "Pixel Density (DPI):", value: "", link: false },
+                      { label: "Height:", value: "", link: false },
+                      { label: "Width:", value: "", link: false },
+                      { label: "Image Style:", value: "", link: false },
+                      { label: "Facing (GDSN):", value: "", link: false },
+                      { label: "Angle:", value: "", link: false },
+                      { label: "Clipping Path:", value: "", link: false },
+                      { label: "Image Description:", value: "", link: false },
+                      { label: "Create Date:", value: img.createDate, link: false },
+                      { label: "Last Update Date:", value: img.lastUpdate || "", link: false },
+                    ]
+                    const populated = allRows.filter(r => r.value !== "")
+                    const emptyCount = allRows.length - populated.length
+                    return (
+                      <>
+                        {populated.map((row, rowIdx) => (
+                          <div key={rowIdx} className="flex border-b border-border">
+                            <div className="w-44 bg-muted/20 px-3 py-2 font-medium text-foreground shrink-0">{row.label}</div>
+                            <div className={cn("flex-1 px-3 py-2", row.link ? "text-tg-link" : "text-foreground")}>
+                              {row.value}
+                            </div>
+                          </div>
+                        ))}
+                        {emptyCount > 0 && (
+                          <div className="px-3 py-2 text-xs text-muted-foreground border-b border-border">
+                            {emptyCount} attribute{emptyCount !== 1 ? "s" : ""} not provided by supplier
+                          </div>
+                        )}
+                        {/* Provenance — who supplied this image and when (P1.4 / R6) */}
+                        <div className="px-3 py-2 text-xs text-muted-foreground">
+                          Provided by {selectedVendor?.name ?? "vendor"} · Created {img.createDate}
+                          {img.lastUpdate ? ` · Updated ${img.lastUpdate}` : ""}
+                        </div>
+                      </>
+                    )
+                  })()}
                 </div>
                 {/* Right: image preview — click to zoom */}
                 <button
@@ -792,7 +802,20 @@ export function RetailerImageBrowser() {
           ))}
         </div>
 
-
+        {/* GS1 Extended Attributes — first-class inline section (P1.4 / R2): the richest data
+            a supplier provides should be visible on the page, not hidden behind an icon. */}
+        <div className="rounded border border-border bg-card p-4">
+          <div className="flex items-center gap-2 mb-3">
+            <Sparkles className="size-4 text-primary" />
+            <h3 className="text-sm font-semibold text-foreground">GS1 Extended Attributes (AI-assisted, supplier-confirmed)</h3>
+          </div>
+          <AiAttributesTable
+            attributes={MOCK_AI_ATTRIBUTES}
+            category="Shoes"
+            imageCount={MOCK_IMAGES.length}
+            imageNames={MOCK_IMAGES.map(i => i.fileName)}
+          />
+        </div>
 
         {/* Download Modal — Three-phase: Select → Preparing → Complete (Step 3A parity with supplier) */}
         {showDownloadModal && (

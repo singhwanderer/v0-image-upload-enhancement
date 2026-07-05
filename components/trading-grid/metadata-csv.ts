@@ -60,6 +60,14 @@ export function buildImageMetadataCsv(
   return lines.join("\r\n") + "\r\n"
 }
 
+// Generic table export used by the list-screen Export buttons (vendors, selection codes,
+// products): same escaping rules, arbitrary columns.
+export function buildTableCsv(headers: string[], rows: string[][]): string {
+  const lines = [headers.map(csvEscape).join(",")]
+  for (const row of rows) lines.push(row.map(csvEscape).join(","))
+  return lines.join("\r\n") + "\r\n"
+}
+
 // Triggers a real browser download of the CSV.
 export function downloadCsv(filename: string, csv: string): void {
   const blob = new Blob([csv], { type: "text/csv;charset=utf-8" })
