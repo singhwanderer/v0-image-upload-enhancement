@@ -822,6 +822,17 @@ export function ImageUploadWizard({
   const hasExtraction = aiExtraction !== null
   // Accepted suggestions at the product level (only explicit Accept clicks count)
   const acceptedExtractedAttributes = aiExtraction?.attributes.filter(a => a.decision === "accepted") ?? []
+  // Suggestions still awaiting a decision — these are silently dropped at submission
+  // unless accepted, so both the results card and Step 3 surface the count (P0.3).
+  const pendingExtractedCount = isComplete ? (aiExtraction?.attributes.filter(a => a.decision === "pending").length ?? 0) : 0
+
+  // Accept every still-pending suggestion in one click.
+  const acceptAllPending = () => {
+    setAiExtraction(prev => {
+      if (!prev) return prev
+      return { ...prev, attributes: prev.attributes.map(a => a.decision === "pending" ? { ...a, decision: "accepted" as const } : a) }
+    })
+  }
 
   // Editable AI results card — the same Accept/Reject/Edit UI used in Step 2, extracted into a
   // render function so it can also be shown post-confirm in the "View AI Attributes" drawer
@@ -854,9 +865,17 @@ export function ImageUploadWizard({
               )}
             </p>
           </div>
-          <Button variant="ghost" size="sm" onClick={clearExtraction}>
-            Re-run
-          </Button>
+          <div className="flex items-center gap-1 shrink-0">
+            {pendingExtractedCount > 0 && (
+              <Button variant="outline" size="sm" className="gap-1" onClick={acceptAllPending}>
+                <Check className="size-3.5" />
+                Accept all pending ({pendingExtractedCount})
+              </Button>
+            )}
+            <Button variant="ghost" size="sm" onClick={clearExtraction}>
+              Re-run
+            </Button>
+          </div>
         </div>
         {/* Fallback banner when Gemini was unavailable */}
         {aiExtraction.fallbackUsed && (
@@ -3276,6 +3295,33 @@ End of Metadata Export
                   imageCount={aiExtraction.imageCount}
                   imageNames={aiExtraction.imageNames}
                 />
+              </div>
+            )}
+
+            {/* Pending-suggestion interlock (P0.3): AI suggestions that were generated but never
+                accepted are dropped at submission — make that a visible decision, not a default. */}
+            {pendingExtractedCount > 0 && (
+              <div className="rounded border border-tg-warning/40 bg-tg-warning/5 p-4 flex flex-col gap-3">
+                <div className="flex items-start gap-3">
+                  <AlertCircle className="size-4 text-tg-warning mt-0.5 shrink-0" />
+                  <div className="flex flex-col gap-1">
+                    <p className="text-sm font-medium text-foreground">
+                      {pendingExtractedCount} AI-suggested attribute{pendingExtractedCount !== 1 ? "s are" : " is"} still pending review
+                    </p>
+                    <p className="text-sm text-muted-foreground">
+                      Pending suggestions will <span className="font-medium text-foreground">not</span> be submitted unless accepted. Accept them now, or go back to review them individually.
+                    </p>
+                  </div>
+                </div>
+                <div className="flex items-center gap-2 pl-7">
+                  <Button variant="outline" size="sm" className="gap-1" onClick={acceptAllPending}>
+                    <Check className="size-3.5" />
+                    Accept all {pendingExtractedCount}
+                  </Button>
+                  <Button variant="ghost" size="sm" onClick={handleBack}>
+                    Review suggestions
+                  </Button>
+                </div>
               </div>
             )}
 
