@@ -29,6 +29,10 @@ import { cn } from "@/lib/utils"
 import type { ExtractedAttribute } from "@/lib/gs1/types"
 import { useMediaSelection } from "./use-media-selection"
 import { AiAttributesTable } from "./ai-attributes-table"
+import { buildImageMetadataCsv, downloadCsv, csvPreview, type ImageMetadataRow } from "./metadata-csv"
+
+// "SI-Still Shot" → "SI": the mock fixtures store display labels; the CSV carries codes.
+const codeOf = (label: string): string => label.split("-")[0] ?? label
 
 interface ImageUploadLandingProps {
   onUploadClick: (level: "product" | "product-color" | "gtin") => void
@@ -328,6 +332,8 @@ export function RetailerImageBrowser() {
   // activeImageIndex removed — retailer product-media uses stacked list (no active selection)
   const [showDownloadModal, setShowDownloadModal] = useState(false)
   const [downloadPhase, setDownloadPhase] = useState<"select" | "preparing" | "complete">("select")
+  // First lines of the most recently generated metadata CSV, shown in the Complete phase.
+  const [lastCsvPreview, setLastCsvPreview] = useState("")
   // Lightbox: full-size view of a single product-media image
   const [lightboxImage, setLightboxImage] = useState<{ src: string; fileName: string } | null>(null)
   // Selection state for selective download (Retailer stays read-only — no edit/delete).
@@ -853,19 +859,26 @@ export function RetailerImageBrowser() {
                                 <FileImage className="size-4 text-primary shrink-0" />
                                 <span className="text-sm font-medium text-foreground truncate">{img.fileName}</span>
                               </div>
-                              <div className="flex items-center gap-2 mt-0.5">
-                                <FileText className="size-4 text-tg-success shrink-0" />
-                                <span className="text-sm text-muted-foreground truncate">
-                                  {img.fileName.replace(/\.[^/.]+$/, "")}_metadata.txt
-                                </span>
-                              </div>
                             </div>
                             <div className="text-right text-xs text-muted-foreground shrink-0">
                               <div>~450 KB</div>
-                              <div>~2 KB</div>
                             </div>
                           </div>
                         ))}
+                        {/* Single machine-readable metadata artifact for the whole selection */}
+                        <div className="flex items-center gap-3 rounded border border-border bg-card p-3">
+                          <div className="flex size-10 items-center justify-center rounded bg-muted">
+                            <FileText className="size-5 text-tg-success" />
+                          </div>
+                          <div className="flex-1 min-w-0">
+                            <span className="text-sm font-medium text-foreground truncate block">
+                              {selectedProduct?.id ?? "product"}_image_metadata.csv
+                            </span>
+                            <span className="text-xs text-muted-foreground">
+                              {selectedImages.length} row{selectedImages.length !== 1 ? "s" : ""} — one per image, incl. GS1 extended attributes
+                            </span>
+                          </div>
+                        </div>
                       </div>
                     </div>
 
@@ -873,8 +886,8 @@ export function RetailerImageBrowser() {
                     <div className="mb-6 flex items-start gap-2 rounded bg-primary/5 p-3 text-sm">
                       <FileText className="size-4 text-primary mt-0.5 shrink-0" />
                       <div>
-                        <span className="font-medium text-foreground">Metadata files (.txt)</span>
-                        <span className="text-muted-foreground"> contain all image attributes including company info, product details, file properties, and GDSN attributes for each image.</span>
+                        <span className="font-medium text-foreground">Metadata file (.csv)</span>
+                        <span className="text-muted-foreground"> contains one row per image with all attributes in the standard field layout — including the supplier&apos;s GS1 extended attributes — ready for PIM/DAM import.</span>
                       </div>
                     </div>
 
@@ -886,6 +899,34 @@ export function RetailerImageBrowser() {
                       <Button
                         disabled={selectedImages.length === 0}
                         onClick={() => {
+                          // Really generate + download the spec-shaped metadata CSV (incl. GS1
+                          // extended attributes); image binaries stay simulated in this prototype.
+                          const rows: ImageMetadataRow[] = selectedImages.map(img => ({
+                            action: "insert",
+                            image_level: "product",
+                            product: selectedProduct?.id ?? "",
+                            item_number: "",
+                            file_name: img.fileName,
+                            file_type: "JPG",
+                            image_type: codeOf(img.imageType),
+                            purpose: codeOf(img.purpose),
+                            orientation: codeOf(img.orientation),
+                            location_type: img.locationType,
+                            external_location: "",
+                            color_code: "",
+                            image_style: "",
+                            facing: "",
+                            angle: "",
+                            file_size: "",
+                            pixel_density: "",
+                            height: "",
+                            width: "",
+                            clipping_path: "",
+                            image_description: "",
+                          }))
+                          const csv = buildImageMetadataCsv(rows, MOCK_AI_ATTRIBUTES)
+                          downloadCsv(`${selectedProduct?.id ?? "product"}_image_metadata.csv`, csv)
+                          setLastCsvPreview(csvPreview(csv))
                           setDownloadPhase("preparing")
                           // Simulate preparation delay
                           setTimeout(() => {
@@ -894,7 +935,7 @@ export function RetailerImageBrowser() {
                         }}
                       >
                         <Download className="size-4 mr-2" />
-                        Download {selectedImages.length === MOCK_IMAGES.length ? "All" : "Selected"} ({selectedImages.length * 2} files)
+                        Download {selectedImages.length} image{selectedImages.length !== 1 ? "s" : ""} + metadata CSV
                       </Button>
                     </div>
                   </>
@@ -934,46 +975,28 @@ export function RetailerImageBrowser() {
                       <div className="text-sm font-medium text-foreground mb-3">Downloaded Files:</div>
                       <div className="space-y-2 max-h-32 overflow-y-auto">
                         {selectedImages.map((img, idx) => (
-                          <div key={idx} className="text-sm">
-                            <div className="flex items-center gap-2 text-foreground">
-                              <Check className="size-4 text-tg-success" />
-                              <span>{img.fileName}</span>
-                            </div>
-                            <div className="flex items-center gap-2 text-muted-foreground ml-6">
-                              <Check className="size-4 text-tg-success" />
-                              <span>{img.fileName.replace(/\.[^/.]+$/, "")}_metadata.txt</span>
-                            </div>
+                          <div key={idx} className="flex items-center gap-2 text-sm text-foreground">
+                            <Check className="size-4 text-tg-success" />
+                            <span>{img.fileName}</span>
                           </div>
                         ))}
+                        <div className="flex items-center gap-2 text-sm text-foreground">
+                          <Check className="size-4 text-tg-success" />
+                          <span>{selectedProduct?.id ?? "product"}_image_metadata.csv</span>
+                        </div>
                       </div>
                     </div>
 
-                    {/* Metadata Preview */}
+                    {/* Metadata CSV Preview — first rows of the actually-downloaded file */}
                     <div className="rounded border border-border bg-card p-4 mb-6 text-left">
                       <div className="flex items-center justify-between mb-2">
                         <span className="text-sm font-medium text-foreground">Metadata Preview</span>
                         <span className="text-xs text-muted-foreground">
-                          {selectedImages[0]?.fileName.replace(/\.[^/.]+$/, "") || "image"}_metadata.txt
+                          {selectedProduct?.id ?? "product"}_image_metadata.csv
                         </span>
                       </div>
                       <pre className="text-xs text-muted-foreground bg-muted/30 p-3 rounded overflow-x-auto max-h-40 overflow-y-auto font-mono">
-{`IMAGE METADATA EXPORT
-Export Date: ${new Date().toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}
-Level: Product Level
-
-COMPANY INFORMATION
-Company Name: ${selectedVendor?.name || "APEX ATHLETIC FOOTWEAR"}
-Account Number: ${selectedVendor?.accountNumber || "125103335555"}
-
-PRODUCT INFORMATION
-Product ID: ${selectedProduct?.id || "RUNCOOL-GRY-M"}
-Selection Code: ${selectedSelectionCode || "001"} - ${selectionCodeDescription(selectedSelectionCode)}
-
-IMAGE DETAILS
-File Name: ${selectedImages[0]?.fileName || "sneaker-front.jpg"}
-Image Type: ${selectedImages[0]?.imageType || "SI-Still Shot"}
-Purpose: ${selectedImages[0]?.purpose || "INT-Internet"}
-Orientation: ${selectedImages[0]?.orientation || "PRI-Primary"}`}
+{lastCsvPreview || "No metadata available"}
                       </pre>
                     </div>
 

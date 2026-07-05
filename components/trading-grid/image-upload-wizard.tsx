@@ -54,6 +54,7 @@ import {
 import { cn } from "@/lib/utils"
 import { validateImageBatch, type ValidationError } from "./upload-validation"
 import { measureImageFile, type MeasuredImageMetadata } from "./image-metadata"
+import { buildImageMetadataCsv, downloadCsv, csvPreview, type ImageMetadataRow } from "./metadata-csv"
 import useSWR from "swr"
 import type { CategoryOptions, AttributeDecision, ExtractedAttribute, UnresolvedAttribute } from "@/lib/gs1/types"
 import { buildMockExtraction } from "@/lib/gs1/mock-scenarios"
@@ -484,6 +485,8 @@ export function ImageUploadWizard({
   const [showProductMedia, setShowProductMedia] = useState(false)
   const [showDownloadModal, setShowDownloadModal] = useState(false)
   const [downloadPhase, setDownloadPhase] = useState<"select" | "preparing" | "complete">("select")
+  // First lines of the most recently generated metadata CSV, shown in the Complete phase.
+  const [lastCsvPreview, setLastCsvPreview] = useState("")
   // Selection state for Product Media cards — drives selective download and (Supplier-only)
   // bulk edit/delete gating.
   const media = useMediaSelection()
@@ -1251,19 +1254,26 @@ export function ImageUploadWizard({
                             <FileImage className="size-4 text-primary shrink-0" />
                             <span className="text-sm font-medium text-foreground truncate">{file.name}</span>
                           </div>
-                          <div className="flex items-center gap-2 mt-0.5">
-                            <FileText className="size-4 text-tg-success shrink-0" />
-                            <span className="text-sm text-muted-foreground truncate">
-                              {file.name.replace(/\.[^/.]+$/, "")}_metadata.txt
-                            </span>
-                          </div>
                         </div>
                         <div className="text-right text-xs text-muted-foreground shrink-0">
                           <div>{formatFileSize(file.size)}</div>
-                          <div>~2 KB</div>
                         </div>
                       </div>
                     ))}
+                    {/* Single machine-readable metadata artifact for the whole selection */}
+                    <div className="flex items-center gap-3 rounded border border-border bg-card p-3">
+                      <div className="flex size-10 items-center justify-center rounded bg-muted">
+                        <FileText className="size-5 text-tg-success" />
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <span className="text-sm font-medium text-foreground truncate block">
+                          {getAutoPopulatedData().productId || "product"}_image_metadata.csv
+                        </span>
+                        <span className="text-xs text-muted-foreground">
+                          {selectedFiles.length} row{selectedFiles.length !== 1 ? "s" : ""} — one per image
+                        </span>
+                      </div>
+                    </div>
                   </div>
                 </div>
 
@@ -1271,8 +1281,8 @@ export function ImageUploadWizard({
                 <div className="mb-6 flex items-start gap-2 rounded bg-primary/5 p-3 text-sm">
                   <FileText className="size-4 text-primary mt-0.5 shrink-0" />
                   <div>
-                    <span className="font-medium text-foreground">Metadata files (.txt)</span>
-                    <span className="text-muted-foreground"> contain all image attributes including company info, product details, file properties, and GDSN attributes for each image.</span>
+                    <span className="font-medium text-foreground">Metadata file (.csv)</span>
+                    <span className="text-muted-foreground"> contains one row per image with all attributes in the standard field layout — including measured file properties and accepted GS1 extended attributes — ready for PIM/DAM import.</span>
                   </div>
                 </div>
 
@@ -1283,7 +1293,7 @@ export function ImageUploadWizard({
                   </Button>
                   <Button onClick={handleBulkDownload} disabled={selectedFiles.length === 0}>
                     <Download className="size-4 mr-2" />
-                    Download {selectedFiles.length === uploadedFiles.length ? "All" : "Selected"} ({selectedFiles.length * 2} files)
+                    Download {selectedFiles.length} image{selectedFiles.length !== 1 ? "s" : ""} + metadata CSV
                   </Button>
                 </div>
               </>
@@ -1323,30 +1333,28 @@ export function ImageUploadWizard({
                   <div className="text-sm font-medium text-foreground mb-3">Downloaded Files:</div>
                   <div className="space-y-2 max-h-32 overflow-y-auto">
                     {selectedFiles.map((file) => (
-                      <div key={file.id} className="text-sm">
-                        <div className="flex items-center gap-2 text-foreground">
-                          <Check className="size-4 text-tg-success" />
-                          <span>{file.name}</span>
-                        </div>
-                        <div className="flex items-center gap-2 text-muted-foreground ml-6">
-                          <Check className="size-4 text-tg-success" />
-                          <span>{file.name.replace(/\.[^/.]+$/, "")}_metadata.txt</span>
-                        </div>
+                      <div key={file.id} className="flex items-center gap-2 text-sm text-foreground">
+                        <Check className="size-4 text-tg-success" />
+                        <span>{file.name}</span>
                       </div>
                     ))}
+                    <div className="flex items-center gap-2 text-sm text-foreground">
+                      <Check className="size-4 text-tg-success" />
+                      <span>{getAutoPopulatedData().productId || "product"}_image_metadata.csv</span>
+                    </div>
                   </div>
                 </div>
 
-                {/* Sample Metadata Preview */}
+                {/* Metadata CSV Preview — first rows of the actually-downloaded file */}
                 <div className="rounded border border-border bg-card p-4 mb-6 text-left">
                   <div className="flex items-center justify-between mb-2">
                     <span className="text-sm font-medium text-foreground">Metadata Preview</span>
                     <span className="text-xs text-muted-foreground">
-                      {selectedFiles[0]?.name.replace(/\.[^/.]+$/, "") || "image"}_metadata.txt
+                      {getAutoPopulatedData().productId || "product"}_image_metadata.csv
                     </span>
                   </div>
                   <pre className="text-xs text-muted-foreground bg-muted/30 p-3 rounded overflow-x-auto max-h-40 overflow-y-auto font-mono">
-{selectedFiles[0] ? generateMetadataContent(selectedFiles[0], uploadedFiles.indexOf(selectedFiles[0])) : "No metadata available"}
+{lastCsvPreview || "No metadata available"}
                   </pre>
                 </div>
 
@@ -1367,88 +1375,46 @@ export function ImageUploadWizard({
     return (bytes / (1024 * 1024)).toFixed(1) + " MB"
   }
 
-  // Generate metadata text content for a file
-  const generateMetadataContent = (file: UploadedFile, index: number) => {
+  // One spec-shaped CSV row per image (P0.5). Measured facts come from the decoded file;
+  // per-image attrs resolve exactly as the cards/exports do.
+  const buildMetadataCsvRows = (files: UploadedFile[]): ImageMetadataRow[] => {
     const data = getAutoPopulatedData()
-    const currentDate = new Date().toLocaleDateString('en-US', { 
-      year: 'numeric', 
-      month: 'short', 
-      day: '2-digit' 
+    return files.map(file => {
+      const idx = uploadedFiles.indexOf(file)
+      const fileAttrs = applyToAll ? attributes : (attributesByImage[idx] || attributes)
+      return {
+        action: "insert",
+        image_level: uploadLevel === "gtin" ? "item" : "product",
+        product: data.productId,
+        item_number: uploadLevel === "gtin" ? data.selectedGtin : "",
+        file_name: file.name,
+        file_type: "JPG",
+        image_type: fileAttrs.imageType,
+        purpose: fileAttrs.purpose,
+        orientation: fileAttrs.orientation,
+        location_type: fileAttrs.locationType,
+        external_location: fileAttrs.externalLocation,
+        color_code: uploadLevel === "product-color" ? data.colorCode : "",
+        image_style: fileAttrs.imageStyle,
+        facing: fileAttrs.facing,
+        angle: fileAttrs.angle,
+        file_size: String(file.size),
+        pixel_density: file.measured?.dpi != null ? String(file.measured.dpi) : "",
+        height: file.measured?.height != null ? String(file.measured.height) : "",
+        width: file.measured?.width != null ? String(file.measured.width) : "",
+        clipping_path: fileAttrs.clippingPath,
+        image_description: fileAttrs.imageDescription,
+      }
     })
-    
-    let content = `IMAGE METADATA EXPORT
-========================================
-Export Date: ${currentDate}
-Level: ${uploadLevel === "product" ? "Product Level" : uploadLevel === "gtin" ? "Item Level (GTIN)" : "Product + Color Code Level"}
-
-COMPANY INFORMATION
-----------------------------------------
-Company Name:        ${data.companyName}
-Account Number:      ${data.accountNumber}
-Selection Code:      ${data.selectionCode}
-Description:         ${data.description}
-Product:             ${data.productId}
-Product Description: ${data.productDescription}`
-
-    if (uploadLevel === "gtin") {
-      content += `
-GTIN:                ${data.selectedGtin}
-GTIN Type:           ${data.selectedGtinType}`
-    }
-
-    if (uploadLevel === "product-color") {
-      content += `
-Color Code:          ${data.colorCode}
-Color Name:          ${data.colorName}`
-    }
-
-    // resolve per-image attrs if applicable
-    const fileAttrs = applyToAll ? attributes : (attributesByImage[index] || attributes)
-    const imageLevelLabel = uploadLevel === "product"
-      ? "Product Level"
-      : uploadLevel === "gtin"
-      ? "Item Level (GTIN)"
-      : "Product + Color Code Level"
-
-    content += `
-
-FILE INFORMATION
-----------------------------------------
-File Name:           ${file.name}
-File Type:           ${file.type || "JPG-JPEG"}
-File Size:           ${formatFileSize(file.size)}
-
-IMAGE ATTRIBUTES
-----------------------------------------
-Image Level:         ${imageLevelLabel}
-Color Code:          ${data.colorCode || (uploadLevel === "gtin" ? data.selectedGtin : "N/A")}
-Image Type:          ${IMAGE_TYPE_OPTIONS.find(o => o.value === fileAttrs.imageType)?.label || "SI-Still Shot"}
-Purpose:             ${PURPOSE_OPTIONS.find(o => o.value === fileAttrs.purpose)?.label || "INT-Internet"}
-Orientation:         ${ORIENTATION_OPTIONS.find(o => o.value === fileAttrs.orientation)?.label || "Not specified"}
-Location Type:       ${LOCATION_TYPE_OPTIONS.find(o => o.value === fileAttrs.locationType)?.label || "Not specified"}
-External Location:   ${fileAttrs.externalLocation || "N/A"}
-Pixel Density (DPI): ${file.measured?.dpi ?? "N/A"} (measured from file)
-Height:              ${file.measured?.height != null ? `${file.measured.height} px` : "N/A"} (measured from file)
-Width:               ${file.measured?.width != null ? `${file.measured.width} px` : "N/A"} (measured from file)
-Image Style:         ${IMAGE_STYLE_OPTIONS.find(o => o.value === fileAttrs.imageStyle)?.label || "Not specified"}
-Facing (GDSN):       ${FACING_OPTIONS.find(o => o.value === fileAttrs.facing)?.label || "Not specified"}
-Angle:               ${ANGLE_OPTIONS.find(o => o.value === fileAttrs.angle)?.label || "Not specified"}
-Clipping Path:       ${fileAttrs.clippingPath || "N/A"}
-Image Description:   ${fileAttrs.imageDescription || "N/A"}
-
-DATES
-----------------------------------------
-Create Date:         ${currentDate}
-Last Update Date:    ${currentDate}
-
-========================================
-End of Metadata Export
-`
-    return content
   }
 
-  // Handle bulk download with three-phase flow
+  // Handle bulk download: really generates and downloads the metadata CSV (incl. accepted
+  // GS1 extended attributes), then runs the three-phase flow. Image binaries stay simulated.
   const handleBulkDownload = () => {
+    const selectedFiles = uploadedFiles.filter(f => media.isChecked(f.id))
+    const csv = buildImageMetadataCsv(buildMetadataCsvRows(selectedFiles), acceptedExtractedAttributes)
+    downloadCsv(`${getAutoPopulatedData().productId || "product"}_image_metadata.csv`, csv)
+    setLastCsvPreview(csvPreview(csv))
     setDownloadPhase("preparing")
     // Simulate preparation delay
     setTimeout(() => {
