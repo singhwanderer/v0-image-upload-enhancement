@@ -49,6 +49,7 @@ import { cn } from "@/lib/utils"
 import { validateImageBatch, type ValidationError } from "./upload-validation"
 import { measureImageFile, type MeasuredImageMetadata } from "./image-metadata"
 import { buildImageMetadataCsv, downloadCsv, csvPreview, type ImageMetadataRow } from "./metadata-csv"
+import { toast } from "@/hooks/use-toast"
 import useSWR from "swr"
 import type { CategoryOptions, AttributeDecision, ExtractedAttribute, UnresolvedAttribute } from "@/lib/gs1/types"
 import { buildMockExtraction } from "@/lib/gs1/mock-scenarios"
@@ -1670,6 +1671,7 @@ export function ImageUploadWizard({
     // Simulate preparation delay
     setTimeout(() => {
       setDownloadPhase("complete")
+      toast({ title: "Download complete", description: `${selectedFiles.length} image${selectedFiles.length !== 1 ? "s" : ""} + metadata CSV downloaded.` })
     }, 1500)
   }
 
@@ -1706,6 +1708,7 @@ export function ImageUploadWizard({
         if (i === ids.length - 1) {
           setTimeout(() => {
             setSubmissionPhase("complete")
+            toast({ title: "Upload complete", description: `${ids.length} image${ids.length !== 1 ? "s" : ""} submitted to TGC.` })
             // 300ms dwell on "Upload complete" state before advancing
             setTimeout(() => setShowProductMedia(true), 300)
           }, 300)
@@ -2409,6 +2412,7 @@ export function ImageUploadWizard({
                       onClick={() => {
                         deleteFilesByIds(new Set(targetFiles.map(f => f.id)))
                         setBulkDeleteConfirmOpen(false)
+                        toast({ title: "Images deleted", description: `${targetFiles.length} image${targetFiles.length !== 1 ? "s" : ""} removed from this product.` })
                       }}
                     >
                       <Trash2 className="size-4 mr-2" />
@@ -2477,6 +2481,7 @@ export function ImageUploadWizard({
                           return next
                         })
                         setBulkEditDialog({ open: false, draft: {} as typeof attributes, touched: {} })
+                        toast({ title: "Bulk edit applied", description: `Updated ${touchedKeys.length} field${touchedKeys.length !== 1 ? "s" : ""} on ${targetIds.size} image${targetIds.size !== 1 ? "s" : ""}.` })
                       }}
                     >
                       Save

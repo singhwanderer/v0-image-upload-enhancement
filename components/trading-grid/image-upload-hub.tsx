@@ -23,6 +23,7 @@ import type { ExtractedAttribute } from "@/lib/gs1/types"
 import { useMediaSelection } from "./use-media-selection"
 import { AiAttributesTable } from "./ai-attributes-table"
 import { buildImageMetadataCsv, buildTableCsv, downloadCsv, csvPreview, type ImageMetadataRow } from "./metadata-csv"
+import { toast } from "@/hooks/use-toast"
 
 // "SI-Still Shot" → "SI": the mock fixtures store display labels; the CSV carries codes.
 const codeOf = (label: string): string => label.split("-")[0] ?? label
@@ -954,6 +955,7 @@ export function RetailerImageBrowser() {
                           // Simulate preparation delay
                           setTimeout(() => {
                             setDownloadPhase("complete")
+                            toast({ title: "Download complete", description: `${selectedImages.length} image${selectedImages.length !== 1 ? "s" : ""} + metadata CSV downloaded.` })
                           }, 1500)
                         }}
                       >
