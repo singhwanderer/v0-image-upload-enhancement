@@ -977,6 +977,115 @@ export function ImageUploadWizard({
     })
   }
 
+  // ── Data-richness meter (P1.2 / audit E4): makes record completeness visible so richness
+  // becomes a score suppliers close out, not an invisible virtue. Counts product-wide fields
+  // once, per-shot fields and measured facts per image, and extended-attribute progress. ──
+  const richness = (() => {
+    const productWideFields = ["imageType", "purpose", "locationType", "imageStyle"] as const
+    let filled = 0
+    let total = 0
+    productWideFields.forEach(k => { total++; if (attributes[k]) filled++ })
+    uploadedFiles.forEach((f, i) => {
+      const a = effectiveAttrs(i)
+      PER_SHOT_KEYS.forEach(k => { total++; if (a[k]) filled++ })
+      total += 3 // measured width / height / dpi
+      if (f.measured?.width) filled++
+      if (f.measured?.height) filled++
+      if (f.measured?.dpi) filled++
+    })
+    const extendedTotal = isComplete && aiExtraction
+      ? aiExtraction.attributes.length + aiExtraction.unresolvedAttributes.length
+      : 0
+    return { filled, total, extendedAccepted: acceptedExtractedAttributes.length, extendedTotal }
+  })()
+
+  const renderRichnessMeter = () => {
+    const pct = richness.total > 0 ? Math.round((richness.filled / richness.total) * 100) : 0
+    return (
+      <div className="flex flex-wrap items-center gap-3 rounded border border-border bg-card px-3 py-2 text-xs">
+        <span className="font-semibold uppercase tracking-wide text-muted-foreground shrink-0">Data richness</span>
+        <div className="h-1.5 w-24 rounded-full bg-muted overflow-hidden shrink-0">
+          <div
+            className={cn("h-full rounded-full transition-all", pct >= 80 ? "bg-tg-success" : pct >= 40 ? "bg-tg-warning" : "bg-destructive")}
+            style={{ width: `${pct}%` }}
+          />
+        </div>
+        <span className="text-foreground">{richness.filled} of {richness.total} image fields</span>
+        <span className="text-muted-foreground">·</span>
+        <span className="text-foreground">
+          {richness.extendedTotal > 0
+            ? `${richness.extendedAccepted} of ${richness.extendedTotal} extended attributes accepted`
+            : "extended attributes not extracted yet"}
+        </span>
+      </div>
+    )
+  }
+
+  // Idle AI controls (category + brick pickers, Extract button) — used in Step 2 and, per
+  // P1.2, in the post-submit drawer so extraction can be run after upload, not only during
+  // the wizard pass. showSkip hides the skip affordance where it makes no sense (drawer).
+  const renderAiIdleControls = (showSkip: boolean) => (
+    <>
+      <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:flex-wrap">
+        <div className="flex flex-col gap-1">
+          <Label htmlFor="ai-category" className="text-xs text-muted-foreground">Product category</Label>
+          <Select value={aiCategory} onValueChange={(v) => { setAiCategory(v); clearExtraction() }}>
+            <SelectTrigger id="ai-category" className="w-56 bg-background">
+              <SelectValue placeholder="Select a category..." />
+            </SelectTrigger>
+            <SelectContent>
+              {PRODUCT_CATEGORIES.map(c => (
+                <SelectItem key={c} value={c}>{c}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+        {/* GPC brick — attributes are scoped to this single classification */}
+        <div className="flex flex-col gap-1">
+          <Label htmlFor="ai-brick" className="text-xs text-muted-foreground">Product brick (GPC)</Label>
+          <Select
+            value={aiBrick?.code ?? ""}
+            onValueChange={(code) => { setAiBrick(bricksForCategory.find(b => b.code === code) ?? null); clearExtraction() }}
+            disabled={!aiCategory || bricksForCategory.length === 0}
+          >
+            <SelectTrigger id="ai-brick" className="w-72 bg-background">
+              <SelectValue placeholder={aiCategory ? "Select a brick..." : "Select a category first"} />
+            </SelectTrigger>
+            <SelectContent>
+              {bricksForCategory.map(b => (
+                <SelectItem key={b.code} value={b.code}>{b.name}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+        <div className="flex items-center gap-2">
+          <Button onClick={runExtraction} disabled={!aiCategory || !aiBrick || uploadedFiles.length === 0} className="gap-2">
+            <Sparkles className="size-4" />
+            Extract Extended Attributes with AI
+          </Button>
+          {showSkip && (
+            <Button variant="ghost" onClick={() => setAiSkipped(true)}>
+              Skip AI Extraction
+            </Button>
+          )}
+        </div>
+      </div>
+      {aiCategory && bricksForCategory.length === 0 ? (
+        <p className="text-xs text-tg-warning">
+          No GS1 brick mapping is available for this category — continue entering attributes manually.
+        </p>
+      ) : (
+        <p className="text-xs text-muted-foreground">
+          {!aiBrick && "Select the product brick to scope attributes to that classification. "}
+          {uploadedFiles.length === 1
+            ? "1 image will be analyzed for this product."
+            : `${uploadedFiles.length} images will be analyzed together for this product.`}{" "}
+          All uploaded images are treated as evidence for the same product.
+        </p>
+      )}
+    </>
+  )
+
   // Editable AI results card — the same Accept/Reject/Edit UI used in Step 2, extracted into a
   // render function so it can also be shown post-confirm in the "View AI Attributes" drawer
   // (AI attributes are the primary editing surface, so that drawer stays editable, unlike the
@@ -1724,7 +1833,7 @@ export function ImageUploadWizard({
             </button>
             <button
               className="p-1.5 hover:bg-muted border border-border"
-              title="View AI Attributes"
+              title={hasExtraction ? "View AI Attributes" : "Run AI"}
               onClick={() => setShowAiAttributesDrawer(true)}
             >
               <Sparkles className="size-4 text-muted-foreground" />
@@ -1793,6 +1902,9 @@ export function ImageUploadWizard({
             </div>
           </div>
         </div>
+
+        {/* Data-richness meter — post-submit view (P1.2) */}
+        {renderRichnessMeter()}
 
         {/* Syndication info block — supplier post-submit only (Change 6) */}
         {portalType === "supplier" && (
@@ -2393,9 +2505,35 @@ export function ImageUploadWizard({
                 AI-Extracted Attributes
               </SheetTitle>
             </SheetHeader>
-            <div className="px-4 pb-4">
-              {hasExtraction ? renderAiResultsCard() : (
-                <AiAttributesTable attributes={[]} />
+            <div className="px-4 pb-4 flex flex-col gap-4">
+              {/* P1.2: extraction can be run from here after upload — not only during the wizard */}
+              {isExtracting && (
+                <div className="flex items-center gap-3 rounded border border-border bg-muted/20 p-4">
+                  <Loader2 className="size-5 animate-spin text-primary" />
+                  <p className="text-sm text-foreground">Analyzing {aiExtraction?.imageCount ?? uploadedFiles.length} image{(aiExtraction?.imageCount ?? uploadedFiles.length) !== 1 ? "s" : ""} for {aiCategory} attributes…</p>
+                </div>
+              )}
+              {isError && (
+                <div className="flex flex-col gap-3 rounded border border-destructive/30 bg-destructive/5 p-4">
+                  <div className="flex items-start gap-2">
+                    <AlertCircle className="size-4 text-destructive mt-0.5 shrink-0" />
+                    <p className="text-sm text-foreground">{aiExtraction?.error ?? "Extraction failed."}</p>
+                  </div>
+                  <Button variant="outline" size="sm" className="w-fit" onClick={runExtraction}>Try again</Button>
+                </div>
+              )}
+              {isComplete && renderAiResultsCard()}
+              {!hasExtraction && (
+                uploadedFiles.length > 0 ? (
+                  <>
+                    <p className="text-sm text-muted-foreground">
+                      No extraction has run for this product yet. Run it now — the images are already uploaded.
+                    </p>
+                    {renderAiIdleControls(false)}
+                  </>
+                ) : (
+                  <AiAttributesTable attributes={[]} />
+                )
               )}
             </div>
           </SheetContent>
@@ -2950,6 +3088,8 @@ export function ImageUploadWizard({
               </p>
             </div>
 
+            {renderRichnessMeter()}
+
             {/* ── Optional: Extract Extended Attributes with AI (sub-section, not a numbered step) ── */}
             <div className="rounded border border-border bg-card">
               <div className="flex items-start gap-3 border-b border-border p-4">
@@ -2980,65 +3120,7 @@ export function ImageUploadWizard({
               {!aiSkipped && (
                 <div className="flex flex-col gap-4 p-4">
                   {/* Idle / pre-extraction controls */}
-                  {!hasExtraction && (
-                    <>
-                      <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:flex-wrap">
-                        <div className="flex flex-col gap-1">
-                          <Label htmlFor="ai-category" className="text-xs text-muted-foreground">Product category</Label>
-                          <Select value={aiCategory} onValueChange={(v) => { setAiCategory(v); clearExtraction() }}>
-                            <SelectTrigger id="ai-category" className="w-56 bg-background">
-                              <SelectValue placeholder="Select a category..." />
-                            </SelectTrigger>
-                            <SelectContent>
-                              {PRODUCT_CATEGORIES.map(c => (
-                                <SelectItem key={c} value={c}>{c}</SelectItem>
-                              ))}
-                            </SelectContent>
-                          </Select>
-                        </div>
-                        {/* GPC brick — attributes are scoped to this single classification */}
-                        <div className="flex flex-col gap-1">
-                          <Label htmlFor="ai-brick" className="text-xs text-muted-foreground">Product brick (GPC)</Label>
-                          <Select
-                            value={aiBrick?.code ?? ""}
-                            onValueChange={(code) => { setAiBrick(bricksForCategory.find(b => b.code === code) ?? null); clearExtraction() }}
-                            disabled={!aiCategory || bricksForCategory.length === 0}
-                          >
-                            <SelectTrigger id="ai-brick" className="w-72 bg-background">
-                              <SelectValue placeholder={aiCategory ? "Select a brick..." : "Select a category first"} />
-                            </SelectTrigger>
-                            <SelectContent>
-                              {bricksForCategory.map(b => (
-                                <SelectItem key={b.code} value={b.code}>{b.name}</SelectItem>
-                              ))}
-                            </SelectContent>
-                          </Select>
-                        </div>
-                        <div className="flex items-center gap-2">
-                          <Button onClick={runExtraction} disabled={!aiCategory || !aiBrick || uploadedFiles.length === 0} className="gap-2">
-                            <Sparkles className="size-4" />
-                            Extract Extended Attributes with AI
-                          </Button>
-                          <Button variant="ghost" onClick={() => setAiSkipped(true)}>
-                            Skip AI Extraction
-                          </Button>
-                        </div>
-                      </div>
-                      {aiCategory && bricksForCategory.length === 0 ? (
-                        <p className="text-xs text-tg-warning">
-                          No GS1 brick mapping is available for this category — continue entering attributes manually.
-                        </p>
-                      ) : (
-                        <p className="text-xs text-muted-foreground">
-                          {!aiBrick && "Select the product brick to scope attributes to that classification. "}
-                          {uploadedFiles.length === 1
-                            ? "1 image will be analyzed for this product."
-                            : `${uploadedFiles.length} images will be analyzed together for this product.`}{" "}
-                          All uploaded images are treated as evidence for the same product.
-                        </p>
-                      )}
-                    </>
-                  )}
+                  {!hasExtraction && renderAiIdleControls(true)}
 
                   {/* Loading state */}
                   {isExtracting && (
@@ -3301,6 +3383,8 @@ export function ImageUploadWizard({
                 Review your upload details before submitting. Click &quot;Confirm &amp; Upload&quot; to proceed.
               </p>
             </div>
+
+            {renderRichnessMeter()}
 
             {/* Target Selection Summary */}
             <div className="rounded border border-border bg-muted/30 p-4">
