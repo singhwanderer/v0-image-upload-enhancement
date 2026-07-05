@@ -1,7 +1,7 @@
 "use client"
 
 import { useState } from "react"
-import { Upload, FileImage, ArrowRight, Info, Download, Package, Palette, Barcode, CheckCircle2, X, BookOpen, FileText, Check, Sparkles } from "lucide-react"
+import { Upload, FileImage, ArrowRight, Info, Download, Package, Palette, Barcode, CheckCircle2, X, BookOpen, FileText, Check } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
 import {
@@ -10,23 +10,19 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog"
-import {
-  Sheet,
-  SheetContent,
-  SheetHeader,
-  SheetTitle,
-} from "@/components/ui/sheet"
 import { Label } from "@/components/ui/label"
 import { Checkbox } from "@/components/ui/checkbox"
 import { cn } from "@/lib/utils"
-import type { ExtractedAttribute } from "@/lib/gs1/types"
 import { useMediaSelection } from "./use-media-selection"
-import { AiAttributesTable } from "./ai-attributes-table"
 import { buildImageMetadataCsv, buildTableCsv, downloadCsv, csvPreview, type ImageMetadataRow } from "./metadata-csv"
 import { toast } from "@/hooks/use-toast"
 
 // "SI-Still Shot" → "SI": the mock fixtures store display labels; the CSV carries codes.
 const codeOf = (label: string): string => label.split("-")[0] ?? label
+
+// "PRI-Primary" → "Primary": buyer-facing labels drop the standards code prefix.
+// Codes stay in the CSV export, where machines need them.
+const humanize = (label: string): string => (label.includes("-") ? label.split("-").slice(1).join("-") : label)
 
 interface ImageUploadLandingProps {
   onUploadClick: (level: "product" | "product-color" | "gtin") => void
@@ -63,19 +59,12 @@ const selectionCodeDescription = (code: string | null): string =>
 
 const MOCK_IMAGES = [
   { fileName: "sneaker-front.jpg", fileType: "JPG-JPEG", imageType: "SI-Still Shot", purpose: "INT-Internet", orientation: "PRI-Primary", locationType: "ACL", createDate: "Apr 7, 2026", previewSrc: "/mock/sneaker-front.jpg" },
-  { fileName: "sneaker-side.jpg", fileType: "JPG-JPEG", imageType: "SI-Still Shot", purpose: "INT-Internet", orientation: "PRI-Primary", locationType: "ACL", createDate: "Apr 13, 2026", lastUpdate: "Apr 23, 2026", previewSrc: "/mock/sneaker-side.jpg" },
+  { fileName: "sneaker-side.jpg", fileType: "JPG-JPEG", imageType: "SI-Still Shot", purpose: "INT-Internet", orientation: "SDL-Side Left", locationType: "ACL", createDate: "Apr 13, 2026", lastUpdate: "Apr 23, 2026", previewSrc: "/mock/sneaker-side.jpg" },
 ]
 
-// Representative AI-extracted attributes for the retailer's read-only "View AI Attributes"
-// drawer. Retailer and Supplier are independent mock portals with no shared store in this
-// prototype, so there's no real session to read a supplier's actual extraction from — this
-// fixture stands in for parity with the Supplier's editable drawer.
-const MOCK_AI_ATTRIBUTES: ExtractedAttribute[] = [
-  { codeListName: "Shoe Type", attributeValue: "Athletic/Running", code: "ATH", confidence: 0.91, reason: "Mesh upper and cushioned midsole visible.", decision: "accepted" },
-  { codeListName: "Closure Type", attributeValue: "Lace-up", code: "LAC", confidence: 0.88, reason: "Laces visible across the vamp.", decision: "accepted" },
-  { codeListName: "Toe Shape", attributeValue: "Round", code: "RND", confidence: 0.79, reason: "Rounded toe box in profile.", decision: "accepted" },
-  { codeListName: "Gender", attributeValue: "Unisex", code: "UNI", confidence: 0.7, reason: "Neutral colorway; verify.", decision: "accepted" },
-]
+// Non-GDSN product attributes (the extended/GS1 set) are intentionally absent from the
+// retailer image view: they reach retailers through a separate data channel. This view is
+// images plus image details only.
 
 export function ImageUploadLanding({ onUploadClick }: ImageUploadLandingProps) {
   return (
@@ -332,7 +321,6 @@ export function RetailerImageBrowser() {
   const [lightboxImage, setLightboxImage] = useState<{ src: string; fileName: string } | null>(null)
   // Selection state for selective download (Retailer stays read-only — no edit/delete).
   const media = useMediaSelection()
-  const [showAiAttributesDrawer, setShowAiAttributesDrawer] = useState(false)
 
   const openDownloadModal = (presetIds?: string[]) => {
     if (presetIds && presetIds.length > 0) media.selectOnly(presetIds[0])
@@ -672,14 +660,6 @@ export function RetailerImageBrowser() {
             <button className="p-1.5 hover:bg-muted" title="Download" onClick={() => openDownloadModal()}>
               <Download className="size-4 text-muted-foreground" />
             </button>
-            <button
-              className="flex items-center gap-1.5 p-1.5 hover:bg-muted"
-              title="View AI Attributes"
-              onClick={() => setShowAiAttributesDrawer(true)}
-            >
-              <Sparkles className="size-4 text-muted-foreground" />
-              <span className="text-xs text-muted-foreground">AI Attributes</span>
-            </button>
           </div>
         </div>
 
@@ -692,6 +672,20 @@ export function RetailerImageBrowser() {
           <div><span className="font-medium text-muted-foreground">Product:</span> <span className="text-foreground">{selectedProduct?.id}</span></div>
           <div><span className="font-medium text-muted-foreground">Product Description:</span> <span className="text-foreground">{selectedProduct?.description}</span></div>
           <div><span className="font-medium text-muted-foreground">Images:</span> <span className="text-foreground">{selectedProduct?.images}</span></div>
+          {/* Buyer-value summary: coverage + freshness, derived from the image data itself */}
+          {(() => {
+            const views = [...new Set(MOCK_IMAGES.map(i => humanize(i.orientation)))]
+            const latest = MOCK_IMAGES
+              .flatMap(i => [i.lastUpdate, i.createDate].filter((d): d is string => !!d))
+              .map(d => new Date(d))
+              .sort((a, b) => b.getTime() - a.getTime())[0]
+            return (
+              <div className="pt-1 text-sm font-medium text-foreground">
+                {MOCK_IMAGES.length} image{MOCK_IMAGES.length !== 1 ? "s" : ""} · {views.join(" & ")} views
+                {latest ? ` · Updated ${latest.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}` : ""}
+              </div>
+            )
+          })()}
         </div>
 
         {/* Sticky jump-to thumbnail strip — hidden when only 1 image (Acceptance #9) */}
@@ -735,35 +729,22 @@ export function RetailerImageBrowser() {
               </div>
               {/* Card body: attributes 60% left, preview placeholder 40% right */}
               <div className="flex">
-                {/* Left: attribute table — empty rows are suppressed behind a count so the
-                    populated fields stay prominent instead of drowning in blanks (P1.4 / R1) */}
+                {/* Left: image details — buyer language, populated fields only. The record is
+                    described by what it contains; nothing counts or comments on other fields. */}
                 <div className="w-3/5 border-r border-border text-sm">
                   {(() => {
-                    const allRows = [
+                    const rows = [
                       { label: "File Name:", value: img.fileName, link: false },
-                      { label: "File Type:", value: img.fileType, link: false },
-                      { label: "Image Type:", value: img.imageType, link: true },
-                      { label: "Purpose:", value: img.purpose, link: true },
-                      { label: "Orientation:", value: img.orientation, link: true },
-                      { label: "Location Type:", value: img.locationType, link: false },
-                      { label: "External Location:", value: "", link: false },
-                      { label: "File Size:", value: "", link: false },
-                      { label: "Pixel Density (DPI):", value: "", link: false },
-                      { label: "Height:", value: "", link: false },
-                      { label: "Width:", value: "", link: false },
-                      { label: "Image Style:", value: "", link: false },
-                      { label: "Facing (GDSN):", value: "", link: false },
-                      { label: "Angle:", value: "", link: false },
-                      { label: "Clipping Path:", value: "", link: false },
-                      { label: "Image Description:", value: "", link: false },
-                      { label: "Create Date:", value: img.createDate, link: false },
-                      { label: "Last Update Date:", value: img.lastUpdate || "", link: false },
-                    ]
-                    const populated = allRows.filter(r => r.value !== "")
-                    const emptyCount = allRows.length - populated.length
+                      { label: "File Type:", value: humanize(img.fileType), link: false },
+                      { label: "Image Type:", value: humanize(img.imageType), link: true },
+                      { label: "Purpose:", value: humanize(img.purpose), link: true },
+                      { label: "View:", value: humanize(img.orientation), link: true },
+                      { label: "Added:", value: img.createDate, link: false },
+                      { label: "Updated:", value: img.lastUpdate || "", link: false },
+                    ].filter(r => r.value !== "")
                     return (
                       <>
-                        {populated.map((row, rowIdx) => (
+                        {rows.map((row, rowIdx) => (
                           <div key={rowIdx} className="flex border-b border-border">
                             <div className="w-44 bg-muted/20 px-3 py-2 font-medium text-foreground shrink-0">{row.label}</div>
                             <div className={cn("flex-1 px-3 py-2", row.link ? "text-tg-link" : "text-foreground")}>
@@ -771,15 +752,8 @@ export function RetailerImageBrowser() {
                             </div>
                           </div>
                         ))}
-                        {emptyCount > 0 && (
-                          <div className="px-3 py-2 text-xs text-muted-foreground border-b border-border">
-                            {emptyCount} attribute{emptyCount !== 1 ? "s" : ""} not provided by supplier
-                          </div>
-                        )}
-                        {/* Provenance — who supplied this image and when (P1.4 / R6) */}
                         <div className="px-3 py-2 text-xs text-muted-foreground">
-                          Provided by {selectedVendor?.name ?? "vendor"} · Created {img.createDate}
-                          {img.lastUpdate ? ` · Updated ${img.lastUpdate}` : ""}
+                          From {selectedVendor?.name ?? "vendor"}
                         </div>
                       </>
                     )
@@ -801,21 +775,6 @@ export function RetailerImageBrowser() {
               </div>
             </div>
           ))}
-        </div>
-
-        {/* GS1 Extended Attributes — first-class inline section (P1.4 / R2): the richest data
-            a supplier provides should be visible on the page, not hidden behind an icon. */}
-        <div className="rounded border border-border bg-card p-4">
-          <div className="flex items-center gap-2 mb-3">
-            <Sparkles className="size-4 text-primary" />
-            <h3 className="text-sm font-semibold text-foreground">GS1 Extended Attributes (AI-assisted, supplier-confirmed)</h3>
-          </div>
-          <AiAttributesTable
-            attributes={MOCK_AI_ATTRIBUTES}
-            category="Shoes"
-            imageCount={MOCK_IMAGES.length}
-            imageNames={MOCK_IMAGES.map(i => i.fileName)}
-          />
         </div>
 
         {/* Download Modal — Three-phase: Select → Preparing → Complete (Step 3A parity with supplier) */}
@@ -899,7 +858,7 @@ export function RetailerImageBrowser() {
                               {selectedProduct?.id ?? "product"}_image_metadata.csv
                             </span>
                             <span className="text-xs text-muted-foreground">
-                              {selectedImages.length} row{selectedImages.length !== 1 ? "s" : ""} — one per image, incl. GS1 extended attributes
+                              {selectedImages.length} row{selectedImages.length !== 1 ? "s" : ""} — one per image
                             </span>
                           </div>
                         </div>
@@ -911,7 +870,7 @@ export function RetailerImageBrowser() {
                       <FileText className="size-4 text-primary mt-0.5 shrink-0" />
                       <div>
                         <span className="font-medium text-foreground">Metadata file (.csv)</span>
-                        <span className="text-muted-foreground"> contains one row per image with all attributes in the standard field layout — including the supplier&apos;s GS1 extended attributes — ready for PIM/DAM import.</span>
+                        <span className="text-muted-foreground"> contains one row per image with all image details in the standard field layout, ready for import.</span>
                       </div>
                     </div>
 
@@ -923,8 +882,10 @@ export function RetailerImageBrowser() {
                       <Button
                         disabled={selectedImages.length === 0}
                         onClick={() => {
-                          // Really generate + download the spec-shaped metadata CSV (incl. GS1
-                          // extended attributes); image binaries stay simulated in this prototype.
+                          // Really generate + download the spec-shaped metadata CSV (standard
+                          // 21-column image layout); image binaries stay simulated in this
+                          // prototype. Non-GDSN attributes travel via their own channel, so
+                          // they are not part of this file.
                           const rows: ImageMetadataRow[] = selectedImages.map(img => ({
                             action: "insert",
                             image_level: "product",
@@ -948,7 +909,7 @@ export function RetailerImageBrowser() {
                             clipping_path: "",
                             image_description: "",
                           }))
-                          const csv = buildImageMetadataCsv(rows, MOCK_AI_ATTRIBUTES)
+                          const csv = buildImageMetadataCsv(rows)
                           downloadCsv(`${selectedProduct?.id ?? "product"}_image_metadata.csv`, csv)
                           setLastCsvPreview(csvPreview(csv))
                           setDownloadPhase("preparing")
@@ -1058,25 +1019,6 @@ export function RetailerImageBrowser() {
           </div>
         )}
 
-        {/* View AI Attributes drawer — read-only (retailers don't own the attributes) */}
-        <Sheet open={showAiAttributesDrawer} onOpenChange={setShowAiAttributesDrawer}>
-          <SheetContent className="sm:max-w-xl overflow-y-auto">
-            <SheetHeader>
-              <SheetTitle className="flex items-center gap-2">
-                <Sparkles className="size-4 text-primary" />
-                AI-Extracted Attributes
-              </SheetTitle>
-            </SheetHeader>
-            <div className="px-4 pb-4">
-              <AiAttributesTable
-                attributes={MOCK_AI_ATTRIBUTES}
-                category="Shoes"
-                imageCount={MOCK_IMAGES.length}
-                imageNames={MOCK_IMAGES.map(i => i.fileName)}
-              />
-            </div>
-          </SheetContent>
-        </Sheet>
       </div>
     )
   }
