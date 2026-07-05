@@ -7,7 +7,6 @@ import {
   ChevronLeft, 
   Upload, 
   Check,
-  ChevronDown,
   Trash2,
   FileImage,
   Download,
@@ -34,11 +33,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
-import {
-  Collapsible,
-  CollapsibleContent,
-  CollapsibleTrigger,
-} from "@/components/ui/collapsible"
 import {
   Dialog,
   DialogContent,
@@ -287,7 +281,14 @@ const PRODUCT_CATEGORIES = ["Shoes", "Apparel", "Bags", "Jewelry", "Beauty"] as 
 // Controlled by NEXT_PUBLIC_EXTRACTION_MODE; falls back to mock when unset. No UI toggle.
 const EXTRACTION_MODE = process.env.NEXT_PUBLIC_EXTRACTION_MODE === "gemini" ? "gemini" : "mock"
 
-// Extracted attribute form used in Step 2 and Edit-attributes dialog (Change 3 / Change 7)
+// P0.2a: the attribute record splits into two groups. PRODUCT-WIDE fields hold one honest
+// value for every image of a product; PER-SHOT fields describe what makes each photo
+// different (which is exactly why they must never be blanket-applied).
+const PER_SHOT_KEYS = ["orientation", "facing", "angle", "clippingPath", "imageDescription"] as const
+type PerShotKey = (typeof PER_SHOT_KEYS)[number]
+const isPerShotKey = (k: string): k is PerShotKey => (PER_SHOT_KEYS as readonly string[]).includes(k)
+
+// Attribute form used in Step 2, the Edit dialog, and Bulk edit (Change 3 / Change 7 / P0.2a)
 type StepTwoFormProps = {
   currentAttrs: {
     imageType: string; purpose: string; orientation: string; locationType: string;
@@ -295,13 +296,15 @@ type StepTwoFormProps = {
     clippingPath: string; imageDescription: string;
   }
   updateAttrs: (a: StepTwoFormProps["currentAttrs"]) => void
-  advancedOpen: boolean
-  setAdvancedOpen: (v: boolean) => void
   uploadLevel: "product" | "product-color" | "gtin"
   autoData: { colorCode: string; selectedGtin: string }
   // Auto-captured per-file facts (dimensions/DPI) shown read-only. Omitted in bulk edit,
   // where no single file is in context — measured facts are never bulk-editable.
   measuredFiles?: { name: string; measured?: MeasuredImageMetadata }[]
+  // Explicit, labeled copy action for per-shot values — a deliberate copy, not a silent default.
+  onApplyPerShotToAll?: () => void
+  // Bulk edit targets per-shot fields only; product-wide values are edited once in the main form.
+  hideProductWide?: boolean
 }
 
 // Read-only summary of a file's decoded dimensions/DPI. undefined = measurement in flight.
@@ -313,93 +316,98 @@ function formatMeasured(m?: MeasuredImageMetadata): string {
   return [dims, dpi].filter(Boolean).join(" · ")
 }
 
-function StepTwoForm({ currentAttrs, updateAttrs, advancedOpen, setAdvancedOpen, uploadLevel, autoData, measuredFiles }: StepTwoFormProps) {
+function StepTwoForm({ currentAttrs, updateAttrs, uploadLevel, autoData, measuredFiles, onApplyPerShotToAll, hideProductWide }: StepTwoFormProps) {
   return (
     <div className="flex flex-col gap-4">
-      {/* Auto-populated fields (read-only) */}
-      {(uploadLevel === "product-color" || uploadLevel === "gtin") && (
-        <div className="grid gap-4 md:grid-cols-2">
-          {uploadLevel === "product-color" && (
-            <div className="flex flex-col gap-2">
-              <Label className="text-sm font-medium">Color Code</Label>
-              <Input value={autoData.colorCode} readOnly className="bg-muted/30 text-foreground cursor-default" />
+      {!hideProductWide && (
+        <>
+          {/* Auto-populated fields (read-only) */}
+          {(uploadLevel === "product-color" || uploadLevel === "gtin") && (
+            <div className="grid gap-4 md:grid-cols-2">
+              {uploadLevel === "product-color" && (
+                <div className="flex flex-col gap-2">
+                  <Label className="text-sm font-medium">Color Code</Label>
+                  <Input value={autoData.colorCode} readOnly className="bg-muted/30 text-foreground cursor-default" />
+                </div>
+              )}
+              {uploadLevel === "gtin" && (
+                <div className="flex flex-col gap-2">
+                  <Label className="text-sm font-medium">GTIN</Label>
+                  <Input value={autoData.selectedGtin} readOnly className="bg-muted/30 text-foreground cursor-default" />
+                </div>
+              )}
             </div>
           )}
-          {uploadLevel === "gtin" && (
+
+          {/* Product-wide group: one value for every image of this product */}
+          <div className="flex items-center gap-2">
+            <span className="text-xs font-semibold uppercase tracking-wide text-foreground">Product-wide attributes</span>
+            <span className="text-xs text-muted-foreground">apply to every image of this product</span>
+          </div>
+
+          <div className="grid gap-4 md:grid-cols-2">
             <div className="flex flex-col gap-2">
-              <Label className="text-sm font-medium">GTIN</Label>
-              <Input value={autoData.selectedGtin} readOnly className="bg-muted/30 text-foreground cursor-default" />
+              <Label className="text-sm font-medium">
+                Image Type <span className="text-destructive">*</span>
+              </Label>
+              <Select value={currentAttrs.imageType} onValueChange={(v) => updateAttrs({ ...currentAttrs, imageType: v })}>
+                <SelectTrigger className="w-full bg-background"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  {IMAGE_TYPE_OPTIONS.map(o => <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>)}
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div className="flex flex-col gap-2">
+              <Label className="text-sm font-medium">
+                Purpose <span className="text-destructive">*</span>
+              </Label>
+              <Select value={currentAttrs.purpose} onValueChange={(v) => updateAttrs({ ...currentAttrs, purpose: v })}>
+                <SelectTrigger className="w-full bg-background"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  {PURPOSE_OPTIONS.map(o => <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>)}
+                </SelectContent>
+              </Select>
+            </div>
+
+            {/* Location Type read-only */}
+            <div className="flex flex-col gap-2">
+              <Label className="text-sm font-medium">Location Type</Label>
+              <Input value={LOCATION_TYPE_OPTIONS.find(o => o.value === currentAttrs.locationType)?.label || ""} readOnly className="bg-muted/30 text-foreground cursor-default" />
+            </div>
+
+            <div className="flex flex-col gap-2">
+              <Label className="text-sm font-medium">Image Style <span className="text-xs font-normal text-muted-foreground">(optional)</span></Label>
+              <Select value={currentAttrs.imageStyle} onValueChange={(v) => updateAttrs({ ...currentAttrs, imageStyle: v })}>
+                <SelectTrigger className="w-full bg-background"><SelectValue placeholder="Select style..." /></SelectTrigger>
+                <SelectContent>{IMAGE_STYLE_OPTIONS.map(o => <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>)}</SelectContent>
+              </Select>
+            </div>
+          </div>
+
+          {(currentAttrs.locationType === "FTP" || currentAttrs.locationType === "URL") && (
+            <div className="flex flex-col gap-2">
+              <Label className="text-sm font-medium">External Location <span className="text-destructive">*</span></Label>
+              <Input
+                value={currentAttrs.externalLocation}
+                onChange={(e) => updateAttrs({ ...currentAttrs, externalLocation: e.target.value })}
+                placeholder={currentAttrs.locationType === "FTP" ? "ftp://..." : "https://..."}
+                className="bg-background"
+              />
             </div>
           )}
-        </div>
+
+          <div className="border-t border-border" />
+        </>
       )}
 
-      {/* Required section header (Change 3a) */}
+      {/* Per-shot group: what makes each photo different — never blanket-applied */}
       <div className="flex items-center gap-2">
-        <span className="text-xs font-semibold uppercase tracking-wide text-foreground">Required</span>
-        <span className="rounded bg-destructive/10 px-1.5 py-0.5 text-xs font-medium text-destructive">Required</span>
+        <span className="text-xs font-semibold uppercase tracking-wide text-foreground">Per-shot attributes</span>
+        <span className="text-xs text-muted-foreground">describe this specific image</span>
       </div>
 
-      <div className="grid gap-4 md:grid-cols-2">
-        <div className="flex flex-col gap-2">
-          <Label className="text-sm font-medium">
-            Image Type <span className="text-destructive">*</span>
-          </Label>
-          <Select value={currentAttrs.imageType} onValueChange={(v) => updateAttrs({ ...currentAttrs, imageType: v })}>
-            <SelectTrigger className="w-full bg-background"><SelectValue /></SelectTrigger>
-            <SelectContent>
-              {IMAGE_TYPE_OPTIONS.map(o => <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>)}
-            </SelectContent>
-          </Select>
-        </div>
-
-        <div className="flex flex-col gap-2">
-          <Label className="text-sm font-medium">
-            Purpose <span className="text-destructive">*</span>
-          </Label>
-          <Select value={currentAttrs.purpose} onValueChange={(v) => updateAttrs({ ...currentAttrs, purpose: v })}>
-            <SelectTrigger className="w-full bg-background"><SelectValue /></SelectTrigger>
-            <SelectContent>
-              {PURPOSE_OPTIONS.map(o => <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>)}
-            </SelectContent>
-          </Select>
-        </div>
-
-        <div className="flex flex-col gap-2">
-          <Label className="text-sm font-medium">
-            Orientation <span className="text-destructive">*</span>
-          </Label>
-          <Select value={currentAttrs.orientation} onValueChange={(v) => updateAttrs({ ...currentAttrs, orientation: v })}>
-            <SelectTrigger className="w-full bg-background"><SelectValue placeholder="Select orientation..." /></SelectTrigger>
-            <SelectContent>
-              {ORIENTATION_OPTIONS.map(o => <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>)}
-            </SelectContent>
-          </Select>
-        </div>
-
-        {/* Location Type read-only */}
-        <div className="flex flex-col gap-2">
-          <Label className="text-sm font-medium">Location Type</Label>
-          <Input value={LOCATION_TYPE_OPTIONS.find(o => o.value === currentAttrs.locationType)?.label || ""} readOnly className="bg-muted/30 text-foreground cursor-default" />
-        </div>
-      </div>
-
-      {(currentAttrs.locationType === "FTP" || currentAttrs.locationType === "URL") && (
-        <div className="flex flex-col gap-2">
-          <Label className="text-sm font-medium">External Location <span className="text-destructive">*</span></Label>
-          <Input
-            value={currentAttrs.externalLocation}
-            onChange={(e) => updateAttrs({ ...currentAttrs, externalLocation: e.target.value })}
-            placeholder={currentAttrs.locationType === "FTP" ? "ftp://..." : "https://..."}
-            className="bg-background"
-          />
-        </div>
-      )}
-
-      <div className="border-t border-border" />
-
-      {/* Measured from file — auto-captured by decoding each staged binary (no AI, no typing).
-          Always visible: these facts should never hide behind the optional disclosure. */}
+      {/* Measured from file — auto-captured by decoding each staged binary (no AI, no typing). */}
       {measuredFiles && measuredFiles.length > 0 && (
         <div className="flex flex-col gap-1.5 rounded border border-border bg-muted/20 p-3">
           <div className="flex items-center gap-2">
@@ -420,48 +428,47 @@ function StepTwoForm({ currentAttrs, updateAttrs, advancedOpen, setAdvancedOpen,
         </div>
       )}
 
-      {/* Optional attributes disclosure (5 fields) (Change 3a) */}
-      <Collapsible open={advancedOpen} onOpenChange={setAdvancedOpen}>
-        <CollapsibleTrigger asChild>
-          <button className="flex w-full items-center gap-2 rounded border border-border bg-muted/30 px-4 py-3 text-left text-sm font-medium text-foreground hover:bg-muted/50">
-            <ChevronDown className={cn("size-4 transition-transform", advancedOpen && "rotate-180")} />
-            {advancedOpen ? "Optional attributes (5) — collapse" : "Optional attributes (5) — expand"}
-          </button>
-        </CollapsibleTrigger>
-        <CollapsibleContent>
-          <div className="mt-4 grid gap-4 rounded border border-border bg-background p-4 md:grid-cols-2">
-            <div className="flex flex-col gap-2">
-              <Label className="text-sm font-medium">Image Style</Label>
-              <Select value={currentAttrs.imageStyle} onValueChange={(v) => updateAttrs({ ...currentAttrs, imageStyle: v })}>
-                <SelectTrigger className="w-full bg-background"><SelectValue placeholder="Select style..." /></SelectTrigger>
-                <SelectContent>{IMAGE_STYLE_OPTIONS.map(o => <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>)}</SelectContent>
-              </Select>
-            </div>
-            <div className="flex flex-col gap-2">
-              <Label className="text-sm font-medium">Facing (GDSN)</Label>
-              <Select value={currentAttrs.facing} onValueChange={(v) => updateAttrs({ ...currentAttrs, facing: v })}>
-                <SelectTrigger className="w-full bg-background"><SelectValue placeholder="Select facing..." /></SelectTrigger>
-                <SelectContent>{FACING_OPTIONS.map(o => <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>)}</SelectContent>
-              </Select>
-            </div>
-            <div className="flex flex-col gap-2">
-              <Label className="text-sm font-medium">Angle</Label>
-              <Select value={currentAttrs.angle} onValueChange={(v) => updateAttrs({ ...currentAttrs, angle: v })}>
-                <SelectTrigger className="w-full bg-background"><SelectValue placeholder="Select angle..." /></SelectTrigger>
-                <SelectContent>{ANGLE_OPTIONS.map(o => <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>)}</SelectContent>
-              </Select>
-            </div>
-            <div className="flex flex-col gap-2">
-              <Label className="text-sm font-medium">Clipping Path</Label>
-              <Input value={currentAttrs.clippingPath} onChange={(e) => updateAttrs({ ...currentAttrs, clippingPath: e.target.value })} placeholder="Path name..." className="bg-background" />
-            </div>
-            <div className="flex flex-col gap-2 md:col-span-2">
-              <Label className="text-sm font-medium">Image Description</Label>
-              <Input value={currentAttrs.imageDescription} onChange={(e) => updateAttrs({ ...currentAttrs, imageDescription: e.target.value })} placeholder="Enter description..." className="bg-background" />
-            </div>
-          </div>
-        </CollapsibleContent>
-      </Collapsible>
+      <div className="grid gap-4 md:grid-cols-2">
+        <div className="flex flex-col gap-2">
+          <Label className="text-sm font-medium">
+            Orientation <span className="text-destructive">*</span>
+          </Label>
+          <Select value={currentAttrs.orientation} onValueChange={(v) => updateAttrs({ ...currentAttrs, orientation: v })}>
+            <SelectTrigger className="w-full bg-background"><SelectValue placeholder="Select orientation..." /></SelectTrigger>
+            <SelectContent>
+              {ORIENTATION_OPTIONS.map(o => <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>)}
+            </SelectContent>
+          </Select>
+        </div>
+        <div className="flex flex-col gap-2">
+          <Label className="text-sm font-medium">Facing (GDSN) <span className="text-xs font-normal text-muted-foreground">(optional)</span></Label>
+          <Select value={currentAttrs.facing} onValueChange={(v) => updateAttrs({ ...currentAttrs, facing: v })}>
+            <SelectTrigger className="w-full bg-background"><SelectValue placeholder="Select facing..." /></SelectTrigger>
+            <SelectContent>{FACING_OPTIONS.map(o => <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>)}</SelectContent>
+          </Select>
+        </div>
+        <div className="flex flex-col gap-2">
+          <Label className="text-sm font-medium">Angle <span className="text-xs font-normal text-muted-foreground">(optional)</span></Label>
+          <Select value={currentAttrs.angle} onValueChange={(v) => updateAttrs({ ...currentAttrs, angle: v })}>
+            <SelectTrigger className="w-full bg-background"><SelectValue placeholder="Select angle..." /></SelectTrigger>
+            <SelectContent>{ANGLE_OPTIONS.map(o => <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>)}</SelectContent>
+          </Select>
+        </div>
+        <div className="flex flex-col gap-2">
+          <Label className="text-sm font-medium">Clipping Path <span className="text-xs font-normal text-muted-foreground">(optional)</span></Label>
+          <Input value={currentAttrs.clippingPath} onChange={(e) => updateAttrs({ ...currentAttrs, clippingPath: e.target.value })} placeholder="Path name..." className="bg-background" />
+        </div>
+        <div className="flex flex-col gap-2 md:col-span-2">
+          <Label className="text-sm font-medium">Image Description <span className="text-xs font-normal text-muted-foreground">(optional)</span></Label>
+          <Input value={currentAttrs.imageDescription} onChange={(e) => updateAttrs({ ...currentAttrs, imageDescription: e.target.value })} placeholder="Enter description..." className="bg-background" />
+        </div>
+      </div>
+
+      {onApplyPerShotToAll && (
+        <Button variant="outline" size="sm" className="w-fit" onClick={onApplyPerShotToAll}>
+          Apply this image&apos;s per-shot values to all images
+        </Button>
+      )}
     </div>
   )
 }
@@ -480,8 +487,6 @@ export function ImageUploadWizard({
   const [selectedGtin, setSelectedGtin] = useState("")
   const [uploadedFiles, setUploadedFiles] = useState<UploadedFile[]>([])
   const [isDragging, setIsDragging] = useState(false)
-  const [applyToAll, setApplyToAll] = useState(true)
-  const [advancedOpen, setAdvancedOpen] = useState(false)
   const [showProductMedia, setShowProductMedia] = useState(false)
   const [showDownloadModal, setShowDownloadModal] = useState(false)
   const [downloadPhase, setDownloadPhase] = useState<"select" | "preparing" | "complete">("select")
@@ -574,7 +579,8 @@ export function ImageUploadWizard({
     // auto-captured into UploadedFile.measured at staging (see image-metadata.ts).
   })
   
-  // Per-image attributes (when applyToAll is false)
+  // Per-shot attribute records, keyed by image index. Only PER_SHOT_KEYS are meaningful
+  // here; product-wide keys always resolve from `attributes` (P0.2a).
   const [attributesByImage, setAttributesByImage] = useState<{ [key: number]: typeof attributes }>({})
   const [activeAttributeImageIndex, setActiveAttributeImageIndex] = useState(0)
 
@@ -584,25 +590,52 @@ export function ImageUploadWizard({
     { number: 3, title: "Review & Confirm", description: "Review and submit" },
   ]
 
-  // Helper function to get current attributes based on mode
-  const getCurrentAttributes = () => {
-    if (applyToAll) {
-      return attributes
-    } else {
-      return attributesByImage[activeAttributeImageIndex] || attributes
+  // Effective attributes for one image: product-wide values from `attributes`,
+  // per-shot values from that image's own record.
+  const effectiveAttrs = (idx: number): typeof attributes => {
+    const shot = attributesByImage[idx]
+    if (!shot) return attributes
+    const merged = { ...attributes }
+    PER_SHOT_KEYS.forEach(k => { merged[k] = shot[k] ?? "" })
+    return merged
+  }
+
+  const getCurrentAttributes = () => effectiveAttrs(activeAttributeImageIndex)
+
+  // Routes edits by key group: per-shot keys write to the active image's record only;
+  // everything else is product-wide and writes once for all images.
+  const updateCurrentAttributes = (newAttrs: typeof attributes) => {
+    const current = getCurrentAttributes()
+    const perShotChanged = PER_SHOT_KEYS.some(k => newAttrs[k] !== current[k])
+    setAttributes(prev => {
+      const next = { ...prev }
+      ;(Object.keys(newAttrs) as Array<keyof typeof attributes>).forEach(k => {
+        if (!isPerShotKey(k)) next[k] = newAttrs[k]
+      })
+      return next
+    })
+    if (perShotChanged) {
+      setAttributesByImage(prev => {
+        const rec = { ...(prev[activeAttributeImageIndex] ?? attributes) }
+        PER_SHOT_KEYS.forEach(k => { rec[k] = newAttrs[k] })
+        return { ...prev, [activeAttributeImageIndex]: rec }
+      })
     }
   }
 
-  // Helper function to update current attributes
-  const updateCurrentAttributes = (newAttrs: typeof attributes) => {
-    if (applyToAll) {
-      setAttributes(newAttrs)
-    } else {
-      setAttributesByImage(prev => ({
-        ...prev,
-        [activeAttributeImageIndex]: newAttrs
-      }))
-    }
+  // Explicit copy of the active image's per-shot values onto every image — a labeled,
+  // deliberate action, unlike the old silent apply-to-all default.
+  const applyPerShotToAll = () => {
+    const source = effectiveAttrs(activeAttributeImageIndex)
+    setAttributesByImage(prev => {
+      const next = { ...prev }
+      uploadedFiles.forEach((_, i) => {
+        const rec = { ...(next[i] ?? attributes) }
+        PER_SHOT_KEYS.forEach(k => { rec[k] = source[k] })
+        next[i] = rec
+      })
+      return next
+    })
   }
 
   // ── AI extraction handlers (mock-first) ──
@@ -1381,7 +1414,7 @@ export function ImageUploadWizard({
     const data = getAutoPopulatedData()
     return files.map(file => {
       const idx = uploadedFiles.indexOf(file)
-      const fileAttrs = applyToAll ? attributes : (attributesByImage[idx] || attributes)
+      const fileAttrs = effectiveAttrs(idx)
       return {
         action: "insert",
         image_level: uploadLevel === "gtin" ? "item" : "product",
@@ -1432,17 +1465,11 @@ export function ImageUploadWizard({
     (uploadLevel === "product" || 
      (uploadLevel === "product-color" && selectedColorCode) ||
      (uploadLevel === "gtin" && selectedGtin))
-  // In per-image mode, require every file to have all required attrs set (Change 2a)
-  const missingAttrCount = (() => {
-    if (applyToAll) return 0
-    return uploadedFiles.filter((_, i) => {
-      const a = attributesByImage[i]
-      return !a?.imageType || !a?.purpose || !a?.orientation
-    }).length
-  })()
-  const canProceedStep3 = applyToAll
-    ? !!(getCurrentAttributes().imageType && getCurrentAttributes().purpose && getCurrentAttributes().orientation)
-    : missingAttrCount === 0 && uploadedFiles.length > 0
+  // Every image must have its per-shot orientation set (Change 2a / P0.2a);
+  // product-wide required fields are checked once.
+  const missingAttrCount = uploadedFiles.filter((_, i) => !attributesByImage[i]?.orientation).length
+  const canProceedStep3 = !!(attributes.imageType && attributes.purpose) &&
+    (uploadedFiles.length > 0 ? missingAttrCount === 0 : !!getCurrentAttributes().orientation)
 
   // Simulates per-file upload progression — no artificial failures (Task 3)
   const simulateSubmission = useCallback(() => {
@@ -1570,11 +1597,7 @@ export function ImageUploadWizard({
                 const fieldKeys = Object.keys(attributes) as Array<keyof typeof attributes>
                 const seed = { ...attributes }
                 fieldKeys.forEach((key) => {
-                  const values = new Set(selectedFiles.map(f => {
-                    const idx = uploadedFiles.indexOf(f)
-                    const attrs = applyToAll ? attributes : (attributesByImage[idx] || attributes)
-                    return attrs[key]
-                  }))
+                  const values = new Set(selectedFiles.map(f => effectiveAttrs(uploadedFiles.indexOf(f))[key]))
                   seed[key] = values.size === 1 ? [...values][0] : ""
                 })
                 setBulkEditDialog({ open: true, draft: seed, touched: {} })
@@ -1709,7 +1732,7 @@ export function ImageUploadWizard({
         ) : (
           <div className="flex flex-col gap-3">
             {uploadedFiles.map((file, idx) => {
-              const cardAttrs = applyToAll ? attributes : (attributesByImage[idx] || attributes)
+              const cardAttrs = effectiveAttrs(idx)
               const imageLevelLabel = uploadLevel === "product"
                 ? "Product Level"
                 : uploadLevel === "gtin"
@@ -2027,8 +2050,6 @@ export function ImageUploadWizard({
                     <StepTwoForm
                       currentAttrs={editAttrDialog.draft}
                       updateAttrs={(newAttrs) => setEditAttrDialog(prev => ({ ...prev, draft: newAttrs }))}
-                      advancedOpen={advancedOpen}
-                      setAdvancedOpen={setAdvancedOpen}
                       uploadLevel={uploadLevel}
                       autoData={getAutoPopulatedData()}
                       measuredFiles={uploadedFiles[editAttrDialog.fileIndex]
@@ -2090,11 +2111,22 @@ export function ImageUploadWizard({
                           clearExtraction() // replaced image invalidates the product-level extraction
                           setPendingReplaceFile(null)
                         }
-                        // Commit attribute edits (Acceptance #8)
-                        if (applyToAll) {
-                          setAttributes(editAttrDialog.draft)
-                        } else {
-                          setAttributesByImage(prev => ({ ...prev, [editAttrDialog.fileIndex]: editAttrDialog.draft }))
+                        // Commit attribute edits (Acceptance #8): product-wide keys apply to the
+                        // whole product; per-shot keys to this image only (P0.2a).
+                        {
+                          const draft = editAttrDialog.draft
+                          setAttributes(prev => {
+                            const next = { ...prev }
+                            ;(Object.keys(draft) as Array<keyof typeof attributes>).forEach(k => {
+                              if (!isPerShotKey(k)) next[k] = draft[k]
+                            })
+                            return next
+                          })
+                          setAttributesByImage(prev => {
+                            const rec = { ...(prev[editAttrDialog.fileIndex] ?? attributes) }
+                            PER_SHOT_KEYS.forEach(k => { rec[k] = draft[k] })
+                            return { ...prev, [editAttrDialog.fileIndex]: rec }
+                          })
                         }
                         setEditSaveConfirmed(true)
                         setTimeout(() => {
@@ -2181,7 +2213,7 @@ export function ImageUploadWizard({
                   <DialogHeader>
                     <DialogTitle>Edit {targetIds.size} Selected Image{targetIds.size !== 1 ? "s" : ""}</DialogTitle>
                     <p className="text-xs text-muted-foreground mt-0.5">
-                      Fields marked "Mixed" differ across the selected images. Only fields you change here will be applied — untouched fields keep each image's existing value.
+                      Per-shot fields only — product-wide attributes are edited once on the product. Fields marked "Mixed" differ across the selected images. Only fields you change here will be applied — untouched fields keep each image's existing value.
                     </p>
                   </DialogHeader>
                   <div className="overflow-y-auto flex-1 pr-1 py-2">
@@ -2197,10 +2229,9 @@ export function ImageUploadWizard({
                           touched: changedKey ? { ...prev.touched, [changedKey]: true } : prev.touched,
                         }))
                       }}
-                      advancedOpen={advancedOpen}
-                      setAdvancedOpen={setAdvancedOpen}
                       uploadLevel={uploadLevel}
                       autoData={getAutoPopulatedData()}
+                      hideProductWide
                     />
                   </div>
                   <div className="flex items-center justify-end gap-2 pt-3 border-t border-border">
@@ -2210,27 +2241,19 @@ export function ImageUploadWizard({
                     <Button
                       disabled={Object.keys(bulkEditDialog.touched).length === 0}
                       onClick={() => {
+                        // Bulk edit writes per-shot keys only (product-wide fields are hidden above).
                         const touchedKeys = (Object.keys(bulkEditDialog.touched) as Array<keyof typeof attributes>)
-                          .filter(k => bulkEditDialog.touched[k])
+                          .filter(k => bulkEditDialog.touched[k] && isPerShotKey(k))
                         setAttributesByImage(prev => {
                           const next = { ...prev }
                           uploadedFiles.forEach((f, idx) => {
-                            const existing = applyToAll ? attributes : (prev[idx] || attributes)
-                            if (!targetIds.has(f.id)) {
-                              // Not part of this bulk edit — snapshot its current effective value so it
-                              // keeps displaying correctly once applyToAll flips to false below.
-                              next[idx] = next[idx] || existing
-                              return
-                            }
-                            const merged = { ...existing }
+                            if (!targetIds.has(f.id)) return
+                            const merged = { ...(prev[idx] || attributes) }
                             touchedKeys.forEach((k) => { merged[k] = bulkEditDialog.draft[k] })
                             next[idx] = merged
                           })
                           return next
                         })
-                        // attributesByImage is only read in per-image mode — a bulk edit on a subset
-                        // implies per-image mode, otherwise the edit would have no visible effect.
-                        if (applyToAll) setApplyToAll(false)
                         setBulkEditDialog({ open: false, draft: {} as typeof attributes, touched: {} })
                       }}
                     >
@@ -2939,28 +2962,9 @@ export function ImageUploadWizard({
               )}
             </div>
 
-            {/* Apply to All Checkbox with badge (Change 3b) */}
-            <div className="flex items-center gap-2 rounded border border-border bg-muted/30 p-3">
-              <Checkbox
-                id="apply-all"
-                checked={applyToAll}
-                onCheckedChange={(checked) => {
-                  setApplyToAll(checked as boolean)
-                  setActiveAttributeImageIndex(0)
-                }}
-              />
-              <label htmlFor="apply-all" className="text-sm font-medium text-foreground cursor-pointer">
-                Apply same attributes to all {uploadedFiles.length} images
-              </label>
-              <span className="ml-auto text-xs text-muted-foreground">
-                {applyToAll
-                  ? `Applied to ${uploadedFiles.length} images`
-                  : `Per-image — editing ${activeAttributeImageIndex + 1} of ${uploadedFiles.length}`}
-              </span>
-            </div>
-
-            {/* Two-column per-image layout (Change 3b) — only when applyToAll=false and multiple files */}
-            {!applyToAll && uploadedFiles.length > 1 ? (
+            {/* P0.2a: product-wide fields are entered once; per-shot fields are always per image.
+                With multiple files, the two-column layout with the image selector is the default. */}
+            {uploadedFiles.length > 1 ? (
               <div className="flex gap-4">
                 {/* Left column: thumbnail list ~25% */}
                 <div className="w-1/4 flex flex-col gap-1 border border-border rounded overflow-hidden">
@@ -2996,14 +3000,10 @@ export function ImageUploadWizard({
                         )}
                       </div>
                       <span className="truncate">{file.name.slice(0, 18)}</span>
-                      {/* Per-row completion indicator — directions: "Per-row indicator" */}
-                      {(() => {
-                        const a = attributesByImage[idx]
-                        const complete = !!(a?.imageType && a?.purpose && a?.orientation)
-                        return complete
-                          ? <Check className="size-3.5 shrink-0 ml-auto text-tg-success" />
-                          : <AlertCircle className="size-3.5 shrink-0 ml-auto text-tg-warning" />
-                      })()}
+                      {/* Per-row completion indicator: per-shot orientation is what varies per image */}
+                      {attributesByImage[idx]?.orientation
+                        ? <Check className="size-3.5 shrink-0 ml-auto text-tg-success" />
+                        : <AlertCircle className="size-3.5 shrink-0 ml-auto text-tg-warning" />}
                     </button>
                   ))}
                 </div>
@@ -3019,14 +3019,18 @@ export function ImageUploadWizard({
                         <FileImage className="size-8 text-muted-foreground" />
                       )}
                     </div>
-                    {/* Copy from another image dropdown */}
+                    {/* Copy per-shot values from another image */}
                     <div className="flex flex-col gap-1">
-                      <p className="text-xs text-muted-foreground">Copy attributes from image:</p>
+                      <p className="text-xs text-muted-foreground">Copy per-shot attributes from image:</p>
                       <Select
                         onValueChange={(val) => {
                           const srcIdx = parseInt(val)
-                          const srcAttrs = attributesByImage[srcIdx] || attributes
-                          setAttributesByImage(prev => ({ ...prev, [activeAttributeImageIndex]: { ...srcAttrs } }))
+                          const src = effectiveAttrs(srcIdx)
+                          setAttributesByImage(prev => {
+                            const rec = { ...(prev[activeAttributeImageIndex] ?? attributes) }
+                            PER_SHOT_KEYS.forEach(k => { rec[k] = src[k] })
+                            return { ...prev, [activeAttributeImageIndex]: rec }
+                          })
                         }}
                       >
                         <SelectTrigger className="w-52 h-8 text-xs bg-background">
@@ -3043,35 +3047,34 @@ export function ImageUploadWizard({
                     </div>
                   </div>
 
-                  {/* Required section */}
+                  {/* Product-wide + active image's per-shot form */}
                   <StepTwoForm
                     currentAttrs={getCurrentAttributes()}
                     updateAttrs={updateCurrentAttributes}
-                    advancedOpen={advancedOpen}
-                    setAdvancedOpen={setAdvancedOpen}
                     uploadLevel={uploadLevel}
                     autoData={getAutoPopulatedData()}
                     measuredFiles={uploadedFiles[activeAttributeImageIndex]
                       ? [{ name: uploadedFiles[activeAttributeImageIndex].name, measured: uploadedFiles[activeAttributeImageIndex].measured }]
                       : []}
+                    onApplyPerShotToAll={applyPerShotToAll}
                   />
                 </div>
               </div>
             ) : (
-              /* applyToAll or single file: standard layout */
+              /* Single file (or remote/LMI with none staged): standard layout */
               <div className="flex flex-col gap-4">
-                {/* Inline preview (Change 3c) — shows first file */}
+                {/* Inline preview (Change 3c) */}
                 {uploadedFiles.length > 0 && (
                   <div className="flex items-center gap-3">
                     <div className="size-24 shrink-0 rounded border border-border overflow-hidden bg-muted flex items-center justify-center">
-                      {uploadedFiles[applyToAll ? 0 : activeAttributeImageIndex]?.preview ? (
-                        <img src={uploadedFiles[applyToAll ? 0 : activeAttributeImageIndex].preview} alt="" className="size-full object-cover" />
+                      {uploadedFiles[activeAttributeImageIndex]?.preview ? (
+                        <img src={uploadedFiles[activeAttributeImageIndex].preview} alt="" className="size-full object-cover" />
                       ) : (
                         <FileImage className="size-8 text-muted-foreground" />
                       )}
                     </div>
                     <p className="text-xs text-muted-foreground">
-                      {applyToAll ? `Preview of first file — attributes apply to all ${uploadedFiles.length}` : `Editing: ${uploadedFiles[activeAttributeImageIndex]?.name}`}
+                      Editing: {uploadedFiles[activeAttributeImageIndex]?.name}
                     </p>
                   </div>
                 )}
@@ -3079,8 +3082,6 @@ export function ImageUploadWizard({
                 <StepTwoForm
                   currentAttrs={getCurrentAttributes()}
                   updateAttrs={updateCurrentAttributes}
-                  advancedOpen={advancedOpen}
-                  setAdvancedOpen={setAdvancedOpen}
                   uploadLevel={uploadLevel}
                   autoData={getAutoPopulatedData()}
                   measuredFiles={uploadedFiles.map(f => ({ name: f.name, measured: f.measured }))}
@@ -3089,7 +3090,7 @@ export function ImageUploadWizard({
             )}
 
             {/* Per-image missing attributes hint (Change 2a) */}
-            {!applyToAll && missingAttrCount > 0 && (
+            {missingAttrCount > 0 && (
               <p className="text-xs text-destructive">
                 {missingAttrCount} of {uploadedFiles.length} images missing required attributes.
               </p>
@@ -3172,78 +3173,72 @@ export function ImageUploadWizard({
               </div>
             </div>
 
-            {/* Attributes Summary */}
+            {/* Attributes Summary — product-wide once, then per-shot values per image (P0.2a) */}
             <div className="rounded border border-border bg-card p-4">
-              <h3 className="text-sm font-semibold text-foreground mb-3">
-                Image Attributes {applyToAll ? "(Applied to all)" : "(Per-image)"}
-              </h3>
-              
-              {applyToAll ? (
-                <div className="max-h-48 overflow-y-auto">
-                  <div className="grid grid-cols-2 gap-x-8 gap-y-2 text-sm">
-                    <div className="flex justify-between">
-                      <span className="text-muted-foreground">Image Type:</span>
-                      <span className="font-medium text-foreground">
-                        {IMAGE_TYPE_OPTIONS.find(o => o.value === attributes.imageType)?.label || attributes.imageType}
-                      </span>
-                    </div>
-                    <div className="flex justify-between">
-                      <span className="text-muted-foreground">Purpose:</span>
-                      <span className="font-medium text-foreground">
-                        {PURPOSE_OPTIONS.find(o => o.value === attributes.purpose)?.label || attributes.purpose}
-                      </span>
-                    </div>
-                    <div className="flex justify-between">
-                      <span className="text-muted-foreground">Orientation:</span>
-                      <span className="font-medium text-foreground">
-                        {ORIENTATION_OPTIONS.find(o => o.value === attributes.orientation)?.label || attributes.orientation}
-                      </span>
-                    </div>
-                    <div className="flex justify-between">
-                      <span className="text-muted-foreground">Location Type:</span>
-                      <span className="font-medium text-foreground">
-                        {attributes.locationType || "ACL"}
-                      </span>
-                    </div>
-                  </div>
+              <h3 className="text-sm font-semibold text-foreground mb-3">Product-wide Attributes</h3>
+              <div className="grid grid-cols-2 gap-x-8 gap-y-2 text-sm mb-4">
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">Image Type:</span>
+                  <span className="font-medium text-foreground">
+                    {IMAGE_TYPE_OPTIONS.find(o => o.value === attributes.imageType)?.label || attributes.imageType}
+                  </span>
                 </div>
-              ) : (
-                <div className="max-h-48 overflow-y-auto overflow-x-auto">
-                  <table className="w-full text-sm">
-                    <thead className="bg-muted/30 sticky top-0">
-                      <tr>
-                        <th className="px-3 py-2 text-left font-medium text-foreground">File</th>
-                        <th className="px-3 py-2 text-left font-medium text-foreground">Image Type</th>
-                        <th className="px-3 py-2 text-left font-medium text-foreground">Purpose</th>
-                        <th className="px-3 py-2 text-left font-medium text-foreground">Orientation</th>
-                        <th className="px-3 py-2 text-left font-medium text-foreground">Location</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {uploadedFiles.map((file, idx) => {
-                        const imgAttrs = attributesByImage[idx] || attributes
-                        return (
-                          <tr key={idx} className="border-t border-border">
-                            <td className="px-3 py-2 text-foreground truncate max-w-[150px]" title={file.name}>{file.name}</td>
-                            <td className="px-3 py-2 text-foreground">
-                              {IMAGE_TYPE_OPTIONS.find(o => o.value === imgAttrs.imageType)?.label || imgAttrs.imageType}
-                            </td>
-                            <td className="px-3 py-2 text-foreground">
-                              {PURPOSE_OPTIONS.find(o => o.value === imgAttrs.purpose)?.label || imgAttrs.purpose}
-                            </td>
-                            <td className="px-3 py-2 text-foreground">
-                              {ORIENTATION_OPTIONS.find(o => o.value === imgAttrs.orientation)?.label || imgAttrs.orientation}
-                            </td>
-                            <td className="px-3 py-2 text-foreground">
-                              {imgAttrs.locationType || "ACL"}
-                            </td>
-                          </tr>
-                        )
-                      })}
-                    </tbody>
-                  </table>
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">Purpose:</span>
+                  <span className="font-medium text-foreground">
+                    {PURPOSE_OPTIONS.find(o => o.value === attributes.purpose)?.label || attributes.purpose}
+                  </span>
                 </div>
-              )}
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">Location Type:</span>
+                  <span className="font-medium text-foreground">
+                    {attributes.locationType || "ACL"}
+                  </span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">Image Style:</span>
+                  <span className="font-medium text-foreground">
+                    {IMAGE_STYLE_OPTIONS.find(o => o.value === attributes.imageStyle)?.label || attributes.imageStyle || "—"}
+                  </span>
+                </div>
+              </div>
+
+              <h3 className="text-sm font-semibold text-foreground mb-3">Per-shot Attributes</h3>
+              <div className="max-h-48 overflow-y-auto overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead className="bg-muted/30 sticky top-0">
+                    <tr>
+                      <th className="px-3 py-2 text-left font-medium text-foreground">File</th>
+                      <th className="px-3 py-2 text-left font-medium text-foreground">Orientation</th>
+                      <th className="px-3 py-2 text-left font-medium text-foreground">Facing</th>
+                      <th className="px-3 py-2 text-left font-medium text-foreground">Angle</th>
+                      <th className="px-3 py-2 text-left font-medium text-foreground">Description</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {uploadedFiles.map((file, idx) => {
+                      const imgAttrs = effectiveAttrs(idx)
+                      return (
+                        <tr key={idx} className="border-t border-border">
+                          <td className="px-3 py-2 text-foreground truncate max-w-[150px]" title={file.name}>{file.name}</td>
+                          <td className="px-3 py-2 text-foreground">
+                            {ORIENTATION_OPTIONS.find(o => o.value === imgAttrs.orientation)?.label || imgAttrs.orientation || "—"}
+                          </td>
+                          <td className="px-3 py-2 text-foreground">
+                            {FACING_OPTIONS.find(o => o.value === imgAttrs.facing)?.label || imgAttrs.facing || "—"}
+                          </td>
+                          <td className="px-3 py-2 text-foreground">
+                            {ANGLE_OPTIONS.find(o => o.value === imgAttrs.angle)?.label || imgAttrs.angle || "—"}
+                          </td>
+                          <td className="px-3 py-2 text-foreground truncate max-w-[180px]" title={imgAttrs.imageDescription}>
+                            {imgAttrs.imageDescription || "—"}
+                          </td>
+                        </tr>
+                      )
+                    })}
+                  </tbody>
+                </table>
+              </div>
             </div>
 
             {/* AI-Extracted Product Attributes — product-level, shown once (not per image) */}
