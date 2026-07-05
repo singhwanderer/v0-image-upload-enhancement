@@ -281,6 +281,44 @@ const PRODUCT_CATEGORIES = ["Shoes", "Apparel", "Bags", "Jewelry", "Beauty"] as 
 // Controlled by NEXT_PUBLIC_EXTRACTION_MODE; falls back to mock when unset. No UI toggle.
 const EXTRACTION_MODE = process.env.NEXT_PUBLIC_EXTRACTION_MODE === "gemini" ? "gemini" : "mock"
 
+// ── Per-shot AI suggestions (P0.2b) ──
+// One proposal per image for the fields a vision model reads directly from the shot.
+type ShotSuggestionRow = {
+  fileIndex: number
+  fileName: string
+  orientation: string
+  facing: string
+  angle: string
+  description: string
+  confidence: number
+  status: "pending" | "accepted" | "dismissed"
+}
+
+// Mock proposal from filename tokens (deterministic, demo-stable). Mirrors what the
+// Gemini route infers from pixels; falls back to a round-robin viewpoint.
+function mockShotSuggestion(name: string, index: number, productDescription: string) {
+  const n = name.toLowerCase()
+  let orientation = ["PRI", "SDL", "SDR"][index % 3]
+  let facing = ["1", "2", "8"][index % 3]
+  let confidence = 0.6
+  if (/front|hero|main|primary/.test(n)) { orientation = "PRI"; facing = "1"; confidence = 0.92 }
+  else if (/left/.test(n)) { orientation = "SDL"; facing = "2"; confidence = 0.9 }
+  else if (/side/.test(n)) { orientation = "SDL"; facing = "2"; confidence = 0.85 }
+  else if (/right/.test(n)) { orientation = "SDR"; facing = "8"; confidence = 0.9 }
+  else if (/back|rear/.test(n)) { orientation = "VBK"; facing = "7"; confidence = 0.9 }
+  else if (/top/.test(n)) { orientation = "VIT"; facing = "3"; confidence = 0.87 }
+  else if (/bottom|sole/.test(n)) { orientation = "VIB"; facing = "9"; confidence = 0.87 }
+  const label = ORIENTATION_OPTIONS.find(o => o.value === orientation)?.label ?? orientation
+  const view = label.includes("-") ? label.split("-").slice(1).join("-") : label
+  return {
+    orientation,
+    facing,
+    angle: "1",
+    description: productDescription ? `${productDescription} — ${view.toLowerCase()} view` : `${view} view`,
+    confidence,
+  }
+}
+
 // P0.2a: the attribute record splits into two groups. PRODUCT-WIDE fields hold one honest
 // value for every image of a product; PER-SHOT fields describe what makes each photo
 // different (which is exactly why they must never be blanket-applied).
@@ -536,6 +574,10 @@ export function ImageUploadWizard({
   const [aiExtraction, setAiExtraction] = useState<ProductExtractionResult | null>(null)
   // The suggestion row currently being inline-edited (null = none), scoped by index only
   const [aiEditing, setAiEditing] = useState<{ index: number } | null>(null)
+  // ── Per-shot AI suggestions (P0.2b) — proposes orientation/facing/angle/description per
+  // image. Strictly optional: nothing is applied without an explicit Accept. ──
+  const [shotSuggestions, setShotSuggestions] = useState<ShotSuggestionRow[] | null>(null)
+  const [shotSuggestLoading, setShotSuggestLoading] = useState(false)
 
   // Fetch the FULL CSV-derived allowed options for the selected category from the server.
   // Only one category's options are ever sent to the client (never the whole CSV). SWR caches
@@ -851,6 +893,71 @@ export function ImageUploadWizard({
     setAiEditing(null)
   }
 
+  // Per-shot suggestions are keyed by file index — any deletion/replacement invalidates them.
+  const clearShotSuggestions = () => setShotSuggestions(null)
+
+  // Runs the per-shot suggestion pass: Gemini route when configured, else the mock
+  // filename heuristic. Optional accelerator only — nothing applies without Accept.
+  const runShotSuggestions = async () => {
+    if (uploadedFiles.length === 0) return
+    setShotSuggestLoading(true)
+    const productDescription = getAutoPopulatedData().productDescription
+    if (EXTRACTION_MODE === "gemini") {
+      try {
+        const images = await Promise.all(
+          uploadedFiles.map(async (f) => ({ fileName: f.name, imageBase64: await fileToBase64(f.file), mimeType: f.type }))
+        )
+        const res = await fetch("/api/suggest-shot-attributes", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ images, productDescription }),
+        })
+        if (!res.ok) throw new Error(`Suggestion failed (${res.status}).`)
+        const data = await res.json() as { suggestions: { fileName: string; orientation: string; facing: string; angle: string; description: string; confidence: number }[] }
+        const rows: ShotSuggestionRow[] = []
+        uploadedFiles.forEach((f, i) => {
+          const s = Array.isArray(data.suggestions) ? data.suggestions.find(x => x.fileName === f.name) : undefined
+          if (s) rows.push({ fileIndex: i, fileName: f.name, orientation: s.orientation, facing: s.facing, angle: s.angle, description: s.description, confidence: s.confidence, status: "pending" })
+        })
+        setShotSuggestions(rows)
+        setShotSuggestLoading(false)
+        return
+      } catch {
+        // Fall through to the mock heuristic so the demo never dead-ends.
+      }
+    }
+    await new Promise(resolve => setTimeout(resolve, 600))
+    setShotSuggestions(uploadedFiles.map((f, i) => ({
+      fileIndex: i,
+      fileName: f.name,
+      ...mockShotSuggestion(f.name, i, productDescription),
+      status: "pending" as const,
+    })))
+    setShotSuggestLoading(false)
+  }
+
+  // Accept one or many per-shot suggestions: writes into the per-image records.
+  const acceptShotSuggestions = (rows: ShotSuggestionRow[]) => {
+    setAttributesByImage(prev => {
+      const next = { ...prev }
+      rows.forEach(r => {
+        const rec = { ...(next[r.fileIndex] ?? attributes) }
+        rec.orientation = r.orientation
+        if (r.facing) rec.facing = r.facing
+        if (r.angle) rec.angle = r.angle
+        if (r.description) rec.imageDescription = r.description
+        next[r.fileIndex] = rec
+      })
+      return next
+    })
+    const accepted = new Set(rows.map(r => r.fileIndex))
+    setShotSuggestions(prev => prev ? prev.map(p => accepted.has(p.fileIndex) ? { ...p, status: "accepted" as const } : p) : prev)
+  }
+
+  const dismissShotSuggestion = (fileIndex: number) => {
+    setShotSuggestions(prev => prev ? prev.map(p => p.fileIndex === fileIndex ? { ...p, status: "dismissed" as const } : p) : prev)
+  }
+
   // Derived status flags from the single product-level extraction result
   const isExtracting = aiExtraction?.status === "extracting"
   const isComplete = aiExtraction?.status === "complete"
@@ -1162,6 +1269,7 @@ export function ImageUploadWizard({
   const removeFile = (fileId: string) => {
     setUploadedFiles(prev => prev.filter(f => f.id !== fileId))
     clearExtraction() // file list changed — stale product-level extraction is invalid
+    clearShotSuggestions() // index-keyed — deletion shifts indices
   }
 
   // Removes a set of confirmed images (single or bulk) and rebuilds attributesByImage against
@@ -1178,6 +1286,7 @@ export function ImageUploadWizard({
     setUploadedFiles(remaining)
     setAttributesByImage(nextAttrsByImage)
     clearExtraction() // file list changed — stale product-level extraction is invalid
+    clearShotSuggestions() // index-keyed — deletion shifts indices
     media.prune(remaining.map(f => f.id))
   }
 
@@ -2109,6 +2218,7 @@ export function ImageUploadWizard({
                             setUploadedFiles(prev => prev.map(u => (u.id === newFile.id ? { ...u, measured } : u)))
                           })
                           clearExtraction() // replaced image invalidates the product-level extraction
+                          clearShotSuggestions() // filename/content changed under this index
                           setPendingReplaceFile(null)
                         }
                         // Commit attribute edits (Acceptance #8): product-wide keys apply to the
@@ -2519,6 +2629,7 @@ export function ImageUploadWizard({
                     setSelectedGtin("")
                     // product context changed: drop stale product-level extraction and re-default category
                     clearExtraction()
+                    clearShotSuggestions()
                     setAiCategory("")
                     setAiSkipped(false)
                   }}
@@ -2961,6 +3072,84 @@ export function ImageUploadWizard({
                 </div>
               )}
             </div>
+
+            {/* Per-shot AI suggestions (P0.2b) — optional; proposes the fields the camera angle
+                shows. Nothing is written to any image without an explicit Accept. */}
+            {uploadedFiles.length > 0 && (
+              <div className="rounded border border-border bg-card">
+                <div className="flex items-start gap-3 border-b border-border p-4">
+                  <div className="flex size-9 shrink-0 items-center justify-center rounded bg-primary/10">
+                    <Sparkles className="size-5 text-primary" />
+                  </div>
+                  <div className="flex-1">
+                    <h3 className="text-sm font-semibold text-foreground">Suggest per-shot attributes with AI</h3>
+                    <p className="mt-0.5 text-sm text-muted-foreground">
+                      Proposes orientation, facing, angle, and a draft description for each image. Optional — accept or dismiss per image.
+                    </p>
+                  </div>
+                  {shotSuggestions === null && !shotSuggestLoading && (
+                    <Button variant="outline" size="sm" onClick={() => void runShotSuggestions()}>
+                      Suggest for {uploadedFiles.length} image{uploadedFiles.length !== 1 ? "s" : ""}
+                    </Button>
+                  )}
+                  {shotSuggestions !== null && shotSuggestions.some(s => s.status === "pending") && (
+                    <Button variant="outline" size="sm" className="gap-1" onClick={() => acceptShotSuggestions(shotSuggestions.filter(s => s.status === "pending"))}>
+                      <Check className="size-3.5" />
+                      Accept all ({shotSuggestions.filter(s => s.status === "pending").length})
+                    </Button>
+                  )}
+                </div>
+                {shotSuggestLoading && (
+                  <div className="flex items-center gap-3 p-4">
+                    <Loader2 className="size-5 animate-spin text-primary" />
+                    <p className="text-sm text-foreground">Analyzing {uploadedFiles.length} image{uploadedFiles.length !== 1 ? "s" : ""} for per-shot attributes…</p>
+                  </div>
+                )}
+                {shotSuggestions !== null && !shotSuggestLoading && (
+                  <div className="flex flex-col divide-y divide-border">
+                    {shotSuggestions.map((s) => (
+                      <div key={s.fileIndex} className={cn("flex items-center gap-3 px-4 py-2", s.status === "dismissed" && "opacity-50")}>
+                        <div className="size-9 shrink-0 rounded border border-border overflow-hidden bg-muted">
+                          {uploadedFiles[s.fileIndex]?.preview && (
+                            <img src={uploadedFiles[s.fileIndex].preview} alt="" className="size-full object-cover" />
+                          )}
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <p className="text-xs font-medium text-foreground truncate">{s.fileName}</p>
+                          <p className="text-xs text-muted-foreground truncate">
+                            {ORIENTATION_OPTIONS.find(o => o.value === s.orientation)?.label ?? s.orientation}
+                            {s.facing && ` · Facing ${FACING_OPTIONS.find(o => o.value === s.facing)?.label ?? s.facing}`}
+                            {s.description && ` · “${s.description}”`}
+                          </p>
+                        </div>
+                        <span className={cn(
+                          "inline-flex shrink-0 items-center rounded-full px-2 py-0.5 text-xs font-medium",
+                          s.confidence >= 0.85 ? "bg-tg-success/15 text-tg-success" : "bg-tg-warning/15 text-tg-warning"
+                        )}>
+                          {Math.round(s.confidence * 100)}%
+                        </span>
+                        {s.status === "accepted" ? (
+                          <span className="inline-flex shrink-0 items-center gap-1 text-xs font-medium text-tg-success">
+                            <Check className="size-3.5" /> Accepted
+                          </span>
+                        ) : s.status === "dismissed" ? (
+                          <span className="text-xs text-muted-foreground shrink-0">Dismissed</span>
+                        ) : (
+                          <div className="flex items-center gap-1 shrink-0">
+                            <Button variant="outline" size="sm" className="h-7 gap-1 px-2 text-xs" onClick={() => acceptShotSuggestions([s])}>
+                              <Check className="size-3" /> Accept
+                            </Button>
+                            <Button variant="outline" size="sm" className="h-7 gap-1 px-2 text-xs text-muted-foreground" onClick={() => dismissShotSuggestion(s.fileIndex)}>
+                              <X className="size-3" /> Dismiss
+                            </Button>
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
 
             {/* P0.2a: product-wide fields are entered once; per-shot fields are always per image.
                 With multiple files, the two-column layout with the image selector is the default. */}
