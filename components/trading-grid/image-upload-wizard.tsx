@@ -175,11 +175,16 @@ const MOCK_DATA = {
 }
 
 // Dropdown options from screenshots
+// Spec code list: PRI, VF1, VIK, VIS, SDL, SDR, VIB, VIT (VBK retained from legacy data).
+// VIK/VIS display the bare code until the authoritative GDSN label list is confirmed —
+// showing a code is honest; inventing a label would ship wrong data.
 const ORIENTATION_OPTIONS = [
   { value: "PRI", label: "PRI-Primary" },
+  { value: "VF1", label: "VF1-Front" },
+  { value: "VIK", label: "VIK" },
+  { value: "VIS", label: "VIS" },
   { value: "SDL", label: "SDL-Side Left" },
   { value: "SDR", label: "SDR-Side Right" },
-  { value: "VF1", label: "VF1-Front" },
   { value: "VIB", label: "VIB-Bottom" },
   { value: "VIT", label: "VIT-Top" },
   { value: "VBK", label: "VBK-Back" },
@@ -209,26 +214,28 @@ const PURPOSE_OPTIONS = [
   { value: "PKG", label: "PKG-Packaging" },
 ]
 
+// Spec: ACL, FTP, LMI, URL
 const LOCATION_TYPE_OPTIONS = [
-  { value: "URL", label: "URL" },
-  { value: "FTP", label: "FTP" },
   { value: "ACL", label: "ACL" },
+  { value: "FTP", label: "FTP" },
+  { value: "LMI", label: "LMI" },
+  { value: "URL", label: "URL" },
 ]
 
+// GS1 image-naming facing codes (same 1/2/3/7/8/9 scheme as the angle list below).
 const FACING_OPTIONS = [
   { value: "1", label: "1-Front" },
-  { value: "2", label: "2-Back" },
-  { value: "3", label: "3-Left" },
-  { value: "4", label: "4-Right" },
-  { value: "5", label: "5-Top" },
-  { value: "6", label: "6-Bottom" },
+  { value: "2", label: "2-Left" },
+  { value: "3", label: "3-Top" },
+  { value: "7", label: "7-Back" },
+  { value: "8", label: "8-Right" },
+  { value: "9", label: "9-Bottom" },
 ]
 
+// Spec: CSW (Color Swatch) or PRO (Product) only.
 const IMAGE_STYLE_OPTIONS = [
-  { value: "STD", label: "Standard" },
-  { value: "EDI", label: "Editorial" },
-  { value: "MOD", label: "Model Shot" },
-  { value: "FLT", label: "Flat Lay" },
+  { value: "CSW", label: "CSW-Color Swatch" },
+  { value: "PRO", label: "PRO-Product" },
 ]
 
 type UploadedFile = {
@@ -1055,9 +1062,10 @@ export function ImageUploadWizard({
     setIsDragging(false)
   }, [])
 
-  // Validates files and stages valid ones; appends errors for invalid ones
+  // Validates files and stages valid ones; appends errors for invalid ones.
+  // Staged names are passed for the spec's file_name-uniqueness rule.
   const processFiles = useCallback((rawFiles: File[]) => {
-    const { valid, errors } = validateImageBatch(rawFiles)
+    const { valid, errors } = validateImageBatch(rawFiles, uploadedFiles.map(f => f.name))
     if (errors.length > 0) {
       setValidationErrors(prev => {
         const newErrors = errors.filter(e => !prev.some(p => p.fileName === e.fileName))
@@ -1082,7 +1090,7 @@ export function ImageUploadWizard({
         setUploadedFiles(prev => prev.map(f => (f.id === id ? { ...f, measured } : f)))
       })
     })
-  }, [])
+  }, [uploadedFiles])
 
   const handleDrop = useCallback((e: React.DragEvent) => {
     e.preventDefault()
@@ -1431,8 +1439,11 @@ End of Metadata Export
 
   // Read locationType from the active record for consistency (Change 2b)
   const isRemoteLocation = getCurrentAttributes().locationType === "FTP" || getCurrentAttributes().locationType === "URL"
+  // Spec conditionality: external_location required only for FTP/URL; LMI needs neither
+  // an external location nor locally staged binaries (images live in the LMI library).
+  const isLmiLocation = getCurrentAttributes().locationType === "LMI"
   const canProceedStep2 = selectedSelectionCode && selectedProduct && getCurrentAttributes().locationType &&
-    (isRemoteLocation || uploadedFiles.length > 0) &&
+    (isRemoteLocation || isLmiLocation || uploadedFiles.length > 0) &&
     (uploadLevel === "product" || 
      (uploadLevel === "product-color" && selectedColorCode) ||
      (uploadLevel === "gtin" && selectedGtin))
@@ -1978,12 +1989,14 @@ End of Metadata Export
                             Replace image
                             <input
                               type="file"
-                              accept="image/jpeg,image/png,image/webp,.jpg,.jpeg,.png,.webp"
+                              accept="image/jpeg,.jpg,.jpeg"
                               className="hidden"
                               onChange={(e) => {
                                 const f = e.target.files?.[0]
                                 if (!f) return
-                                const { errors } = validateImageBatch([f])
+                                // Uniqueness excludes the file being replaced — replacing under the same name is fine.
+                                const otherNames = uploadedFiles.filter((_, i) => i !== editAttrDialog.fileIndex).map(u => u.name)
+                                const { errors } = validateImageBatch([f], otherNames)
                                 if (errors.length) { setValidationErrors(prev => [...prev, ...errors]); return }
                                 setPendingReplaceFile(f)
                                 setReplacementAttrChecked(false)
@@ -1999,7 +2012,7 @@ End of Metadata Export
                             </button>
                           )}
                         </div>
-                        <p className="text-xs text-muted-foreground">Max 4 MB &middot; JPG, PNG, or WebP</p>
+                        <p className="text-xs text-muted-foreground">Max 500 KB &middot; JPG only</p>
                       </div>
                     </div>
                   </div>
@@ -2408,7 +2421,9 @@ End of Metadata Export
         <div>
           <h1 className="text-xl font-semibold text-foreground">Upload Images</h1>
           <p className="mt-1 text-sm text-muted-foreground">
-            Step {currentStep} of 3: {steps[currentStep - 1].description}
+            {/* Landing's "Select Upload Level" is step 1 of the advertised 4-step flow,
+                so the wizard's internal steps 1-3 display as 2-4. */}
+            Step {currentStep + 1} of 4: {steps[currentStep - 1].description}
           </p>
         </div>
         <Button variant="ghost" size="sm" onClick={onCancel} className="gap-1 text-muted-foreground">
@@ -2432,7 +2447,7 @@ End of Metadata Export
                     : "bg-muted text-muted-foreground"
                 )}
               >
-                {currentStep > step.number ? <Check className="size-4" /> : step.number}
+                {currentStep > step.number ? <Check className="size-4" /> : step.number + 1}
               </div>
               <div className="flex flex-col">
                 <span
@@ -2600,7 +2615,7 @@ End of Metadata Export
               <Label className="text-sm font-medium">
                 Location Type <span className="text-destructive">*</span>
               </Label>
-              <div className="grid gap-3 md:grid-cols-3">
+              <div className="grid gap-3 md:grid-cols-4">
                 {LOCATION_TYPE_OPTIONS.map((option) => (
                   <button
                     key={option.value}
@@ -2617,6 +2632,7 @@ End of Metadata Export
                     <span className="text-xs text-muted-foreground">
                       {option.value === "ACL" && "Upload files from your computer"}
                       {option.value === "FTP" && "Images are on an FTP server"}
+                      {option.value === "LMI" && "Images are managed in your LMI library"}
                       {option.value === "URL" && "Images are at a web URL"}
                     </span>
                   </button>
@@ -2654,7 +2670,7 @@ End of Metadata Export
                   </div>
                   <input
                     type="file"
-                    accept="image/jpeg,image/png,image/webp,.jpg,.jpeg,.png,.webp"
+                    accept="image/jpeg,.jpg,.jpeg"
                     multiple
                     className="hidden"
                     id="file-upload"
@@ -2666,7 +2682,7 @@ End of Metadata Export
                     </Button>
                   </label>
                   <p className="text-xs text-muted-foreground">
-                    Max 4 MB each &middot; JPG, PNG, or WebP &middot;{" "}
+                    Max 500 KB each &middot; JPG only &middot;{" "}
                     <a href="#" className="text-tg-link hover:underline">
                       View GS1 guidelines
                     </a>
@@ -2792,7 +2808,7 @@ End of Metadata Export
                     <span className="text-xs text-muted-foreground">Add More</span>
                     <input
                       type="file"
-                      accept="image/jpeg,image/png,image/webp,.jpg,.jpeg,.png,.webp"
+                      accept="image/jpeg,.jpg,.jpeg"
                       multiple
                       className="hidden"
                       id="file-upload-more"
