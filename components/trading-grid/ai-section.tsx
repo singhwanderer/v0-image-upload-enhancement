@@ -34,13 +34,11 @@ import { ORIENTATION_OPTIONS, FACING_OPTIONS } from "./attribute-options"
 type AiSectionProps = {
   ai: ReturnType<typeof useAiAttributes>
   uploadedFiles: UploadedFile[]
-  // Hides the "Skip AI" affordance where it doesn't make sense (post-submit drawer).
-  showSkip: boolean
 }
 
-export function AiSection({ ai, uploadedFiles, showSkip }: AiSectionProps) {
+export function AiSection({ ai, uploadedFiles }: AiSectionProps) {
   const {
-    aiCategory, setAiCategory, aiBrick, setAiBrick, aiSkipped, setAiSkipped,
+    aiCategory, setAiCategory, aiBrick, setAiBrick,
     aiExtraction, aiEditing, setAiEditing, shotSuggestions, shotSuggestLoading,
     classificationStatus, setClassificationStatus, classificationConfidence, setClassificationConfidence,
     showManualClassify, setShowManualClassify,
@@ -85,9 +83,9 @@ export function AiSection({ ai, uploadedFiles, showSkip }: AiSectionProps) {
             </SelectContent>
           </Select>
         </div>
-        {/* GPC brick — attributes are scoped to this single classification */}
+        {/* GPC classification (brick) — attributes are scoped to this single classification */}
         <div className="flex flex-col gap-1">
-          <Label htmlFor="ai-brick" className="text-xs text-muted-foreground">Product brick (GPC)</Label>
+          <Label htmlFor="ai-brick" className="text-xs text-muted-foreground">Classification (GPC)</Label>
           <Select
             value={aiBrick?.code ?? ""}
             onValueChange={(code) => {
@@ -103,7 +101,7 @@ export function AiSection({ ai, uploadedFiles, showSkip }: AiSectionProps) {
             disabled={!aiCategory || bricksForCategory.length === 0}
           >
             <SelectTrigger id="ai-brick" className="w-72 bg-background">
-              <SelectValue placeholder={aiCategory ? "Select a brick..." : "Select a category first"} />
+              <SelectValue placeholder={aiCategory ? "Select a classification..." : "Select a category first"} />
             </SelectTrigger>
             <SelectContent>
               {bricksForCategory.map(b => (
@@ -115,13 +113,13 @@ export function AiSection({ ai, uploadedFiles, showSkip }: AiSectionProps) {
       </div>
       {aiCategory && bricksForCategory.length === 0 ? (
         <p className="text-xs text-tg-warning">
-          No GS1 brick mapping is available for this category — continue entering attributes manually.
+          No GS1 classification mapping is available for this category — continue entering attributes manually.
         </p>
       ) : (
         <p className="text-xs text-muted-foreground">
           {!aiBrick
-            ? "Select a category and brick — extended attribute extraction runs automatically once both are set."
-            : "Picking a different brick re-runs extraction for this product."}
+            ? "Set it yourself if you already know the category and classification, or if the AI's guess looks wrong — extended attribute extraction runs automatically once both are set."
+            : "Picking a different classification re-runs extraction for this product."}
         </p>
       )}
     </>
@@ -141,7 +139,7 @@ export function AiSection({ ai, uploadedFiles, showSkip }: AiSectionProps) {
               Category: <span className="font-medium">{aiExtraction.category}</span>
               {aiExtraction.brickName && (
                 <>
-                  {" · "}Brick: <span className="font-medium">{aiExtraction.brickName}</span>
+                  {" · "}Classification: <span className="font-medium">{aiExtraction.brickName}</span>
                   {aiExtraction.brickCode && <span className="font-mono text-xs text-muted-foreground"> ({aiExtraction.brickCode})</span>}
                 </>
               )}
@@ -372,31 +370,16 @@ export function AiSection({ ai, uploadedFiles, showSkip }: AiSectionProps) {
         </div>
         <div className="flex-1">
           <h3 className="text-sm font-semibold text-foreground">Analyze this product&apos;s images with AI</h3>
-          <p className="mt-0.5 text-sm text-muted-foreground">
-            Two independent, optional passes: classify &amp; extract extended attributes, and/or suggest per-shot details for each image.
-          </p>
+          <p className="mt-0.5 text-sm text-muted-foreground">Optional — AI proposes, you confirm.</p>
         </div>
         {EXTRACTION_MODE === "mock" && (
           <span className="shrink-0 rounded-full bg-muted px-2 py-0.5 text-xs font-medium text-muted-foreground">
             Demo mode — simulated results
           </span>
         )}
-        {aiSkipped && (
-          <Button variant="ghost" size="sm" onClick={() => setAiSkipped(false)}>
-            Show
-          </Button>
-        )}
       </div>
 
-      {aiSkipped && (
-        <div className="flex items-center gap-2 p-4 text-sm text-muted-foreground">
-          <Info className="size-4 shrink-0" />
-          <span>AI analysis skipped. You can continue entering attributes manually.</span>
-        </div>
-      )}
-
-      {!aiSkipped && (
-        <div className="flex flex-col gap-5 p-4">
+      <div className="flex flex-col gap-5 p-4">
           {/* ── Product attributes (extended, non-GDSN) — genuinely needs a brick to scope its
               vocabulary, so classification gates this pass only. ── */}
           <div className="flex flex-col gap-3">
@@ -410,13 +393,8 @@ export function AiSection({ ai, uploadedFiles, showSkip }: AiSectionProps) {
                     Classify &amp; extract with AI
                   </Button>
                   <Button variant="outline" size="sm" onClick={() => setShowManualClassify(v => !v)}>
-                    {showManualClassify ? "Hide manual entry" : "Set category & brick manually"}
+                    {showManualClassify ? "Hide manual entry" : "Set category & classification manually"}
                   </Button>
-                  {showSkip && (
-                    <Button variant="outline" size="sm" onClick={() => setAiSkipped(true)}>
-                      Skip AI
-                    </Button>
-                  )}
                 </div>
                 {showManualClassify && renderAiIdleControls()}
               </div>
@@ -445,9 +423,6 @@ export function AiSection({ ai, uploadedFiles, showSkip }: AiSectionProps) {
                   </div>
                 </div>
                 {showManualClassify && renderAiIdleControls()}
-                {showSkip && (
-                  <Button variant="outline" size="sm" className="w-fit" onClick={() => setAiSkipped(true)}>Skip AI</Button>
-                )}
               </div>
             )}
 
@@ -480,7 +455,7 @@ export function AiSection({ ai, uploadedFiles, showSkip }: AiSectionProps) {
                     </div>
                     <div className="flex items-center gap-2">
                       <Button variant="outline" size="sm" onClick={() => runExtraction()}>Try again</Button>
-                      <Button variant="ghost" size="sm" onClick={() => { clearExtraction(); setAiSkipped(true) }}>
+                      <Button variant="ghost" size="sm" onClick={() => { clearExtraction(); setClassificationStatus("idle"); setClassificationConfidence(null) }}>
                         Continue manually
                       </Button>
                     </div>
@@ -491,6 +466,11 @@ export function AiSection({ ai, uploadedFiles, showSkip }: AiSectionProps) {
             )}
           </div>
 
+          {/* Per-shot attributes only apply with 2+ images — a single shot has no
+              product-wide-vs-per-shot distinction, and its orientation/facing/angle are entered
+              directly in the (flattened) attribute form below. */}
+          {uploadedFiles.length > 1 && (
+          <>
           <div className="border-t border-border" />
 
           {/* ── Per-shot attributes (orientation/facing/angle/description — GDSN spec fields).
@@ -568,8 +548,9 @@ export function AiSection({ ai, uploadedFiles, showSkip }: AiSectionProps) {
               </div>
             )}
           </div>
+          </>
+          )}
         </div>
-      )}
     </div>
   )
 }
