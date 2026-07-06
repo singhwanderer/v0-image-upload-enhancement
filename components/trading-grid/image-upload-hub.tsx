@@ -1,34 +1,28 @@
 "use client"
 
 import { useState } from "react"
-import { Upload, Search, FileImage, ArrowRight, Info, ChevronDown, Filter, Download, Package, Palette, Barcode, CheckCircle2, X, BookOpen, FileText, Check, Sparkles } from "lucide-react"
+import { Upload, FileImage, ArrowRight, Info, Download, Package, Palette, Barcode, CheckCircle2, X, BookOpen, FileText, Check } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select"
 import {
   Dialog,
   DialogContent,
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog"
-import {
-  Sheet,
-  SheetContent,
-  SheetHeader,
-  SheetTitle,
-} from "@/components/ui/sheet"
 import { Label } from "@/components/ui/label"
 import { Checkbox } from "@/components/ui/checkbox"
 import { cn } from "@/lib/utils"
-import type { ExtractedAttribute } from "@/lib/gs1/types"
 import { useMediaSelection } from "./use-media-selection"
-import { AiAttributesTable } from "./ai-attributes-table"
+import { buildImageMetadataCsv, buildTableCsv, downloadCsv, csvPreview, type ImageMetadataRow } from "./metadata-csv"
+import { toast } from "@/hooks/use-toast"
+
+// "SI-Still Shot" → "SI": the mock fixtures store display labels; the CSV carries codes.
+const codeOf = (label: string): string => label.split("-")[0] ?? label
+
+// "PRI-Primary" → "Primary": buyer-facing labels drop the standards code prefix.
+// Codes stay in the CSV export, where machines need them.
+const humanize = (label: string): string => (label.includes("-") ? label.split("-").slice(1).join("-") : label)
 
 interface ImageUploadLandingProps {
   onUploadClick: (level: "product" | "product-color" | "gtin") => void
@@ -65,19 +59,12 @@ const selectionCodeDescription = (code: string | null): string =>
 
 const MOCK_IMAGES = [
   { fileName: "sneaker-front.jpg", fileType: "JPG-JPEG", imageType: "SI-Still Shot", purpose: "INT-Internet", orientation: "PRI-Primary", locationType: "ACL", createDate: "Apr 7, 2026", previewSrc: "/mock/sneaker-front.jpg" },
-  { fileName: "sneaker-side.jpg", fileType: "JPG-JPEG", imageType: "SI-Still Shot", purpose: "INT-Internet", orientation: "PRI-Primary", locationType: "ACL", createDate: "Apr 13, 2026", lastUpdate: "Apr 23, 2026", previewSrc: "/mock/sneaker-side.jpg" },
+  { fileName: "sneaker-side.jpg", fileType: "JPG-JPEG", imageType: "SI-Still Shot", purpose: "INT-Internet", orientation: "SDL-Side Left", locationType: "ACL", createDate: "Apr 13, 2026", lastUpdate: "Apr 23, 2026", previewSrc: "/mock/sneaker-side.jpg" },
 ]
 
-// Representative AI-extracted attributes for the retailer's read-only "View AI Attributes"
-// drawer. Retailer and Supplier are independent mock portals with no shared store in this
-// prototype, so there's no real session to read a supplier's actual extraction from — this
-// fixture stands in for parity with the Supplier's editable drawer.
-const MOCK_AI_ATTRIBUTES: ExtractedAttribute[] = [
-  { codeListName: "Shoe Type", attributeValue: "Athletic/Running", code: "ATH", confidence: 0.91, reason: "Mesh upper and cushioned midsole visible.", decision: "accepted" },
-  { codeListName: "Closure Type", attributeValue: "Lace-up", code: "LAC", confidence: 0.88, reason: "Laces visible across the vamp.", decision: "accepted" },
-  { codeListName: "Toe Shape", attributeValue: "Round", code: "RND", confidence: 0.79, reason: "Rounded toe box in profile.", decision: "accepted" },
-  { codeListName: "Gender", attributeValue: "Unisex", code: "UNI", confidence: 0.7, reason: "Neutral colorway; verify.", decision: "accepted" },
-]
+// Non-GDSN product attributes (the extended/GS1 set) are intentionally absent from the
+// retailer image view: they reach retailers through a separate data channel. This view is
+// images plus image details only.
 
 export function ImageUploadLanding({ onUploadClick }: ImageUploadLandingProps) {
   return (
@@ -328,11 +315,12 @@ export function RetailerImageBrowser() {
   // activeImageIndex removed — retailer product-media uses stacked list (no active selection)
   const [showDownloadModal, setShowDownloadModal] = useState(false)
   const [downloadPhase, setDownloadPhase] = useState<"select" | "preparing" | "complete">("select")
+  // First lines of the most recently generated metadata CSV, shown in the Complete phase.
+  const [lastCsvPreview, setLastCsvPreview] = useState("")
   // Lightbox: full-size view of a single product-media image
   const [lightboxImage, setLightboxImage] = useState<{ src: string; fileName: string } | null>(null)
   // Selection state for selective download (Retailer stays read-only — no edit/delete).
   const media = useMediaSelection()
-  const [showAiAttributesDrawer, setShowAiAttributesDrawer] = useState(false)
 
   const openDownloadModal = (presetIds?: string[]) => {
     if (presetIds && presetIds.length > 0) media.selectOnly(presetIds[0])
@@ -424,17 +412,16 @@ export function RetailerImageBrowser() {
         <div className="flex items-start justify-between">
           <h1 className="text-xl font-semibold text-foreground">Vendor List</h1>
           <div className="flex items-center gap-1 border border-border bg-card p-1">
-            <button className="p-1.5 hover:bg-muted" title="Export">
+            <button
+              className="p-1.5 hover:bg-muted"
+              title="Export vendor list as CSV"
+              onClick={() => downloadCsv("vendor_list.csv", buildTableCsv(
+                ["trading_partner_name", "account_number", "selection_codes", "products"],
+                MOCK_VENDORS.map(v => [v.name, v.accountNumber, String(v.selectionCodes), String(v.products)])
+              ))}
+            >
               <Download className="size-4 text-muted-foreground" />
             </button>
-          </div>
-        </div>
-
-        {/* Search */}
-        <div className="rounded border border-border bg-tg-section-header p-3">
-          <div className="flex items-center gap-2 text-sm font-medium text-foreground">
-            <Search className="size-4" />
-            Search
           </div>
         </div>
 
@@ -478,7 +465,14 @@ export function RetailerImageBrowser() {
         <div className="flex items-start justify-between">
           <h1 className="text-xl font-semibold text-foreground">Selection Code List</h1>
           <div className="flex items-center gap-1 border border-border bg-card p-1">
-            <button className="p-1.5 hover:bg-muted" title="Export">
+            <button
+              className="p-1.5 hover:bg-muted"
+              title="Export selection codes as CSV"
+              onClick={() => downloadCsv("selection_codes.csv", buildTableCsv(
+                ["selection_code", "description", "total_products"],
+                SELECTION_CODES.map(({ code, description }, idx) => [code, description, String(idx === 0 ? MOCK_PRODUCTS.length : 14 + idx * 3)])
+              ))}
+            >
               <Download className="size-4 text-muted-foreground" />
             </button>
           </div>
@@ -536,7 +530,14 @@ export function RetailerImageBrowser() {
         <div className="flex items-start justify-between">
           <h1 className="text-xl font-semibold text-foreground">Product List</h1>
           <div className="flex items-center gap-1 border border-border bg-card p-1">
-            <button className="p-1.5 hover:bg-muted" title="Export">
+            <button
+              className="p-1.5 hover:bg-muted"
+              title="Export product list as CSV"
+              onClick={() => downloadCsv("product_list.csv", buildTableCsv(
+                ["product", "description", "create_date", "last_update_date", "gtins", "images"],
+                MOCK_PRODUCTS.map(p => [p.id, p.description, p.createDate, p.lastUpdate, String(p.gtins), String(p.images)])
+              ))}
+            >
               <Download className="size-4 text-muted-foreground" />
             </button>
           </div>
@@ -564,49 +565,17 @@ export function RetailerImageBrowser() {
           </div>
         </div>
 
-        {/* View Selector */}
-        <div className="flex items-center gap-4">
-          <span className="text-sm font-medium text-muted-foreground">View:</span>
-          <Select defaultValue="catalogue">
-            <SelectTrigger className="w-40">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="catalogue">Catalogue</SelectItem>
-              <SelectItem value="grid">Grid</SelectItem>
-            </SelectContent>
-          </Select>
-        </div>
-
-        {/* Filter */}
-        <div className="rounded border border-border bg-tg-section-header p-3">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-2 text-sm font-medium text-foreground">
-              <Filter className="size-4" />
-              Filter
-            </div>
-            <span className="text-xs text-tg-link cursor-pointer hover:underline">Clear Filter</span>
-          </div>
-        </div>
-
-        {/* Pagination */}
-        <div className="flex items-center justify-end gap-2 text-sm text-muted-foreground">
+        {/* Record count — pagination chrome removed: all mock products fit one page (P1.4) */}
+        <div className="flex items-center justify-end text-sm text-muted-foreground">
           <span>1-{MOCK_PRODUCTS.length} of {MOCK_PRODUCTS.length} records</span>
-          <div className="flex items-center gap-1">
-            <Button variant="outline" size="sm" disabled>&lt;&lt;</Button>
-            <Button variant="outline" size="sm" disabled>&lt;</Button>
-            <span className="px-2">1</span>
-            <Button variant="outline" size="sm" disabled>&gt;</Button>
-            <Button variant="outline" size="sm" disabled>&gt;&gt;</Button>
-          </div>
         </div>
 
-        {/* Product Table */}
+        {/* Product Table — leading thumbnail: an image browser should show images (P1.4) */}
         <div className="rounded border border-border">
           <table className="w-full text-sm">
             <thead className="bg-tg-table-header text-left">
               <tr>
-                <th className="w-8 px-3 py-2"></th>
+                <th className="w-16 px-3 py-2 font-medium text-foreground">Image</th>
                 <th className="px-3 py-2 font-medium text-foreground">Product</th>
                 <th className="px-3 py-2 font-medium text-foreground">Description</th>
                 <th className="px-3 py-2 font-medium text-foreground">Create Date</th>
@@ -618,14 +587,25 @@ export function RetailerImageBrowser() {
             </thead>
             <tbody>
               {MOCK_PRODUCTS.map((product) => (
-                <tr 
-                  key={product.id} 
+                <tr
+                  key={product.id}
                   className="border-t border-border hover:bg-muted/50"
                 >
                   <td className="px-3 py-2">
-                    <input type="checkbox" className="size-4" />
+                    {product.images > 0 ? (
+                      <img
+                        src={MOCK_IMAGES[0].previewSrc}
+                        alt={product.description}
+                        className="size-10 rounded border border-border object-cover cursor-pointer"
+                        onClick={() => handleProductSelect(product)}
+                      />
+                    ) : (
+                      <div className="flex size-10 items-center justify-center rounded border border-border bg-muted/30">
+                        <FileImage className="size-5 text-muted-foreground/50" />
+                      </div>
+                    )}
                   </td>
-                  <td 
+                  <td
                     className="px-3 py-2 text-tg-link hover:underline cursor-pointer"
                     onClick={() => handleProductSelect(product)}
                   >
@@ -680,9 +660,6 @@ export function RetailerImageBrowser() {
             <button className="p-1.5 hover:bg-muted" title="Download" onClick={() => openDownloadModal()}>
               <Download className="size-4 text-muted-foreground" />
             </button>
-            <button className="p-1.5 hover:bg-muted" title="View AI Attributes" onClick={() => setShowAiAttributesDrawer(true)}>
-              <Sparkles className="size-4 text-muted-foreground" />
-            </button>
           </div>
         </div>
 
@@ -695,6 +672,20 @@ export function RetailerImageBrowser() {
           <div><span className="font-medium text-muted-foreground">Product:</span> <span className="text-foreground">{selectedProduct?.id}</span></div>
           <div><span className="font-medium text-muted-foreground">Product Description:</span> <span className="text-foreground">{selectedProduct?.description}</span></div>
           <div><span className="font-medium text-muted-foreground">Images:</span> <span className="text-foreground">{selectedProduct?.images}</span></div>
+          {/* Buyer-value summary: coverage + freshness, derived from the image data itself */}
+          {(() => {
+            const views = [...new Set(MOCK_IMAGES.map(i => humanize(i.orientation)))]
+            const latest = MOCK_IMAGES
+              .flatMap(i => [i.lastUpdate, i.createDate].filter((d): d is string => !!d))
+              .map(d => new Date(d))
+              .sort((a, b) => b.getTime() - a.getTime())[0]
+            return (
+              <div className="pt-1 text-sm font-medium text-foreground">
+                {MOCK_IMAGES.length} image{MOCK_IMAGES.length !== 1 ? "s" : ""} · {views.join(" & ")} views
+                {latest ? ` · Updated ${latest.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}` : ""}
+              </div>
+            )
+          })()}
         </div>
 
         {/* Sticky jump-to thumbnail strip — hidden when only 1 image (Acceptance #9) */}
@@ -738,35 +729,35 @@ export function RetailerImageBrowser() {
               </div>
               {/* Card body: attributes 60% left, preview placeholder 40% right */}
               <div className="flex">
-                {/* Left: attribute table */}
+                {/* Left: image details — buyer language, populated fields only. The record is
+                    described by what it contains; nothing counts or comments on other fields. */}
                 <div className="w-3/5 border-r border-border text-sm">
-                  {[
-                    { label: "File Name:", value: img.fileName, link: false },
-                    { label: "File Type:", value: img.fileType, link: false },
-                    { label: "Image Type:", value: img.imageType, link: true },
-                    { label: "Purpose:", value: img.purpose, link: true },
-                    { label: "Orientation:", value: img.orientation, link: true },
-                    { label: "Location Type:", value: img.locationType, link: false },
-                    { label: "External Location:", value: "", link: false },
-                    { label: "File Size:", value: "", link: false },
-                    { label: "Pixel Density (DPI):", value: "", link: false },
-                    { label: "Height:", value: "", link: false },
-                    { label: "Width:", value: "", link: false },
-                    { label: "Image Style:", value: "", link: false },
-                    { label: "Facing (GDSN):", value: "", link: false },
-                    { label: "Angle:", value: "", link: false },
-                    { label: "Clipping Path:", value: "", link: false },
-                    { label: "Image Description:", value: "", link: false },
-                    { label: "Create Date:", value: img.createDate, link: false },
-                    { label: "Last Update Date:", value: img.lastUpdate || "", link: false },
-                  ].map((row, rowIdx) => (
-                    <div key={rowIdx} className="flex border-b border-border last:border-b-0">
-                      <div className="w-44 bg-muted/20 px-3 py-2 font-medium text-foreground shrink-0">{row.label}</div>
-                      <div className={cn("flex-1 px-3 py-2", row.link ? "text-tg-link" : "text-foreground")}>
-                        {row.value}
-                      </div>
-                    </div>
-                  ))}
+                  {(() => {
+                    const rows = [
+                      { label: "File Name:", value: img.fileName, link: false },
+                      { label: "File Type:", value: humanize(img.fileType), link: false },
+                      { label: "Image Type:", value: humanize(img.imageType), link: true },
+                      { label: "Purpose:", value: humanize(img.purpose), link: true },
+                      { label: "View:", value: humanize(img.orientation), link: true },
+                      { label: "Added:", value: img.createDate, link: false },
+                      { label: "Updated:", value: img.lastUpdate || "", link: false },
+                    ].filter(r => r.value !== "")
+                    return (
+                      <>
+                        {rows.map((row, rowIdx) => (
+                          <div key={rowIdx} className="flex border-b border-border">
+                            <div className="w-44 bg-muted/20 px-3 py-2 font-medium text-foreground shrink-0">{row.label}</div>
+                            <div className={cn("flex-1 px-3 py-2", row.link ? "text-tg-link" : "text-foreground")}>
+                              {row.value}
+                            </div>
+                          </div>
+                        ))}
+                        <div className="px-3 py-2 text-xs text-muted-foreground">
+                          From {selectedVendor?.name ?? "vendor"}
+                        </div>
+                      </>
+                    )
+                  })()}
                 </div>
                 {/* Right: image preview — click to zoom */}
                 <button
@@ -785,8 +776,6 @@ export function RetailerImageBrowser() {
             </div>
           ))}
         </div>
-
-
 
         {/* Download Modal — Three-phase: Select → Preparing → Complete (Step 3A parity with supplier) */}
         {showDownloadModal && (
@@ -853,19 +842,26 @@ export function RetailerImageBrowser() {
                                 <FileImage className="size-4 text-primary shrink-0" />
                                 <span className="text-sm font-medium text-foreground truncate">{img.fileName}</span>
                               </div>
-                              <div className="flex items-center gap-2 mt-0.5">
-                                <FileText className="size-4 text-tg-success shrink-0" />
-                                <span className="text-sm text-muted-foreground truncate">
-                                  {img.fileName.replace(/\.[^/.]+$/, "")}_metadata.txt
-                                </span>
-                              </div>
                             </div>
                             <div className="text-right text-xs text-muted-foreground shrink-0">
                               <div>~450 KB</div>
-                              <div>~2 KB</div>
                             </div>
                           </div>
                         ))}
+                        {/* Single machine-readable metadata artifact for the whole selection */}
+                        <div className="flex items-center gap-3 rounded border border-border bg-card p-3">
+                          <div className="flex size-10 items-center justify-center rounded bg-muted">
+                            <FileText className="size-5 text-tg-success" />
+                          </div>
+                          <div className="flex-1 min-w-0">
+                            <span className="text-sm font-medium text-foreground truncate block">
+                              {selectedProduct?.id ?? "product"}_image_metadata.csv
+                            </span>
+                            <span className="text-xs text-muted-foreground">
+                              {selectedImages.length} row{selectedImages.length !== 1 ? "s" : ""} — one per image
+                            </span>
+                          </div>
+                        </div>
                       </div>
                     </div>
 
@@ -873,8 +869,8 @@ export function RetailerImageBrowser() {
                     <div className="mb-6 flex items-start gap-2 rounded bg-primary/5 p-3 text-sm">
                       <FileText className="size-4 text-primary mt-0.5 shrink-0" />
                       <div>
-                        <span className="font-medium text-foreground">Metadata files (.txt)</span>
-                        <span className="text-muted-foreground"> contain all image attributes including company info, product details, file properties, and GDSN attributes for each image.</span>
+                        <span className="font-medium text-foreground">Metadata file (.csv)</span>
+                        <span className="text-muted-foreground"> contains one row per image with all image details in the standard field layout, ready for import.</span>
                       </div>
                     </div>
 
@@ -886,15 +882,46 @@ export function RetailerImageBrowser() {
                       <Button
                         disabled={selectedImages.length === 0}
                         onClick={() => {
+                          // Really generate + download the spec-shaped metadata CSV (standard
+                          // 21-column image layout); image binaries stay simulated in this
+                          // prototype. Non-GDSN attributes travel via their own channel, so
+                          // they are not part of this file.
+                          const rows: ImageMetadataRow[] = selectedImages.map(img => ({
+                            action: "insert",
+                            image_level: "product",
+                            product: selectedProduct?.id ?? "",
+                            item_number: "",
+                            file_name: img.fileName,
+                            file_type: "JPG",
+                            image_type: codeOf(img.imageType),
+                            purpose: codeOf(img.purpose),
+                            orientation: codeOf(img.orientation),
+                            location_type: img.locationType,
+                            external_location: "",
+                            color_code: "",
+                            image_style: "",
+                            facing: "",
+                            angle: "",
+                            file_size: "",
+                            pixel_density: "",
+                            height: "",
+                            width: "",
+                            clipping_path: "",
+                            image_description: "",
+                          }))
+                          const csv = buildImageMetadataCsv(rows)
+                          downloadCsv(`${selectedProduct?.id ?? "product"}_image_metadata.csv`, csv)
+                          setLastCsvPreview(csvPreview(csv))
                           setDownloadPhase("preparing")
                           // Simulate preparation delay
                           setTimeout(() => {
                             setDownloadPhase("complete")
+                            toast({ title: "Download complete", description: `${selectedImages.length} image${selectedImages.length !== 1 ? "s" : ""} + metadata CSV downloaded.` })
                           }, 1500)
                         }}
                       >
                         <Download className="size-4 mr-2" />
-                        Download {selectedImages.length === MOCK_IMAGES.length ? "All" : "Selected"} ({selectedImages.length * 2} files)
+                        Download {selectedImages.length} image{selectedImages.length !== 1 ? "s" : ""} + metadata CSV
                       </Button>
                     </div>
                   </>
@@ -934,46 +961,28 @@ export function RetailerImageBrowser() {
                       <div className="text-sm font-medium text-foreground mb-3">Downloaded Files:</div>
                       <div className="space-y-2 max-h-32 overflow-y-auto">
                         {selectedImages.map((img, idx) => (
-                          <div key={idx} className="text-sm">
-                            <div className="flex items-center gap-2 text-foreground">
-                              <Check className="size-4 text-tg-success" />
-                              <span>{img.fileName}</span>
-                            </div>
-                            <div className="flex items-center gap-2 text-muted-foreground ml-6">
-                              <Check className="size-4 text-tg-success" />
-                              <span>{img.fileName.replace(/\.[^/.]+$/, "")}_metadata.txt</span>
-                            </div>
+                          <div key={idx} className="flex items-center gap-2 text-sm text-foreground">
+                            <Check className="size-4 text-tg-success" />
+                            <span>{img.fileName}</span>
                           </div>
                         ))}
+                        <div className="flex items-center gap-2 text-sm text-foreground">
+                          <Check className="size-4 text-tg-success" />
+                          <span>{selectedProduct?.id ?? "product"}_image_metadata.csv</span>
+                        </div>
                       </div>
                     </div>
 
-                    {/* Metadata Preview */}
+                    {/* Metadata CSV Preview — first rows of the actually-downloaded file */}
                     <div className="rounded border border-border bg-card p-4 mb-6 text-left">
                       <div className="flex items-center justify-between mb-2">
                         <span className="text-sm font-medium text-foreground">Metadata Preview</span>
                         <span className="text-xs text-muted-foreground">
-                          {selectedImages[0]?.fileName.replace(/\.[^/.]+$/, "") || "image"}_metadata.txt
+                          {selectedProduct?.id ?? "product"}_image_metadata.csv
                         </span>
                       </div>
                       <pre className="text-xs text-muted-foreground bg-muted/30 p-3 rounded overflow-x-auto max-h-40 overflow-y-auto font-mono">
-{`IMAGE METADATA EXPORT
-Export Date: ${new Date().toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}
-Level: Product Level
-
-COMPANY INFORMATION
-Company Name: ${selectedVendor?.name || "APEX ATHLETIC FOOTWEAR"}
-Account Number: ${selectedVendor?.accountNumber || "125103335555"}
-
-PRODUCT INFORMATION
-Product ID: ${selectedProduct?.id || "RUNCOOL-GRY-M"}
-Selection Code: ${selectedSelectionCode || "001"} - ${selectionCodeDescription(selectedSelectionCode)}
-
-IMAGE DETAILS
-File Name: ${selectedImages[0]?.fileName || "sneaker-front.jpg"}
-Image Type: ${selectedImages[0]?.imageType || "SI-Still Shot"}
-Purpose: ${selectedImages[0]?.purpose || "INT-Internet"}
-Orientation: ${selectedImages[0]?.orientation || "PRI-Primary"}`}
+{lastCsvPreview || "No metadata available"}
                       </pre>
                     </div>
 
@@ -1010,25 +1019,6 @@ Orientation: ${selectedImages[0]?.orientation || "PRI-Primary"}`}
           </div>
         )}
 
-        {/* View AI Attributes drawer — read-only (retailers don't own the attributes) */}
-        <Sheet open={showAiAttributesDrawer} onOpenChange={setShowAiAttributesDrawer}>
-          <SheetContent className="sm:max-w-xl overflow-y-auto">
-            <SheetHeader>
-              <SheetTitle className="flex items-center gap-2">
-                <Sparkles className="size-4 text-primary" />
-                AI-Extracted Attributes
-              </SheetTitle>
-            </SheetHeader>
-            <div className="px-4 pb-4">
-              <AiAttributesTable
-                attributes={MOCK_AI_ATTRIBUTES}
-                category="Shoes"
-                imageCount={MOCK_IMAGES.length}
-                imageNames={MOCK_IMAGES.map(i => i.fileName)}
-              />
-            </div>
-          </SheetContent>
-        </Sheet>
       </div>
     )
   }

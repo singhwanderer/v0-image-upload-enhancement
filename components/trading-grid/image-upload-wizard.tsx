@@ -7,7 +7,6 @@ import {
   ChevronLeft, 
   Upload, 
   Check,
-  ChevronDown,
   Trash2,
   FileImage,
   Download,
@@ -35,11 +34,6 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import {
-  Collapsible,
-  CollapsibleContent,
-  CollapsibleTrigger,
-} from "@/components/ui/collapsible"
-import {
   Dialog,
   DialogContent,
   DialogHeader,
@@ -53,6 +47,9 @@ import {
 } from "@/components/ui/sheet"
 import { cn } from "@/lib/utils"
 import { validateImageBatch, type ValidationError } from "./upload-validation"
+import { measureImageFile, type MeasuredImageMetadata } from "./image-metadata"
+import { buildImageMetadataCsv, downloadCsv, csvPreview, type ImageMetadataRow } from "./metadata-csv"
+import { toast } from "@/hooks/use-toast"
 import useSWR from "swr"
 import type { CategoryOptions, AttributeDecision, ExtractedAttribute, UnresolvedAttribute } from "@/lib/gs1/types"
 import { buildMockExtraction } from "@/lib/gs1/mock-scenarios"
@@ -174,11 +171,16 @@ const MOCK_DATA = {
 }
 
 // Dropdown options from screenshots
+// Spec code list: PRI, VF1, VIK, VIS, SDL, SDR, VIB, VIT (VBK retained from legacy data).
+// VIK/VIS display the bare code until the authoritative GDSN label list is confirmed —
+// showing a code is honest; inventing a label would ship wrong data.
 const ORIENTATION_OPTIONS = [
   { value: "PRI", label: "PRI-Primary" },
+  { value: "VF1", label: "VF1-Front" },
+  { value: "VIK", label: "VIK" },
+  { value: "VIS", label: "VIS" },
   { value: "SDL", label: "SDL-Side Left" },
   { value: "SDR", label: "SDR-Side Right" },
-  { value: "VF1", label: "VF1-Front" },
   { value: "VIB", label: "VIB-Bottom" },
   { value: "VIT", label: "VIT-Top" },
   { value: "VBK", label: "VBK-Back" },
@@ -208,26 +210,28 @@ const PURPOSE_OPTIONS = [
   { value: "PKG", label: "PKG-Packaging" },
 ]
 
+// Spec: ACL, FTP, LMI, URL
 const LOCATION_TYPE_OPTIONS = [
-  { value: "URL", label: "URL" },
-  { value: "FTP", label: "FTP" },
   { value: "ACL", label: "ACL" },
+  { value: "FTP", label: "FTP" },
+  { value: "LMI", label: "LMI" },
+  { value: "URL", label: "URL" },
 ]
 
+// GS1 image-naming facing codes (same 1/2/3/7/8/9 scheme as the angle list below).
 const FACING_OPTIONS = [
   { value: "1", label: "1-Front" },
-  { value: "2", label: "2-Back" },
-  { value: "3", label: "3-Left" },
-  { value: "4", label: "4-Right" },
-  { value: "5", label: "5-Top" },
-  { value: "6", label: "6-Bottom" },
+  { value: "2", label: "2-Left" },
+  { value: "3", label: "3-Top" },
+  { value: "7", label: "7-Back" },
+  { value: "8", label: "8-Right" },
+  { value: "9", label: "9-Bottom" },
 ]
 
+// Spec: CSW (Color Swatch) or PRO (Product) only.
 const IMAGE_STYLE_OPTIONS = [
-  { value: "STD", label: "Standard" },
-  { value: "EDI", label: "Editorial" },
-  { value: "MOD", label: "Model Shot" },
-  { value: "FLT", label: "Flat Lay" },
+  { value: "CSW", label: "CSW-Color Swatch" },
+  { value: "PRO", label: "PRO-Product" },
 ]
 
 type UploadedFile = {
@@ -238,6 +242,9 @@ type UploadedFile = {
   type: string
   preview: string
   status: "uploading" | "complete" | "error"
+  // Auto-captured at staging by decoding the file itself (no AI, no manual entry).
+  // Absent while measurement is in flight; fields are null when unreadable.
+  measured?: MeasuredImageMetadata
 }
 
 // ExtractionApiResponse: product-level shape returned by POST /api/extract-attributes.
@@ -275,72 +282,192 @@ const PRODUCT_CATEGORIES = ["Shoes", "Apparel", "Bags", "Jewelry", "Beauty"] as 
 // Controlled by NEXT_PUBLIC_EXTRACTION_MODE; falls back to mock when unset. No UI toggle.
 const EXTRACTION_MODE = process.env.NEXT_PUBLIC_EXTRACTION_MODE === "gemini" ? "gemini" : "mock"
 
-// Extracted attribute form used in Step 2 and Edit-attributes dialog (Change 3 / Change 7)
+// ── Per-shot AI suggestions (P0.2b) ──
+// One proposal per image for the fields a vision model reads directly from the shot.
+type ShotSuggestionRow = {
+  fileIndex: number
+  fileName: string
+  orientation: string
+  facing: string
+  angle: string
+  description: string
+  confidence: number
+  status: "pending" | "accepted" | "dismissed"
+}
+
+// Mock proposal from filename tokens (deterministic, demo-stable). Mirrors what the
+// Gemini route infers from pixels; falls back to a round-robin viewpoint.
+function mockShotSuggestion(name: string, index: number, productDescription: string) {
+  const n = name.toLowerCase()
+  let orientation = ["PRI", "SDL", "SDR"][index % 3]
+  let facing = ["1", "2", "8"][index % 3]
+  let confidence = 0.6
+  if (/front|hero|main|primary/.test(n)) { orientation = "PRI"; facing = "1"; confidence = 0.92 }
+  else if (/left/.test(n)) { orientation = "SDL"; facing = "2"; confidence = 0.9 }
+  else if (/side/.test(n)) { orientation = "SDL"; facing = "2"; confidence = 0.85 }
+  else if (/right/.test(n)) { orientation = "SDR"; facing = "8"; confidence = 0.9 }
+  else if (/back|rear/.test(n)) { orientation = "VBK"; facing = "7"; confidence = 0.9 }
+  else if (/top/.test(n)) { orientation = "VIT"; facing = "3"; confidence = 0.87 }
+  else if (/bottom|sole/.test(n)) { orientation = "VIB"; facing = "9"; confidence = 0.87 }
+  const label = ORIENTATION_OPTIONS.find(o => o.value === orientation)?.label ?? orientation
+  const view = label.includes("-") ? label.split("-").slice(1).join("-") : label
+  return {
+    orientation,
+    facing,
+    angle: "1",
+    description: productDescription ? `${productDescription} — ${view.toLowerCase()} view` : `${view} view`,
+    confidence,
+  }
+}
+
+// P0.2a: the attribute record splits into two groups. PRODUCT-WIDE fields hold one honest
+// value for every image of a product; PER-SHOT fields describe what makes each photo
+// different (which is exactly why they must never be blanket-applied).
+const PER_SHOT_KEYS = ["orientation", "facing", "angle", "clippingPath", "imageDescription"] as const
+type PerShotKey = (typeof PER_SHOT_KEYS)[number]
+const isPerShotKey = (k: string): k is PerShotKey => (PER_SHOT_KEYS as readonly string[]).includes(k)
+
+// Attribute form used in Step 2, the Edit dialog, and Bulk edit (Change 3 / Change 7 / P0.2a)
 type StepTwoFormProps = {
   currentAttrs: {
     imageType: string; purpose: string; orientation: string; locationType: string;
     externalLocation: string; imageStyle: string; facing: string; angle: string;
-    clippingPath: string; imageDescription: string; pixelDensity: string; height: string; width: string;
+    clippingPath: string; imageDescription: string;
   }
   updateAttrs: (a: StepTwoFormProps["currentAttrs"]) => void
-  advancedOpen: boolean
-  setAdvancedOpen: (v: boolean) => void
   uploadLevel: "product" | "product-color" | "gtin"
   autoData: { colorCode: string; selectedGtin: string }
+  // Auto-captured per-file facts (dimensions/DPI) shown read-only. Omitted in bulk edit,
+  // where no single file is in context — measured facts are never bulk-editable.
+  measuredFiles?: { name: string; measured?: MeasuredImageMetadata }[]
+  // Explicit, labeled copy action for per-shot values — a deliberate copy, not a silent default.
+  onApplyPerShotToAll?: () => void
+  // Bulk edit targets per-shot fields only; product-wide values are edited once in the main form.
+  hideProductWide?: boolean
 }
 
-function StepTwoForm({ currentAttrs, updateAttrs, advancedOpen, setAdvancedOpen, uploadLevel, autoData }: StepTwoFormProps) {
+// Read-only summary of a file's decoded dimensions/DPI. undefined = measurement in flight.
+function formatMeasured(m?: MeasuredImageMetadata): string {
+  if (!m) return "Measuring…"
+  const dims = m.width && m.height ? `${m.width} × ${m.height} px` : null
+  const dpi = m.dpi ? `${m.dpi} DPI` : null
+  if (!dims && !dpi) return "Not readable from file"
+  return [dims, dpi].filter(Boolean).join(" · ")
+}
+
+function StepTwoForm({ currentAttrs, updateAttrs, uploadLevel, autoData, measuredFiles, onApplyPerShotToAll, hideProductWide }: StepTwoFormProps) {
   return (
     <div className="flex flex-col gap-4">
-      {/* Auto-populated fields (read-only) */}
-      {(uploadLevel === "product-color" || uploadLevel === "gtin") && (
-        <div className="grid gap-4 md:grid-cols-2">
-          {uploadLevel === "product-color" && (
-            <div className="flex flex-col gap-2">
-              <Label className="text-sm font-medium">Color Code</Label>
-              <Input value={autoData.colorCode} readOnly className="bg-muted/30 text-foreground cursor-default" />
+      {!hideProductWide && (
+        <>
+          {/* Auto-populated fields (read-only) */}
+          {(uploadLevel === "product-color" || uploadLevel === "gtin") && (
+            <div className="grid gap-4 md:grid-cols-2">
+              {uploadLevel === "product-color" && (
+                <div className="flex flex-col gap-2">
+                  <Label className="text-sm font-medium">Color Code</Label>
+                  <Input value={autoData.colorCode} readOnly className="bg-muted/30 text-foreground cursor-default" />
+                </div>
+              )}
+              {uploadLevel === "gtin" && (
+                <div className="flex flex-col gap-2">
+                  <Label className="text-sm font-medium">GTIN</Label>
+                  <Input value={autoData.selectedGtin} readOnly className="bg-muted/30 text-foreground cursor-default" />
+                </div>
+              )}
             </div>
           )}
-          {uploadLevel === "gtin" && (
+
+          {/* Product-wide group: one value for every image of this product */}
+          <div className="flex items-center gap-2">
+            <span className="text-xs font-semibold uppercase tracking-wide text-foreground">Product-wide attributes</span>
+            <span className="text-xs text-muted-foreground">apply to every image of this product</span>
+          </div>
+
+          <div className="grid gap-4 md:grid-cols-2">
             <div className="flex flex-col gap-2">
-              <Label className="text-sm font-medium">GTIN</Label>
-              <Input value={autoData.selectedGtin} readOnly className="bg-muted/30 text-foreground cursor-default" />
+              <Label className="text-sm font-medium">
+                Image Type <span className="text-destructive">*</span>
+              </Label>
+              <Select value={currentAttrs.imageType} onValueChange={(v) => updateAttrs({ ...currentAttrs, imageType: v })}>
+                <SelectTrigger className="w-full bg-background"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  {IMAGE_TYPE_OPTIONS.map(o => <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>)}
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div className="flex flex-col gap-2">
+              <Label className="text-sm font-medium">
+                Purpose <span className="text-destructive">*</span>
+              </Label>
+              <Select value={currentAttrs.purpose} onValueChange={(v) => updateAttrs({ ...currentAttrs, purpose: v })}>
+                <SelectTrigger className="w-full bg-background"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  {PURPOSE_OPTIONS.map(o => <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>)}
+                </SelectContent>
+              </Select>
+            </div>
+
+            {/* Location Type read-only */}
+            <div className="flex flex-col gap-2">
+              <Label className="text-sm font-medium">Location Type</Label>
+              <Input value={LOCATION_TYPE_OPTIONS.find(o => o.value === currentAttrs.locationType)?.label || ""} readOnly className="bg-muted/30 text-foreground cursor-default" />
+            </div>
+
+            <div className="flex flex-col gap-2">
+              <Label className="text-sm font-medium">Image Style <span className="text-xs font-normal text-muted-foreground">(optional)</span></Label>
+              <Select value={currentAttrs.imageStyle} onValueChange={(v) => updateAttrs({ ...currentAttrs, imageStyle: v })}>
+                <SelectTrigger className="w-full bg-background"><SelectValue placeholder="Select style..." /></SelectTrigger>
+                <SelectContent>{IMAGE_STYLE_OPTIONS.map(o => <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>)}</SelectContent>
+              </Select>
+            </div>
+          </div>
+
+          {(currentAttrs.locationType === "FTP" || currentAttrs.locationType === "URL") && (
+            <div className="flex flex-col gap-2">
+              <Label className="text-sm font-medium">External Location <span className="text-destructive">*</span></Label>
+              <Input
+                value={currentAttrs.externalLocation}
+                onChange={(e) => updateAttrs({ ...currentAttrs, externalLocation: e.target.value })}
+                placeholder={currentAttrs.locationType === "FTP" ? "ftp://..." : "https://..."}
+                className="bg-background"
+              />
             </div>
           )}
+
+          <div className="border-t border-border" />
+        </>
+      )}
+
+      {/* Per-shot group: what makes each photo different — never blanket-applied */}
+      <div className="flex items-center gap-2">
+        <span className="text-xs font-semibold uppercase tracking-wide text-foreground">Per-shot attributes</span>
+        <span className="text-xs text-muted-foreground">describe this specific image</span>
+      </div>
+
+      {/* Measured from file — auto-captured by decoding each staged binary (no AI, no typing). */}
+      {measuredFiles && measuredFiles.length > 0 && (
+        <div className="flex flex-col gap-1.5 rounded border border-border bg-muted/20 p-3">
+          <div className="flex items-center gap-2">
+            <span className="text-xs font-semibold uppercase tracking-wide text-foreground">Measured from file</span>
+            <span className="rounded bg-primary/10 px-1.5 py-0.5 text-xs font-medium text-primary">Auto-captured</span>
+          </div>
+          <div className="flex flex-col gap-0.5 max-h-24 overflow-y-auto">
+            {measuredFiles.map((f, i) => (
+              <div key={i} className="flex items-center gap-2 text-xs">
+                <span className="truncate max-w-[220px] text-muted-foreground" title={f.name}>{f.name}</span>
+                <span className="font-medium text-foreground">{formatMeasured(f.measured)}</span>
+              </div>
+            ))}
+          </div>
+          <p className="text-xs text-muted-foreground">
+            Dimensions and DPI are read directly from each image file — no manual entry needed.
+          </p>
         </div>
       )}
 
-      {/* Required section header (Change 3a) */}
-      <div className="flex items-center gap-2">
-        <span className="text-xs font-semibold uppercase tracking-wide text-foreground">Required</span>
-        <span className="rounded bg-destructive/10 px-1.5 py-0.5 text-xs font-medium text-destructive">Required</span>
-      </div>
-
       <div className="grid gap-4 md:grid-cols-2">
-        <div className="flex flex-col gap-2">
-          <Label className="text-sm font-medium">
-            Image Type <span className="text-destructive">*</span>
-          </Label>
-          <Select value={currentAttrs.imageType} onValueChange={(v) => updateAttrs({ ...currentAttrs, imageType: v })}>
-            <SelectTrigger className="w-full bg-background"><SelectValue /></SelectTrigger>
-            <SelectContent>
-              {IMAGE_TYPE_OPTIONS.map(o => <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>)}
-            </SelectContent>
-          </Select>
-        </div>
-
-        <div className="flex flex-col gap-2">
-          <Label className="text-sm font-medium">
-            Purpose <span className="text-destructive">*</span>
-          </Label>
-          <Select value={currentAttrs.purpose} onValueChange={(v) => updateAttrs({ ...currentAttrs, purpose: v })}>
-            <SelectTrigger className="w-full bg-background"><SelectValue /></SelectTrigger>
-            <SelectContent>
-              {PURPOSE_OPTIONS.map(o => <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>)}
-            </SelectContent>
-          </Select>
-        </div>
-
         <div className="flex flex-col gap-2">
           <Label className="text-sm font-medium">
             Orientation <span className="text-destructive">*</span>
@@ -352,82 +479,35 @@ function StepTwoForm({ currentAttrs, updateAttrs, advancedOpen, setAdvancedOpen,
             </SelectContent>
           </Select>
         </div>
-
-        {/* Location Type read-only */}
         <div className="flex flex-col gap-2">
-          <Label className="text-sm font-medium">Location Type</Label>
-          <Input value={LOCATION_TYPE_OPTIONS.find(o => o.value === currentAttrs.locationType)?.label || ""} readOnly className="bg-muted/30 text-foreground cursor-default" />
+          <Label className="text-sm font-medium">Facing (GDSN) <span className="text-xs font-normal text-muted-foreground">(optional)</span></Label>
+          <Select value={currentAttrs.facing} onValueChange={(v) => updateAttrs({ ...currentAttrs, facing: v })}>
+            <SelectTrigger className="w-full bg-background"><SelectValue placeholder="Select facing..." /></SelectTrigger>
+            <SelectContent>{FACING_OPTIONS.map(o => <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>)}</SelectContent>
+          </Select>
+        </div>
+        <div className="flex flex-col gap-2">
+          <Label className="text-sm font-medium">Angle <span className="text-xs font-normal text-muted-foreground">(optional)</span></Label>
+          <Select value={currentAttrs.angle} onValueChange={(v) => updateAttrs({ ...currentAttrs, angle: v })}>
+            <SelectTrigger className="w-full bg-background"><SelectValue placeholder="Select angle..." /></SelectTrigger>
+            <SelectContent>{ANGLE_OPTIONS.map(o => <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>)}</SelectContent>
+          </Select>
+        </div>
+        <div className="flex flex-col gap-2">
+          <Label className="text-sm font-medium">Clipping Path <span className="text-xs font-normal text-muted-foreground">(optional)</span></Label>
+          <Input value={currentAttrs.clippingPath} onChange={(e) => updateAttrs({ ...currentAttrs, clippingPath: e.target.value })} placeholder="Path name..." className="bg-background" />
+        </div>
+        <div className="flex flex-col gap-2 md:col-span-2">
+          <Label className="text-sm font-medium">Image Description <span className="text-xs font-normal text-muted-foreground">(optional)</span></Label>
+          <Input value={currentAttrs.imageDescription} onChange={(e) => updateAttrs({ ...currentAttrs, imageDescription: e.target.value })} placeholder="Enter description..." className="bg-background" />
         </div>
       </div>
 
-      {(currentAttrs.locationType === "FTP" || currentAttrs.locationType === "URL") && (
-        <div className="flex flex-col gap-2">
-          <Label className="text-sm font-medium">External Location <span className="text-destructive">*</span></Label>
-          <Input
-            value={currentAttrs.externalLocation}
-            onChange={(e) => updateAttrs({ ...currentAttrs, externalLocation: e.target.value })}
-            placeholder={currentAttrs.locationType === "FTP" ? "ftp://..." : "https://..."}
-            className="bg-background"
-          />
-        </div>
+      {onApplyPerShotToAll && (
+        <Button variant="outline" size="sm" className="w-fit" onClick={onApplyPerShotToAll}>
+          Apply this image&apos;s per-shot values to all images
+        </Button>
       )}
-
-      <div className="border-t border-border" />
-
-      {/* Optional attributes disclosure (8 fields) (Change 3a) */}
-      <Collapsible open={advancedOpen} onOpenChange={setAdvancedOpen}>
-        <CollapsibleTrigger asChild>
-          <button className="flex w-full items-center gap-2 rounded border border-border bg-muted/30 px-4 py-3 text-left text-sm font-medium text-foreground hover:bg-muted/50">
-            <ChevronDown className={cn("size-4 transition-transform", advancedOpen && "rotate-180")} />
-            {advancedOpen ? "Optional attributes (8) — collapse" : "Optional attributes (8) — expand"}
-          </button>
-        </CollapsibleTrigger>
-        <CollapsibleContent>
-          <div className="mt-4 grid gap-4 rounded border border-border bg-background p-4 md:grid-cols-2">
-            <div className="flex flex-col gap-2">
-              <Label className="text-sm font-medium">Image Style</Label>
-              <Select value={currentAttrs.imageStyle} onValueChange={(v) => updateAttrs({ ...currentAttrs, imageStyle: v })}>
-                <SelectTrigger className="w-full bg-background"><SelectValue placeholder="Select style..." /></SelectTrigger>
-                <SelectContent>{IMAGE_STYLE_OPTIONS.map(o => <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>)}</SelectContent>
-              </Select>
-            </div>
-            <div className="flex flex-col gap-2">
-              <Label className="text-sm font-medium">Facing (GDSN)</Label>
-              <Select value={currentAttrs.facing} onValueChange={(v) => updateAttrs({ ...currentAttrs, facing: v })}>
-                <SelectTrigger className="w-full bg-background"><SelectValue placeholder="Select facing..." /></SelectTrigger>
-                <SelectContent>{FACING_OPTIONS.map(o => <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>)}</SelectContent>
-              </Select>
-            </div>
-            <div className="flex flex-col gap-2">
-              <Label className="text-sm font-medium">Angle</Label>
-              <Select value={currentAttrs.angle} onValueChange={(v) => updateAttrs({ ...currentAttrs, angle: v })}>
-                <SelectTrigger className="w-full bg-background"><SelectValue placeholder="Select angle..." /></SelectTrigger>
-                <SelectContent>{ANGLE_OPTIONS.map(o => <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>)}</SelectContent>
-              </Select>
-            </div>
-            <div className="flex flex-col gap-2">
-              <Label className="text-sm font-medium">Clipping Path</Label>
-              <Input value={currentAttrs.clippingPath} onChange={(e) => updateAttrs({ ...currentAttrs, clippingPath: e.target.value })} placeholder="Path name..." className="bg-background" />
-            </div>
-            <div className="flex flex-col gap-2 md:col-span-2">
-              <Label className="text-sm font-medium">Image Description</Label>
-              <Input value={currentAttrs.imageDescription} onChange={(e) => updateAttrs({ ...currentAttrs, imageDescription: e.target.value })} placeholder="Enter description..." className="bg-background" />
-            </div>
-            <div className="flex flex-col gap-2">
-              <Label className="text-xs text-muted-foreground">Pixel Density (DPI)</Label>
-              <Input value={currentAttrs.pixelDensity} onChange={(e) => updateAttrs({ ...currentAttrs, pixelDensity: e.target.value })} placeholder="e.g. 300" className="bg-background" type="number" min="1" />
-            </div>
-            <div className="flex flex-col gap-2">
-              <Label className="text-xs text-muted-foreground">Height (px)</Label>
-              <Input value={currentAttrs.height} onChange={(e) => updateAttrs({ ...currentAttrs, height: e.target.value })} placeholder="e.g. 2400" className="bg-background" type="number" min="1" />
-            </div>
-            <div className="flex flex-col gap-2">
-              <Label className="text-xs text-muted-foreground">Width (px)</Label>
-              <Input value={currentAttrs.width} onChange={(e) => updateAttrs({ ...currentAttrs, width: e.target.value })} placeholder="e.g. 2400" className="bg-background" type="number" min="1" />
-            </div>
-          </div>
-        </CollapsibleContent>
-      </Collapsible>
     </div>
   )
 }
@@ -446,11 +526,11 @@ export function ImageUploadWizard({
   const [selectedGtin, setSelectedGtin] = useState("")
   const [uploadedFiles, setUploadedFiles] = useState<UploadedFile[]>([])
   const [isDragging, setIsDragging] = useState(false)
-  const [applyToAll, setApplyToAll] = useState(true)
-  const [advancedOpen, setAdvancedOpen] = useState(false)
   const [showProductMedia, setShowProductMedia] = useState(false)
   const [showDownloadModal, setShowDownloadModal] = useState(false)
   const [downloadPhase, setDownloadPhase] = useState<"select" | "preparing" | "complete">("select")
+  // First lines of the most recently generated metadata CSV, shown in the Complete phase.
+  const [lastCsvPreview, setLastCsvPreview] = useState("")
   // Selection state for Product Media cards — drives selective download and (Supplier-only)
   // bulk edit/delete gating.
   const media = useMediaSelection()
@@ -495,6 +575,10 @@ export function ImageUploadWizard({
   const [aiExtraction, setAiExtraction] = useState<ProductExtractionResult | null>(null)
   // The suggestion row currently being inline-edited (null = none), scoped by index only
   const [aiEditing, setAiEditing] = useState<{ index: number } | null>(null)
+  // ── Per-shot AI suggestions (P0.2b) — proposes orientation/facing/angle/description per
+  // image. Strictly optional: nothing is applied without an explicit Accept. ──
+  const [shotSuggestions, setShotSuggestions] = useState<ShotSuggestionRow[] | null>(null)
+  const [shotSuggestLoading, setShotSuggestLoading] = useState(false)
 
   // Fetch the FULL CSV-derived allowed options for the selected category from the server.
   // Only one category's options are ever sent to the client (never the whole CSV). SWR caches
@@ -534,12 +618,12 @@ export function ImageUploadWizard({
     angle: "",
     clippingPath: "",
     imageDescription: "",
-    pixelDensity: "",
-    height: "",
-    width: "",
+    // pixel density / height / width are NOT attributes: they are per-file facts,
+    // auto-captured into UploadedFile.measured at staging (see image-metadata.ts).
   })
   
-  // Per-image attributes (when applyToAll is false)
+  // Per-shot attribute records, keyed by image index. Only PER_SHOT_KEYS are meaningful
+  // here; product-wide keys always resolve from `attributes` (P0.2a).
   const [attributesByImage, setAttributesByImage] = useState<{ [key: number]: typeof attributes }>({})
   const [activeAttributeImageIndex, setActiveAttributeImageIndex] = useState(0)
 
@@ -549,25 +633,52 @@ export function ImageUploadWizard({
     { number: 3, title: "Review & Confirm", description: "Review and submit" },
   ]
 
-  // Helper function to get current attributes based on mode
-  const getCurrentAttributes = () => {
-    if (applyToAll) {
-      return attributes
-    } else {
-      return attributesByImage[activeAttributeImageIndex] || attributes
+  // Effective attributes for one image: product-wide values from `attributes`,
+  // per-shot values from that image's own record.
+  const effectiveAttrs = (idx: number): typeof attributes => {
+    const shot = attributesByImage[idx]
+    if (!shot) return attributes
+    const merged = { ...attributes }
+    PER_SHOT_KEYS.forEach(k => { merged[k] = shot[k] ?? "" })
+    return merged
+  }
+
+  const getCurrentAttributes = () => effectiveAttrs(activeAttributeImageIndex)
+
+  // Routes edits by key group: per-shot keys write to the active image's record only;
+  // everything else is product-wide and writes once for all images.
+  const updateCurrentAttributes = (newAttrs: typeof attributes) => {
+    const current = getCurrentAttributes()
+    const perShotChanged = PER_SHOT_KEYS.some(k => newAttrs[k] !== current[k])
+    setAttributes(prev => {
+      const next = { ...prev }
+      ;(Object.keys(newAttrs) as Array<keyof typeof attributes>).forEach(k => {
+        if (!isPerShotKey(k)) next[k] = newAttrs[k]
+      })
+      return next
+    })
+    if (perShotChanged) {
+      setAttributesByImage(prev => {
+        const rec = { ...(prev[activeAttributeImageIndex] ?? attributes) }
+        PER_SHOT_KEYS.forEach(k => { rec[k] = newAttrs[k] })
+        return { ...prev, [activeAttributeImageIndex]: rec }
+      })
     }
   }
 
-  // Helper function to update current attributes
-  const updateCurrentAttributes = (newAttrs: typeof attributes) => {
-    if (applyToAll) {
-      setAttributes(newAttrs)
-    } else {
-      setAttributesByImage(prev => ({
-        ...prev,
-        [activeAttributeImageIndex]: newAttrs
-      }))
-    }
+  // Explicit copy of the active image's per-shot values onto every image — a labeled,
+  // deliberate action, unlike the old silent apply-to-all default.
+  const applyPerShotToAll = () => {
+    const source = effectiveAttrs(activeAttributeImageIndex)
+    setAttributesByImage(prev => {
+      const next = { ...prev }
+      uploadedFiles.forEach((_, i) => {
+        const rec = { ...(next[i] ?? attributes) }
+        PER_SHOT_KEYS.forEach(k => { rec[k] = source[k] })
+        next[i] = rec
+      })
+      return next
+    })
   }
 
   // ── AI extraction handlers (mock-first) ──
@@ -783,6 +894,71 @@ export function ImageUploadWizard({
     setAiEditing(null)
   }
 
+  // Per-shot suggestions are keyed by file index — any deletion/replacement invalidates them.
+  const clearShotSuggestions = () => setShotSuggestions(null)
+
+  // Runs the per-shot suggestion pass: Gemini route when configured, else the mock
+  // filename heuristic. Optional accelerator only — nothing applies without Accept.
+  const runShotSuggestions = async () => {
+    if (uploadedFiles.length === 0) return
+    setShotSuggestLoading(true)
+    const productDescription = getAutoPopulatedData().productDescription
+    if (EXTRACTION_MODE === "gemini") {
+      try {
+        const images = await Promise.all(
+          uploadedFiles.map(async (f) => ({ fileName: f.name, imageBase64: await fileToBase64(f.file), mimeType: f.type }))
+        )
+        const res = await fetch("/api/suggest-shot-attributes", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ images, productDescription }),
+        })
+        if (!res.ok) throw new Error(`Suggestion failed (${res.status}).`)
+        const data = await res.json() as { suggestions: { fileName: string; orientation: string; facing: string; angle: string; description: string; confidence: number }[] }
+        const rows: ShotSuggestionRow[] = []
+        uploadedFiles.forEach((f, i) => {
+          const s = Array.isArray(data.suggestions) ? data.suggestions.find(x => x.fileName === f.name) : undefined
+          if (s) rows.push({ fileIndex: i, fileName: f.name, orientation: s.orientation, facing: s.facing, angle: s.angle, description: s.description, confidence: s.confidence, status: "pending" })
+        })
+        setShotSuggestions(rows)
+        setShotSuggestLoading(false)
+        return
+      } catch {
+        // Fall through to the mock heuristic so the demo never dead-ends.
+      }
+    }
+    await new Promise(resolve => setTimeout(resolve, 600))
+    setShotSuggestions(uploadedFiles.map((f, i) => ({
+      fileIndex: i,
+      fileName: f.name,
+      ...mockShotSuggestion(f.name, i, productDescription),
+      status: "pending" as const,
+    })))
+    setShotSuggestLoading(false)
+  }
+
+  // Accept one or many per-shot suggestions: writes into the per-image records.
+  const acceptShotSuggestions = (rows: ShotSuggestionRow[]) => {
+    setAttributesByImage(prev => {
+      const next = { ...prev }
+      rows.forEach(r => {
+        const rec = { ...(next[r.fileIndex] ?? attributes) }
+        rec.orientation = r.orientation
+        if (r.facing) rec.facing = r.facing
+        if (r.angle) rec.angle = r.angle
+        if (r.description) rec.imageDescription = r.description
+        next[r.fileIndex] = rec
+      })
+      return next
+    })
+    const accepted = new Set(rows.map(r => r.fileIndex))
+    setShotSuggestions(prev => prev ? prev.map(p => accepted.has(p.fileIndex) ? { ...p, status: "accepted" as const } : p) : prev)
+  }
+
+  const dismissShotSuggestion = (fileIndex: number) => {
+    setShotSuggestions(prev => prev ? prev.map(p => p.fileIndex === fileIndex ? { ...p, status: "dismissed" as const } : p) : prev)
+  }
+
   // Derived status flags from the single product-level extraction result
   const isExtracting = aiExtraction?.status === "extracting"
   const isComplete = aiExtraction?.status === "complete"
@@ -790,6 +966,126 @@ export function ImageUploadWizard({
   const hasExtraction = aiExtraction !== null
   // Accepted suggestions at the product level (only explicit Accept clicks count)
   const acceptedExtractedAttributes = aiExtraction?.attributes.filter(a => a.decision === "accepted") ?? []
+  // Suggestions still awaiting a decision — these are silently dropped at submission
+  // unless accepted, so both the results card and Step 3 surface the count (P0.3).
+  const pendingExtractedCount = isComplete ? (aiExtraction?.attributes.filter(a => a.decision === "pending").length ?? 0) : 0
+
+  // Accept every still-pending suggestion in one click.
+  const acceptAllPending = () => {
+    setAiExtraction(prev => {
+      if (!prev) return prev
+      return { ...prev, attributes: prev.attributes.map(a => a.decision === "pending" ? { ...a, decision: "accepted" as const } : a) }
+    })
+  }
+
+  // ── Data-richness meter (P1.2 / audit E4): makes record completeness visible so richness
+  // becomes a score suppliers close out, not an invisible virtue. Counts product-wide fields
+  // once, per-shot fields and measured facts per image, and extended-attribute progress. ──
+  const richness = (() => {
+    const productWideFields = ["imageType", "purpose", "locationType", "imageStyle"] as const
+    let filled = 0
+    let total = 0
+    productWideFields.forEach(k => { total++; if (attributes[k]) filled++ })
+    uploadedFiles.forEach((f, i) => {
+      const a = effectiveAttrs(i)
+      PER_SHOT_KEYS.forEach(k => { total++; if (a[k]) filled++ })
+      total += 3 // measured width / height / dpi
+      if (f.measured?.width) filled++
+      if (f.measured?.height) filled++
+      if (f.measured?.dpi) filled++
+    })
+    const extendedTotal = isComplete && aiExtraction
+      ? aiExtraction.attributes.length + aiExtraction.unresolvedAttributes.length
+      : 0
+    return { filled, total, extendedAccepted: acceptedExtractedAttributes.length, extendedTotal }
+  })()
+
+  const renderRichnessMeter = () => {
+    const pct = richness.total > 0 ? Math.round((richness.filled / richness.total) * 100) : 0
+    return (
+      <div className="flex flex-wrap items-center gap-3 rounded border border-border bg-card px-3 py-2 text-xs">
+        <span className="font-semibold uppercase tracking-wide text-muted-foreground shrink-0">Data richness</span>
+        <div className="h-1.5 w-24 rounded-full bg-muted overflow-hidden shrink-0">
+          <div
+            className={cn("h-full rounded-full transition-all", pct >= 80 ? "bg-tg-success" : pct >= 40 ? "bg-tg-warning" : "bg-destructive")}
+            style={{ width: `${pct}%` }}
+          />
+        </div>
+        <span className="text-foreground">{richness.filled} of {richness.total} image fields</span>
+        <span className="text-muted-foreground">·</span>
+        <span className="text-foreground">
+          {richness.extendedTotal > 0
+            ? `${richness.extendedAccepted} of ${richness.extendedTotal} extended attributes accepted`
+            : "extended attributes not extracted yet"}
+        </span>
+      </div>
+    )
+  }
+
+  // Idle AI controls (category + brick pickers, Extract button) — used in Step 2 and, per
+  // P1.2, in the post-submit drawer so extraction can be run after upload, not only during
+  // the wizard pass. showSkip hides the skip affordance where it makes no sense (drawer).
+  const renderAiIdleControls = (showSkip: boolean) => (
+    <>
+      <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:flex-wrap">
+        <div className="flex flex-col gap-1">
+          <Label htmlFor="ai-category" className="text-xs text-muted-foreground">Product category</Label>
+          <Select value={aiCategory} onValueChange={(v) => { setAiCategory(v); clearExtraction() }}>
+            <SelectTrigger id="ai-category" className="w-56 bg-background">
+              <SelectValue placeholder="Select a category..." />
+            </SelectTrigger>
+            <SelectContent>
+              {PRODUCT_CATEGORIES.map(c => (
+                <SelectItem key={c} value={c}>{c}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+        {/* GPC brick — attributes are scoped to this single classification */}
+        <div className="flex flex-col gap-1">
+          <Label htmlFor="ai-brick" className="text-xs text-muted-foreground">Product brick (GPC)</Label>
+          <Select
+            value={aiBrick?.code ?? ""}
+            onValueChange={(code) => { setAiBrick(bricksForCategory.find(b => b.code === code) ?? null); clearExtraction() }}
+            disabled={!aiCategory || bricksForCategory.length === 0}
+          >
+            <SelectTrigger id="ai-brick" className="w-72 bg-background">
+              <SelectValue placeholder={aiCategory ? "Select a brick..." : "Select a category first"} />
+            </SelectTrigger>
+            <SelectContent>
+              {bricksForCategory.map(b => (
+                <SelectItem key={b.code} value={b.code}>{b.name}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+        <div className="flex items-center gap-2">
+          <Button onClick={runExtraction} disabled={!aiCategory || !aiBrick || uploadedFiles.length === 0} className="gap-2">
+            <Sparkles className="size-4" />
+            Extract Extended Attributes with AI
+          </Button>
+          {showSkip && (
+            <Button variant="ghost" onClick={() => setAiSkipped(true)}>
+              Skip AI Extraction
+            </Button>
+          )}
+        </div>
+      </div>
+      {aiCategory && bricksForCategory.length === 0 ? (
+        <p className="text-xs text-tg-warning">
+          No GS1 brick mapping is available for this category — continue entering attributes manually.
+        </p>
+      ) : (
+        <p className="text-xs text-muted-foreground">
+          {!aiBrick && "Select the product brick to scope attributes to that classification. "}
+          {uploadedFiles.length === 1
+            ? "1 image will be analyzed for this product."
+            : `${uploadedFiles.length} images will be analyzed together for this product.`}{" "}
+          All uploaded images are treated as evidence for the same product.
+        </p>
+      )}
+    </>
+  )
 
   // Editable AI results card — the same Accept/Reject/Edit UI used in Step 2, extracted into a
   // render function so it can also be shown post-confirm in the "View AI Attributes" drawer
@@ -822,9 +1118,17 @@ export function ImageUploadWizard({
               )}
             </p>
           </div>
-          <Button variant="ghost" size="sm" onClick={clearExtraction}>
-            Re-run
-          </Button>
+          <div className="flex items-center gap-1 shrink-0">
+            {pendingExtractedCount > 0 && (
+              <Button variant="outline" size="sm" className="gap-1" onClick={acceptAllPending}>
+                <Check className="size-3.5" />
+                Accept all pending ({pendingExtractedCount})
+              </Button>
+            )}
+            <Button variant="ghost" size="sm" onClick={clearExtraction}>
+              Re-run
+            </Button>
+          </div>
         </div>
         {/* Fallback banner when Gemini was unavailable */}
         {aiExtraction.fallbackUsed && (
@@ -1030,9 +1334,10 @@ export function ImageUploadWizard({
     setIsDragging(false)
   }, [])
 
-  // Validates files and stages valid ones; appends errors for invalid ones
+  // Validates files and stages valid ones; appends errors for invalid ones.
+  // Staged names are passed for the spec's file_name-uniqueness rule.
   const processFiles = useCallback((rawFiles: File[]) => {
-    const { valid, errors } = validateImageBatch(rawFiles)
+    const { valid, errors } = validateImageBatch(rawFiles, uploadedFiles.map(f => f.name))
     if (errors.length > 0) {
       setValidationErrors(prev => {
         const newErrors = errors.filter(e => !prev.some(p => p.fileName === e.fileName))
@@ -1050,7 +1355,14 @@ export function ImageUploadWizard({
       status: "complete" as const,
     }))
     setUploadedFiles(prev => [...prev, ...newFiles])
-  }, [])
+    // Auto-capture dimensions/DPI by decoding each staged file (deterministic, no AI).
+    // Patched by id so a file deleted mid-measurement is a no-op, never resurrected.
+    newFiles.forEach(({ id, file }) => {
+      void measureImageFile(file).then(measured => {
+        setUploadedFiles(prev => prev.map(f => (f.id === id ? { ...f, measured } : f)))
+      })
+    })
+  }, [uploadedFiles])
 
   const handleDrop = useCallback((e: React.DragEvent) => {
     e.preventDefault()
@@ -1067,6 +1379,7 @@ export function ImageUploadWizard({
   const removeFile = (fileId: string) => {
     setUploadedFiles(prev => prev.filter(f => f.id !== fileId))
     clearExtraction() // file list changed — stale product-level extraction is invalid
+    clearShotSuggestions() // index-keyed — deletion shifts indices
   }
 
   // Removes a set of confirmed images (single or bulk) and rebuilds attributesByImage against
@@ -1083,6 +1396,7 @@ export function ImageUploadWizard({
     setUploadedFiles(remaining)
     setAttributesByImage(nextAttrsByImage)
     clearExtraction() // file list changed — stale product-level extraction is invalid
+    clearShotSuggestions() // index-keyed — deletion shifts indices
     media.prune(remaining.map(f => f.id))
   }
 
@@ -1192,19 +1506,26 @@ export function ImageUploadWizard({
                             <FileImage className="size-4 text-primary shrink-0" />
                             <span className="text-sm font-medium text-foreground truncate">{file.name}</span>
                           </div>
-                          <div className="flex items-center gap-2 mt-0.5">
-                            <FileText className="size-4 text-tg-success shrink-0" />
-                            <span className="text-sm text-muted-foreground truncate">
-                              {file.name.replace(/\.[^/.]+$/, "")}_metadata.txt
-                            </span>
-                          </div>
                         </div>
                         <div className="text-right text-xs text-muted-foreground shrink-0">
                           <div>{formatFileSize(file.size)}</div>
-                          <div>~2 KB</div>
                         </div>
                       </div>
                     ))}
+                    {/* Single machine-readable metadata artifact for the whole selection */}
+                    <div className="flex items-center gap-3 rounded border border-border bg-card p-3">
+                      <div className="flex size-10 items-center justify-center rounded bg-muted">
+                        <FileText className="size-5 text-tg-success" />
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <span className="text-sm font-medium text-foreground truncate block">
+                          {getAutoPopulatedData().productId || "product"}_image_metadata.csv
+                        </span>
+                        <span className="text-xs text-muted-foreground">
+                          {selectedFiles.length} row{selectedFiles.length !== 1 ? "s" : ""} — one per image
+                        </span>
+                      </div>
+                    </div>
                   </div>
                 </div>
 
@@ -1212,8 +1533,8 @@ export function ImageUploadWizard({
                 <div className="mb-6 flex items-start gap-2 rounded bg-primary/5 p-3 text-sm">
                   <FileText className="size-4 text-primary mt-0.5 shrink-0" />
                   <div>
-                    <span className="font-medium text-foreground">Metadata files (.txt)</span>
-                    <span className="text-muted-foreground"> contain all image attributes including company info, product details, file properties, and GDSN attributes for each image.</span>
+                    <span className="font-medium text-foreground">Metadata file (.csv)</span>
+                    <span className="text-muted-foreground"> contains one row per image with all attributes in the standard field layout — including measured file properties and accepted GS1 extended attributes — ready for PIM/DAM import.</span>
                   </div>
                 </div>
 
@@ -1224,7 +1545,7 @@ export function ImageUploadWizard({
                   </Button>
                   <Button onClick={handleBulkDownload} disabled={selectedFiles.length === 0}>
                     <Download className="size-4 mr-2" />
-                    Download {selectedFiles.length === uploadedFiles.length ? "All" : "Selected"} ({selectedFiles.length * 2} files)
+                    Download {selectedFiles.length} image{selectedFiles.length !== 1 ? "s" : ""} + metadata CSV
                   </Button>
                 </div>
               </>
@@ -1264,30 +1585,28 @@ export function ImageUploadWizard({
                   <div className="text-sm font-medium text-foreground mb-3">Downloaded Files:</div>
                   <div className="space-y-2 max-h-32 overflow-y-auto">
                     {selectedFiles.map((file) => (
-                      <div key={file.id} className="text-sm">
-                        <div className="flex items-center gap-2 text-foreground">
-                          <Check className="size-4 text-tg-success" />
-                          <span>{file.name}</span>
-                        </div>
-                        <div className="flex items-center gap-2 text-muted-foreground ml-6">
-                          <Check className="size-4 text-tg-success" />
-                          <span>{file.name.replace(/\.[^/.]+$/, "")}_metadata.txt</span>
-                        </div>
+                      <div key={file.id} className="flex items-center gap-2 text-sm text-foreground">
+                        <Check className="size-4 text-tg-success" />
+                        <span>{file.name}</span>
                       </div>
                     ))}
+                    <div className="flex items-center gap-2 text-sm text-foreground">
+                      <Check className="size-4 text-tg-success" />
+                      <span>{getAutoPopulatedData().productId || "product"}_image_metadata.csv</span>
+                    </div>
                   </div>
                 </div>
 
-                {/* Sample Metadata Preview */}
+                {/* Metadata CSV Preview — first rows of the actually-downloaded file */}
                 <div className="rounded border border-border bg-card p-4 mb-6 text-left">
                   <div className="flex items-center justify-between mb-2">
                     <span className="text-sm font-medium text-foreground">Metadata Preview</span>
                     <span className="text-xs text-muted-foreground">
-                      {selectedFiles[0]?.name.replace(/\.[^/.]+$/, "") || "image"}_metadata.txt
+                      {getAutoPopulatedData().productId || "product"}_image_metadata.csv
                     </span>
                   </div>
                   <pre className="text-xs text-muted-foreground bg-muted/30 p-3 rounded overflow-x-auto max-h-40 overflow-y-auto font-mono">
-{selectedFiles[0] ? generateMetadataContent(selectedFiles[0], uploadedFiles.indexOf(selectedFiles[0])) : "No metadata available"}
+{lastCsvPreview || "No metadata available"}
                   </pre>
                 </div>
 
@@ -1308,113 +1627,69 @@ export function ImageUploadWizard({
     return (bytes / (1024 * 1024)).toFixed(1) + " MB"
   }
 
-  // Generate metadata text content for a file
-  const generateMetadataContent = (file: UploadedFile, index: number) => {
+  // One spec-shaped CSV row per image (P0.5). Measured facts come from the decoded file;
+  // per-image attrs resolve exactly as the cards/exports do.
+  const buildMetadataCsvRows = (files: UploadedFile[]): ImageMetadataRow[] => {
     const data = getAutoPopulatedData()
-    const currentDate = new Date().toLocaleDateString('en-US', { 
-      year: 'numeric', 
-      month: 'short', 
-      day: '2-digit' 
+    return files.map(file => {
+      const idx = uploadedFiles.indexOf(file)
+      const fileAttrs = effectiveAttrs(idx)
+      return {
+        action: "insert",
+        image_level: uploadLevel === "gtin" ? "item" : "product",
+        product: data.productId,
+        item_number: uploadLevel === "gtin" ? data.selectedGtin : "",
+        file_name: file.name,
+        file_type: "JPG",
+        image_type: fileAttrs.imageType,
+        purpose: fileAttrs.purpose,
+        orientation: fileAttrs.orientation,
+        location_type: fileAttrs.locationType,
+        external_location: fileAttrs.externalLocation,
+        color_code: uploadLevel === "product-color" ? data.colorCode : "",
+        image_style: fileAttrs.imageStyle,
+        facing: fileAttrs.facing,
+        angle: fileAttrs.angle,
+        file_size: String(file.size),
+        pixel_density: file.measured?.dpi != null ? String(file.measured.dpi) : "",
+        height: file.measured?.height != null ? String(file.measured.height) : "",
+        width: file.measured?.width != null ? String(file.measured.width) : "",
+        clipping_path: fileAttrs.clippingPath,
+        image_description: fileAttrs.imageDescription,
+      }
     })
-    
-    let content = `IMAGE METADATA EXPORT
-========================================
-Export Date: ${currentDate}
-Level: ${uploadLevel === "product" ? "Product Level" : uploadLevel === "gtin" ? "Item Level (GTIN)" : "Product + Color Code Level"}
-
-COMPANY INFORMATION
-----------------------------------------
-Company Name:        ${data.companyName}
-Account Number:      ${data.accountNumber}
-Selection Code:      ${data.selectionCode}
-Description:         ${data.description}
-Product:             ${data.productId}
-Product Description: ${data.productDescription}`
-
-    if (uploadLevel === "gtin") {
-      content += `
-GTIN:                ${data.selectedGtin}
-GTIN Type:           ${data.selectedGtinType}`
-    }
-
-    if (uploadLevel === "product-color") {
-      content += `
-Color Code:          ${data.colorCode}
-Color Name:          ${data.colorName}`
-    }
-
-    // resolve per-image attrs if applicable
-    const fileAttrs = applyToAll ? attributes : (attributesByImage[index] || attributes)
-    const imageLevelLabel = uploadLevel === "product"
-      ? "Product Level"
-      : uploadLevel === "gtin"
-      ? "Item Level (GTIN)"
-      : "Product + Color Code Level"
-
-    content += `
-
-FILE INFORMATION
-----------------------------------------
-File Name:           ${file.name}
-File Type:           ${file.type || "JPG-JPEG"}
-File Size:           ${formatFileSize(file.size)}
-
-IMAGE ATTRIBUTES
-----------------------------------------
-Image Level:         ${imageLevelLabel}
-Color Code:          ${data.colorCode || (uploadLevel === "gtin" ? data.selectedGtin : "N/A")}
-Image Type:          ${IMAGE_TYPE_OPTIONS.find(o => o.value === fileAttrs.imageType)?.label || "SI-Still Shot"}
-Purpose:             ${PURPOSE_OPTIONS.find(o => o.value === fileAttrs.purpose)?.label || "INT-Internet"}
-Orientation:         ${ORIENTATION_OPTIONS.find(o => o.value === fileAttrs.orientation)?.label || "Not specified"}
-Location Type:       ${LOCATION_TYPE_OPTIONS.find(o => o.value === fileAttrs.locationType)?.label || "Not specified"}
-External Location:   ${fileAttrs.externalLocation || "N/A"}
-Pixel Density (DPI): ${fileAttrs.pixelDensity || "N/A"}
-Height:              ${fileAttrs.height || "N/A"}
-Width:               ${fileAttrs.width || "N/A"}
-Image Style:         ${IMAGE_STYLE_OPTIONS.find(o => o.value === fileAttrs.imageStyle)?.label || "Not specified"}
-Facing (GDSN):       ${FACING_OPTIONS.find(o => o.value === fileAttrs.facing)?.label || "Not specified"}
-Angle:               ${ANGLE_OPTIONS.find(o => o.value === fileAttrs.angle)?.label || "Not specified"}
-Clipping Path:       ${fileAttrs.clippingPath || "N/A"}
-Image Description:   ${fileAttrs.imageDescription || "N/A"}
-
-DATES
-----------------------------------------
-Create Date:         ${currentDate}
-Last Update Date:    ${currentDate}
-
-========================================
-End of Metadata Export
-`
-    return content
   }
 
-  // Handle bulk download with three-phase flow
+  // Handle bulk download: really generates and downloads the metadata CSV (incl. accepted
+  // GS1 extended attributes), then runs the three-phase flow. Image binaries stay simulated.
   const handleBulkDownload = () => {
+    const selectedFiles = uploadedFiles.filter(f => media.isChecked(f.id))
+    const csv = buildImageMetadataCsv(buildMetadataCsvRows(selectedFiles), acceptedExtractedAttributes)
+    downloadCsv(`${getAutoPopulatedData().productId || "product"}_image_metadata.csv`, csv)
+    setLastCsvPreview(csvPreview(csv))
     setDownloadPhase("preparing")
     // Simulate preparation delay
     setTimeout(() => {
       setDownloadPhase("complete")
+      toast({ title: "Download complete", description: `${selectedFiles.length} image${selectedFiles.length !== 1 ? "s" : ""} + metadata CSV downloaded.` })
     }, 1500)
   }
 
   // Read locationType from the active record for consistency (Change 2b)
   const isRemoteLocation = getCurrentAttributes().locationType === "FTP" || getCurrentAttributes().locationType === "URL"
+  // Spec conditionality: external_location required only for FTP/URL; LMI needs neither
+  // an external location nor locally staged binaries (images live in the LMI library).
+  const isLmiLocation = getCurrentAttributes().locationType === "LMI"
   const canProceedStep2 = selectedSelectionCode && selectedProduct && getCurrentAttributes().locationType &&
-    (isRemoteLocation || uploadedFiles.length > 0) &&
+    (isRemoteLocation || isLmiLocation || uploadedFiles.length > 0) &&
     (uploadLevel === "product" || 
      (uploadLevel === "product-color" && selectedColorCode) ||
      (uploadLevel === "gtin" && selectedGtin))
-  // In per-image mode, require every file to have all required attrs set (Change 2a)
-  const missingAttrCount = (() => {
-    if (applyToAll) return 0
-    return uploadedFiles.filter((_, i) => {
-      const a = attributesByImage[i]
-      return !a?.imageType || !a?.purpose || !a?.orientation
-    }).length
-  })()
-  const canProceedStep3 = applyToAll
-    ? !!(getCurrentAttributes().imageType && getCurrentAttributes().purpose && getCurrentAttributes().orientation)
-    : missingAttrCount === 0 && uploadedFiles.length > 0
+  // Every image must have its per-shot orientation set (Change 2a / P0.2a);
+  // product-wide required fields are checked once.
+  const missingAttrCount = uploadedFiles.filter((_, i) => !attributesByImage[i]?.orientation).length
+  const canProceedStep3 = !!(attributes.imageType && attributes.purpose) &&
+    (uploadedFiles.length > 0 ? missingAttrCount === 0 : !!getCurrentAttributes().orientation)
 
   // Simulates per-file upload progression — no artificial failures (Task 3)
   const simulateSubmission = useCallback(() => {
@@ -1433,6 +1708,7 @@ End of Metadata Export
         if (i === ids.length - 1) {
           setTimeout(() => {
             setSubmissionPhase("complete")
+            toast({ title: "Upload complete", description: `${ids.length} image${ids.length !== 1 ? "s" : ""} submitted to TGC.` })
             // 300ms dwell on "Upload complete" state before advancing
             setTimeout(() => setShowProductMedia(true), 300)
           }, 300)
@@ -1542,11 +1818,7 @@ End of Metadata Export
                 const fieldKeys = Object.keys(attributes) as Array<keyof typeof attributes>
                 const seed = { ...attributes }
                 fieldKeys.forEach((key) => {
-                  const values = new Set(selectedFiles.map(f => {
-                    const idx = uploadedFiles.indexOf(f)
-                    const attrs = applyToAll ? attributes : (attributesByImage[idx] || attributes)
-                    return attrs[key]
-                  }))
+                  const values = new Set(selectedFiles.map(f => effectiveAttrs(uploadedFiles.indexOf(f))[key]))
                   seed[key] = values.size === 1 ? [...values][0] : ""
                 })
                 setBulkEditDialog({ open: true, draft: seed, touched: {} })
@@ -1564,7 +1836,7 @@ End of Metadata Export
             </button>
             <button
               className="p-1.5 hover:bg-muted border border-border"
-              title="View AI Attributes"
+              title={hasExtraction ? "View AI Attributes" : "Run AI"}
               onClick={() => setShowAiAttributesDrawer(true)}
             >
               <Sparkles className="size-4 text-muted-foreground" />
@@ -1634,6 +1906,9 @@ End of Metadata Export
           </div>
         </div>
 
+        {/* Data-richness meter — post-submit view (P1.2) */}
+        {renderRichnessMeter()}
+
         {/* Syndication info block — supplier post-submit only (Change 6) */}
         {portalType === "supplier" && (
           <div className="rounded border border-border bg-card p-3 flex items-start gap-3">
@@ -1681,7 +1956,7 @@ End of Metadata Export
         ) : (
           <div className="flex flex-col gap-3">
             {uploadedFiles.map((file, idx) => {
-              const cardAttrs = applyToAll ? attributes : (attributesByImage[idx] || attributes)
+              const cardAttrs = effectiveAttrs(idx)
               const imageLevelLabel = uploadLevel === "product"
                 ? "Product Level"
                 : uploadLevel === "gtin"
@@ -1777,15 +2052,15 @@ End of Metadata Export
                       </div>
                       <div className="flex border-b border-border">
                         <div className="w-44 bg-muted/20 px-3 py-2 font-medium text-foreground shrink-0">Pixel Density (DPI):</div>
-                        <div className="flex-1 px-3 py-2 text-foreground">{cardAttrs.pixelDensity || ""}</div>
+                        <div className="flex-1 px-3 py-2 text-foreground">{file.measured?.dpi ?? ""}</div>
                       </div>
                       <div className="flex border-b border-border">
                         <div className="w-44 bg-muted/20 px-3 py-2 font-medium text-foreground shrink-0">Height:</div>
-                        <div className="flex-1 px-3 py-2 text-foreground">{cardAttrs.height || ""}</div>
+                        <div className="flex-1 px-3 py-2 text-foreground">{file.measured?.height != null ? `${file.measured.height} px` : ""}</div>
                       </div>
                       <div className="flex border-b border-border">
                         <div className="w-44 bg-muted/20 px-3 py-2 font-medium text-foreground shrink-0">Width:</div>
-                        <div className="flex-1 px-3 py-2 text-foreground">{cardAttrs.width || ""}</div>
+                        <div className="flex-1 px-3 py-2 text-foreground">{file.measured?.width != null ? `${file.measured.width} px` : ""}</div>
                       </div>
                       <div className="flex border-b border-border">
                         <div className="w-44 bg-muted/20 px-3 py-2 font-medium text-foreground shrink-0">Image Style:</div>
@@ -1946,12 +2221,14 @@ End of Metadata Export
                             Replace image
                             <input
                               type="file"
-                              accept="image/jpeg,image/png,image/webp,.jpg,.jpeg,.png,.webp"
+                              accept="image/jpeg,.jpg,.jpeg"
                               className="hidden"
                               onChange={(e) => {
                                 const f = e.target.files?.[0]
                                 if (!f) return
-                                const { errors } = validateImageBatch([f])
+                                // Uniqueness excludes the file being replaced — replacing under the same name is fine.
+                                const otherNames = uploadedFiles.filter((_, i) => i !== editAttrDialog.fileIndex).map(u => u.name)
+                                const { errors } = validateImageBatch([f], otherNames)
                                 if (errors.length) { setValidationErrors(prev => [...prev, ...errors]); return }
                                 setPendingReplaceFile(f)
                                 setReplacementAttrChecked(false)
@@ -1967,7 +2244,7 @@ End of Metadata Export
                             </button>
                           )}
                         </div>
-                        <p className="text-xs text-muted-foreground">Max 4 MB &middot; JPG, PNG, or WebP</p>
+                        <p className="text-xs text-muted-foreground">Max 500 KB &middot; JPG only</p>
                       </div>
                     </div>
                   </div>
@@ -1997,10 +2274,11 @@ End of Metadata Export
                     <StepTwoForm
                       currentAttrs={editAttrDialog.draft}
                       updateAttrs={(newAttrs) => setEditAttrDialog(prev => ({ ...prev, draft: newAttrs }))}
-                      advancedOpen={advancedOpen}
-                      setAdvancedOpen={setAdvancedOpen}
                       uploadLevel={uploadLevel}
                       autoData={getAutoPopulatedData()}
+                      measuredFiles={uploadedFiles[editAttrDialog.fileIndex]
+                        ? [{ name: uploadedFiles[editAttrDialog.fileIndex].name, measured: uploadedFiles[editAttrDialog.fileIndex].measured }]
+                        : []}
                     />
                   </div>
                 </div>
@@ -2050,14 +2328,30 @@ End of Metadata Export
                             status: "complete",
                           }
                           setUploadedFiles(prev => prev.map((u, i) => i === editAttrDialog.fileIndex ? newFile : u))
+                          // Re-measure the replacement binary — its dimensions/DPI supersede the old file's.
+                          void measureImageFile(f).then(measured => {
+                            setUploadedFiles(prev => prev.map(u => (u.id === newFile.id ? { ...u, measured } : u)))
+                          })
                           clearExtraction() // replaced image invalidates the product-level extraction
+                          clearShotSuggestions() // filename/content changed under this index
                           setPendingReplaceFile(null)
                         }
-                        // Commit attribute edits (Acceptance #8)
-                        if (applyToAll) {
-                          setAttributes(editAttrDialog.draft)
-                        } else {
-                          setAttributesByImage(prev => ({ ...prev, [editAttrDialog.fileIndex]: editAttrDialog.draft }))
+                        // Commit attribute edits (Acceptance #8): product-wide keys apply to the
+                        // whole product; per-shot keys to this image only (P0.2a).
+                        {
+                          const draft = editAttrDialog.draft
+                          setAttributes(prev => {
+                            const next = { ...prev }
+                            ;(Object.keys(draft) as Array<keyof typeof attributes>).forEach(k => {
+                              if (!isPerShotKey(k)) next[k] = draft[k]
+                            })
+                            return next
+                          })
+                          setAttributesByImage(prev => {
+                            const rec = { ...(prev[editAttrDialog.fileIndex] ?? attributes) }
+                            PER_SHOT_KEYS.forEach(k => { rec[k] = draft[k] })
+                            return { ...prev, [editAttrDialog.fileIndex]: rec }
+                          })
                         }
                         setEditSaveConfirmed(true)
                         setTimeout(() => {
@@ -2118,6 +2412,7 @@ End of Metadata Export
                       onClick={() => {
                         deleteFilesByIds(new Set(targetFiles.map(f => f.id)))
                         setBulkDeleteConfirmOpen(false)
+                        toast({ title: "Images deleted", description: `${targetFiles.length} image${targetFiles.length !== 1 ? "s" : ""} removed from this product.` })
                       }}
                     >
                       <Trash2 className="size-4 mr-2" />
@@ -2144,7 +2439,7 @@ End of Metadata Export
                   <DialogHeader>
                     <DialogTitle>Edit {targetIds.size} Selected Image{targetIds.size !== 1 ? "s" : ""}</DialogTitle>
                     <p className="text-xs text-muted-foreground mt-0.5">
-                      Fields marked "Mixed" differ across the selected images. Only fields you change here will be applied — untouched fields keep each image's existing value.
+                      Per-shot fields only — product-wide attributes are edited once on the product. Fields marked "Mixed" differ across the selected images. Only fields you change here will be applied — untouched fields keep each image's existing value.
                     </p>
                   </DialogHeader>
                   <div className="overflow-y-auto flex-1 pr-1 py-2">
@@ -2160,10 +2455,9 @@ End of Metadata Export
                           touched: changedKey ? { ...prev.touched, [changedKey]: true } : prev.touched,
                         }))
                       }}
-                      advancedOpen={advancedOpen}
-                      setAdvancedOpen={setAdvancedOpen}
                       uploadLevel={uploadLevel}
                       autoData={getAutoPopulatedData()}
+                      hideProductWide
                     />
                   </div>
                   <div className="flex items-center justify-end gap-2 pt-3 border-t border-border">
@@ -2173,28 +2467,21 @@ End of Metadata Export
                     <Button
                       disabled={Object.keys(bulkEditDialog.touched).length === 0}
                       onClick={() => {
+                        // Bulk edit writes per-shot keys only (product-wide fields are hidden above).
                         const touchedKeys = (Object.keys(bulkEditDialog.touched) as Array<keyof typeof attributes>)
-                          .filter(k => bulkEditDialog.touched[k])
+                          .filter(k => bulkEditDialog.touched[k] && isPerShotKey(k))
                         setAttributesByImage(prev => {
                           const next = { ...prev }
                           uploadedFiles.forEach((f, idx) => {
-                            const existing = applyToAll ? attributes : (prev[idx] || attributes)
-                            if (!targetIds.has(f.id)) {
-                              // Not part of this bulk edit — snapshot its current effective value so it
-                              // keeps displaying correctly once applyToAll flips to false below.
-                              next[idx] = next[idx] || existing
-                              return
-                            }
-                            const merged = { ...existing }
+                            if (!targetIds.has(f.id)) return
+                            const merged = { ...(prev[idx] || attributes) }
                             touchedKeys.forEach((k) => { merged[k] = bulkEditDialog.draft[k] })
                             next[idx] = merged
                           })
                           return next
                         })
-                        // attributesByImage is only read in per-image mode — a bulk edit on a subset
-                        // implies per-image mode, otherwise the edit would have no visible effect.
-                        if (applyToAll) setApplyToAll(false)
                         setBulkEditDialog({ open: false, draft: {} as typeof attributes, touched: {} })
+                        toast({ title: "Bulk edit applied", description: `Updated ${touchedKeys.length} field${touchedKeys.length !== 1 ? "s" : ""} on ${targetIds.size} image${targetIds.size !== 1 ? "s" : ""}.` })
                       }}
                     >
                       Save
@@ -2223,9 +2510,35 @@ End of Metadata Export
                 AI-Extracted Attributes
               </SheetTitle>
             </SheetHeader>
-            <div className="px-4 pb-4">
-              {hasExtraction ? renderAiResultsCard() : (
-                <AiAttributesTable attributes={[]} />
+            <div className="px-4 pb-4 flex flex-col gap-4">
+              {/* P1.2: extraction can be run from here after upload — not only during the wizard */}
+              {isExtracting && (
+                <div className="flex items-center gap-3 rounded border border-border bg-muted/20 p-4">
+                  <Loader2 className="size-5 animate-spin text-primary" />
+                  <p className="text-sm text-foreground">Analyzing {aiExtraction?.imageCount ?? uploadedFiles.length} image{(aiExtraction?.imageCount ?? uploadedFiles.length) !== 1 ? "s" : ""} for {aiCategory} attributes…</p>
+                </div>
+              )}
+              {isError && (
+                <div className="flex flex-col gap-3 rounded border border-destructive/30 bg-destructive/5 p-4">
+                  <div className="flex items-start gap-2">
+                    <AlertCircle className="size-4 text-destructive mt-0.5 shrink-0" />
+                    <p className="text-sm text-foreground">{aiExtraction?.error ?? "Extraction failed."}</p>
+                  </div>
+                  <Button variant="outline" size="sm" className="w-fit" onClick={runExtraction}>Try again</Button>
+                </div>
+              )}
+              {isComplete && renderAiResultsCard()}
+              {!hasExtraction && (
+                uploadedFiles.length > 0 ? (
+                  <>
+                    <p className="text-sm text-muted-foreground">
+                      No extraction has run for this product yet. Run it now — the images are already uploaded.
+                    </p>
+                    {renderAiIdleControls(false)}
+                  </>
+                ) : (
+                  <AiAttributesTable attributes={[]} />
+                )
               )}
             </div>
           </SheetContent>
@@ -2369,7 +2682,9 @@ End of Metadata Export
         <div>
           <h1 className="text-xl font-semibold text-foreground">Upload Images</h1>
           <p className="mt-1 text-sm text-muted-foreground">
-            Step {currentStep} of 3: {steps[currentStep - 1].description}
+            {/* Landing's "Select Upload Level" is step 1 of the advertised 4-step flow,
+                so the wizard's internal steps 1-3 display as 2-4. */}
+            Step {currentStep + 1} of 4: {steps[currentStep - 1].description}
           </p>
         </div>
         <Button variant="ghost" size="sm" onClick={onCancel} className="gap-1 text-muted-foreground">
@@ -2393,7 +2708,7 @@ End of Metadata Export
                     : "bg-muted text-muted-foreground"
                 )}
               >
-                {currentStep > step.number ? <Check className="size-4" /> : step.number}
+                {currentStep > step.number ? <Check className="size-4" /> : step.number + 1}
               </div>
               <div className="flex flex-col">
                 <span
@@ -2457,6 +2772,7 @@ End of Metadata Export
                     setSelectedGtin("")
                     // product context changed: drop stale product-level extraction and re-default category
                     clearExtraction()
+                    clearShotSuggestions()
                     setAiCategory("")
                     setAiSkipped(false)
                   }}
@@ -2561,7 +2877,7 @@ End of Metadata Export
               <Label className="text-sm font-medium">
                 Location Type <span className="text-destructive">*</span>
               </Label>
-              <div className="grid gap-3 md:grid-cols-3">
+              <div className="grid gap-3 md:grid-cols-4">
                 {LOCATION_TYPE_OPTIONS.map((option) => (
                   <button
                     key={option.value}
@@ -2578,6 +2894,7 @@ End of Metadata Export
                     <span className="text-xs text-muted-foreground">
                       {option.value === "ACL" && "Upload files from your computer"}
                       {option.value === "FTP" && "Images are on an FTP server"}
+                      {option.value === "LMI" && "Images are managed in your LMI library"}
                       {option.value === "URL" && "Images are at a web URL"}
                     </span>
                   </button>
@@ -2615,7 +2932,7 @@ End of Metadata Export
                   </div>
                   <input
                     type="file"
-                    accept="image/jpeg,image/png,image/webp,.jpg,.jpeg,.png,.webp"
+                    accept="image/jpeg,.jpg,.jpeg"
                     multiple
                     className="hidden"
                     id="file-upload"
@@ -2627,7 +2944,7 @@ End of Metadata Export
                     </Button>
                   </label>
                   <p className="text-xs text-muted-foreground">
-                    Max 4 MB each &middot; JPG, PNG, or WebP &middot;{" "}
+                    Max 500 KB each &middot; JPG only &middot;{" "}
                     <a href="#" className="text-tg-link hover:underline">
                       View GS1 guidelines
                     </a>
@@ -2753,7 +3070,7 @@ End of Metadata Export
                     <span className="text-xs text-muted-foreground">Add More</span>
                     <input
                       type="file"
-                      accept="image/jpeg,image/png,image/webp,.jpg,.jpeg,.png,.webp"
+                      accept="image/jpeg,.jpg,.jpeg"
                       multiple
                       className="hidden"
                       id="file-upload-more"
@@ -2775,6 +3092,8 @@ End of Metadata Export
                 Configure attributes for {uploadedFiles.length} uploaded image{uploadedFiles.length !== 1 ? "s" : ""}.
               </p>
             </div>
+
+            {renderRichnessMeter()}
 
             {/* ── Optional: Extract Extended Attributes with AI (sub-section, not a numbered step) ── */}
             <div className="rounded border border-border bg-card">
@@ -2806,65 +3125,7 @@ End of Metadata Export
               {!aiSkipped && (
                 <div className="flex flex-col gap-4 p-4">
                   {/* Idle / pre-extraction controls */}
-                  {!hasExtraction && (
-                    <>
-                      <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:flex-wrap">
-                        <div className="flex flex-col gap-1">
-                          <Label htmlFor="ai-category" className="text-xs text-muted-foreground">Product category</Label>
-                          <Select value={aiCategory} onValueChange={(v) => { setAiCategory(v); clearExtraction() }}>
-                            <SelectTrigger id="ai-category" className="w-56 bg-background">
-                              <SelectValue placeholder="Select a category..." />
-                            </SelectTrigger>
-                            <SelectContent>
-                              {PRODUCT_CATEGORIES.map(c => (
-                                <SelectItem key={c} value={c}>{c}</SelectItem>
-                              ))}
-                            </SelectContent>
-                          </Select>
-                        </div>
-                        {/* GPC brick — attributes are scoped to this single classification */}
-                        <div className="flex flex-col gap-1">
-                          <Label htmlFor="ai-brick" className="text-xs text-muted-foreground">Product brick (GPC)</Label>
-                          <Select
-                            value={aiBrick?.code ?? ""}
-                            onValueChange={(code) => { setAiBrick(bricksForCategory.find(b => b.code === code) ?? null); clearExtraction() }}
-                            disabled={!aiCategory || bricksForCategory.length === 0}
-                          >
-                            <SelectTrigger id="ai-brick" className="w-72 bg-background">
-                              <SelectValue placeholder={aiCategory ? "Select a brick..." : "Select a category first"} />
-                            </SelectTrigger>
-                            <SelectContent>
-                              {bricksForCategory.map(b => (
-                                <SelectItem key={b.code} value={b.code}>{b.name}</SelectItem>
-                              ))}
-                            </SelectContent>
-                          </Select>
-                        </div>
-                        <div className="flex items-center gap-2">
-                          <Button onClick={runExtraction} disabled={!aiCategory || !aiBrick || uploadedFiles.length === 0} className="gap-2">
-                            <Sparkles className="size-4" />
-                            Extract Extended Attributes with AI
-                          </Button>
-                          <Button variant="ghost" onClick={() => setAiSkipped(true)}>
-                            Skip AI Extraction
-                          </Button>
-                        </div>
-                      </div>
-                      {aiCategory && bricksForCategory.length === 0 ? (
-                        <p className="text-xs text-tg-warning">
-                          No GS1 brick mapping is available for this category — continue entering attributes manually.
-                        </p>
-                      ) : (
-                        <p className="text-xs text-muted-foreground">
-                          {!aiBrick && "Select the product brick to scope attributes to that classification. "}
-                          {uploadedFiles.length === 1
-                            ? "1 image will be analyzed for this product."
-                            : `${uploadedFiles.length} images will be analyzed together for this product.`}{" "}
-                          All uploaded images are treated as evidence for the same product.
-                        </p>
-                      )}
-                    </>
-                  )}
+                  {!hasExtraction && renderAiIdleControls(true)}
 
                   {/* Loading state */}
                   {isExtracting && (
@@ -2899,28 +3160,87 @@ End of Metadata Export
               )}
             </div>
 
-            {/* Apply to All Checkbox with badge (Change 3b) */}
-            <div className="flex items-center gap-2 rounded border border-border bg-muted/30 p-3">
-              <Checkbox
-                id="apply-all"
-                checked={applyToAll}
-                onCheckedChange={(checked) => {
-                  setApplyToAll(checked as boolean)
-                  setActiveAttributeImageIndex(0)
-                }}
-              />
-              <label htmlFor="apply-all" className="text-sm font-medium text-foreground cursor-pointer">
-                Apply same attributes to all {uploadedFiles.length} images
-              </label>
-              <span className="ml-auto text-xs text-muted-foreground">
-                {applyToAll
-                  ? `Applied to ${uploadedFiles.length} images`
-                  : `Per-image — editing ${activeAttributeImageIndex + 1} of ${uploadedFiles.length}`}
-              </span>
-            </div>
+            {/* Per-shot AI suggestions (P0.2b) — optional; proposes the fields the camera angle
+                shows. Nothing is written to any image without an explicit Accept. */}
+            {uploadedFiles.length > 0 && (
+              <div className="rounded border border-border bg-card">
+                <div className="flex items-start gap-3 border-b border-border p-4">
+                  <div className="flex size-9 shrink-0 items-center justify-center rounded bg-primary/10">
+                    <Sparkles className="size-5 text-primary" />
+                  </div>
+                  <div className="flex-1">
+                    <h3 className="text-sm font-semibold text-foreground">Suggest per-shot attributes with AI</h3>
+                    <p className="mt-0.5 text-sm text-muted-foreground">
+                      Proposes orientation, facing, angle, and a draft description for each image. Optional — accept or dismiss per image.
+                    </p>
+                  </div>
+                  {shotSuggestions === null && !shotSuggestLoading && (
+                    <Button variant="outline" size="sm" onClick={() => void runShotSuggestions()}>
+                      Suggest for {uploadedFiles.length} image{uploadedFiles.length !== 1 ? "s" : ""}
+                    </Button>
+                  )}
+                  {shotSuggestions !== null && shotSuggestions.some(s => s.status === "pending") && (
+                    <Button variant="outline" size="sm" className="gap-1" onClick={() => acceptShotSuggestions(shotSuggestions.filter(s => s.status === "pending"))}>
+                      <Check className="size-3.5" />
+                      Accept all ({shotSuggestions.filter(s => s.status === "pending").length})
+                    </Button>
+                  )}
+                </div>
+                {shotSuggestLoading && (
+                  <div className="flex items-center gap-3 p-4">
+                    <Loader2 className="size-5 animate-spin text-primary" />
+                    <p className="text-sm text-foreground">Analyzing {uploadedFiles.length} image{uploadedFiles.length !== 1 ? "s" : ""} for per-shot attributes…</p>
+                  </div>
+                )}
+                {shotSuggestions !== null && !shotSuggestLoading && (
+                  <div className="flex flex-col divide-y divide-border">
+                    {shotSuggestions.map((s) => (
+                      <div key={s.fileIndex} className={cn("flex items-center gap-3 px-4 py-2", s.status === "dismissed" && "opacity-50")}>
+                        <div className="size-9 shrink-0 rounded border border-border overflow-hidden bg-muted">
+                          {uploadedFiles[s.fileIndex]?.preview && (
+                            <img src={uploadedFiles[s.fileIndex].preview} alt="" className="size-full object-cover" />
+                          )}
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <p className="text-xs font-medium text-foreground truncate">{s.fileName}</p>
+                          <p className="text-xs text-muted-foreground truncate">
+                            {ORIENTATION_OPTIONS.find(o => o.value === s.orientation)?.label ?? s.orientation}
+                            {s.facing && ` · Facing ${FACING_OPTIONS.find(o => o.value === s.facing)?.label ?? s.facing}`}
+                            {s.description && ` · “${s.description}”`}
+                          </p>
+                        </div>
+                        <span className={cn(
+                          "inline-flex shrink-0 items-center rounded-full px-2 py-0.5 text-xs font-medium",
+                          s.confidence >= 0.85 ? "bg-tg-success/15 text-tg-success" : "bg-tg-warning/15 text-tg-warning"
+                        )}>
+                          {Math.round(s.confidence * 100)}%
+                        </span>
+                        {s.status === "accepted" ? (
+                          <span className="inline-flex shrink-0 items-center gap-1 text-xs font-medium text-tg-success">
+                            <Check className="size-3.5" /> Accepted
+                          </span>
+                        ) : s.status === "dismissed" ? (
+                          <span className="text-xs text-muted-foreground shrink-0">Dismissed</span>
+                        ) : (
+                          <div className="flex items-center gap-1 shrink-0">
+                            <Button variant="outline" size="sm" className="h-7 gap-1 px-2 text-xs" onClick={() => acceptShotSuggestions([s])}>
+                              <Check className="size-3" /> Accept
+                            </Button>
+                            <Button variant="outline" size="sm" className="h-7 gap-1 px-2 text-xs text-muted-foreground" onClick={() => dismissShotSuggestion(s.fileIndex)}>
+                              <X className="size-3" /> Dismiss
+                            </Button>
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
 
-            {/* Two-column per-image layout (Change 3b) — only when applyToAll=false and multiple files */}
-            {!applyToAll && uploadedFiles.length > 1 ? (
+            {/* P0.2a: product-wide fields are entered once; per-shot fields are always per image.
+                With multiple files, the two-column layout with the image selector is the default. */}
+            {uploadedFiles.length > 1 ? (
               <div className="flex gap-4">
                 {/* Left column: thumbnail list ~25% */}
                 <div className="w-1/4 flex flex-col gap-1 border border-border rounded overflow-hidden">
@@ -2956,14 +3276,10 @@ End of Metadata Export
                         )}
                       </div>
                       <span className="truncate">{file.name.slice(0, 18)}</span>
-                      {/* Per-row completion indicator — directions: "Per-row indicator" */}
-                      {(() => {
-                        const a = attributesByImage[idx]
-                        const complete = !!(a?.imageType && a?.purpose && a?.orientation)
-                        return complete
-                          ? <Check className="size-3.5 shrink-0 ml-auto text-tg-success" />
-                          : <AlertCircle className="size-3.5 shrink-0 ml-auto text-tg-warning" />
-                      })()}
+                      {/* Per-row completion indicator: per-shot orientation is what varies per image */}
+                      {attributesByImage[idx]?.orientation
+                        ? <Check className="size-3.5 shrink-0 ml-auto text-tg-success" />
+                        : <AlertCircle className="size-3.5 shrink-0 ml-auto text-tg-warning" />}
                     </button>
                   ))}
                 </div>
@@ -2979,14 +3295,18 @@ End of Metadata Export
                         <FileImage className="size-8 text-muted-foreground" />
                       )}
                     </div>
-                    {/* Copy from another image dropdown */}
+                    {/* Copy per-shot values from another image */}
                     <div className="flex flex-col gap-1">
-                      <p className="text-xs text-muted-foreground">Copy attributes from image:</p>
+                      <p className="text-xs text-muted-foreground">Copy per-shot attributes from image:</p>
                       <Select
                         onValueChange={(val) => {
                           const srcIdx = parseInt(val)
-                          const srcAttrs = attributesByImage[srcIdx] || attributes
-                          setAttributesByImage(prev => ({ ...prev, [activeAttributeImageIndex]: { ...srcAttrs } }))
+                          const src = effectiveAttrs(srcIdx)
+                          setAttributesByImage(prev => {
+                            const rec = { ...(prev[activeAttributeImageIndex] ?? attributes) }
+                            PER_SHOT_KEYS.forEach(k => { rec[k] = src[k] })
+                            return { ...prev, [activeAttributeImageIndex]: rec }
+                          })
                         }}
                       >
                         <SelectTrigger className="w-52 h-8 text-xs bg-background">
@@ -3003,32 +3323,34 @@ End of Metadata Export
                     </div>
                   </div>
 
-                  {/* Required section */}
+                  {/* Product-wide + active image's per-shot form */}
                   <StepTwoForm
                     currentAttrs={getCurrentAttributes()}
                     updateAttrs={updateCurrentAttributes}
-                    advancedOpen={advancedOpen}
-                    setAdvancedOpen={setAdvancedOpen}
                     uploadLevel={uploadLevel}
                     autoData={getAutoPopulatedData()}
+                    measuredFiles={uploadedFiles[activeAttributeImageIndex]
+                      ? [{ name: uploadedFiles[activeAttributeImageIndex].name, measured: uploadedFiles[activeAttributeImageIndex].measured }]
+                      : []}
+                    onApplyPerShotToAll={applyPerShotToAll}
                   />
                 </div>
               </div>
             ) : (
-              /* applyToAll or single file: standard layout */
+              /* Single file (or remote/LMI with none staged): standard layout */
               <div className="flex flex-col gap-4">
-                {/* Inline preview (Change 3c) — shows first file */}
+                {/* Inline preview (Change 3c) */}
                 {uploadedFiles.length > 0 && (
                   <div className="flex items-center gap-3">
                     <div className="size-24 shrink-0 rounded border border-border overflow-hidden bg-muted flex items-center justify-center">
-                      {uploadedFiles[applyToAll ? 0 : activeAttributeImageIndex]?.preview ? (
-                        <img src={uploadedFiles[applyToAll ? 0 : activeAttributeImageIndex].preview} alt="" className="size-full object-cover" />
+                      {uploadedFiles[activeAttributeImageIndex]?.preview ? (
+                        <img src={uploadedFiles[activeAttributeImageIndex].preview} alt="" className="size-full object-cover" />
                       ) : (
                         <FileImage className="size-8 text-muted-foreground" />
                       )}
                     </div>
                     <p className="text-xs text-muted-foreground">
-                      {applyToAll ? `Preview of first file — attributes apply to all ${uploadedFiles.length}` : `Editing: ${uploadedFiles[activeAttributeImageIndex]?.name}`}
+                      Editing: {uploadedFiles[activeAttributeImageIndex]?.name}
                     </p>
                   </div>
                 )}
@@ -3036,16 +3358,15 @@ End of Metadata Export
                 <StepTwoForm
                   currentAttrs={getCurrentAttributes()}
                   updateAttrs={updateCurrentAttributes}
-                  advancedOpen={advancedOpen}
-                  setAdvancedOpen={setAdvancedOpen}
                   uploadLevel={uploadLevel}
                   autoData={getAutoPopulatedData()}
+                  measuredFiles={uploadedFiles.map(f => ({ name: f.name, measured: f.measured }))}
                 />
               </div>
             )}
 
             {/* Per-image missing attributes hint (Change 2a) */}
-            {!applyToAll && missingAttrCount > 0 && (
+            {missingAttrCount > 0 && (
               <p className="text-xs text-destructive">
                 {missingAttrCount} of {uploadedFiles.length} images missing required attributes.
               </p>
@@ -3067,6 +3388,8 @@ End of Metadata Export
                 Review your upload details before submitting. Click &quot;Confirm &amp; Upload&quot; to proceed.
               </p>
             </div>
+
+            {renderRichnessMeter()}
 
             {/* Target Selection Summary */}
             <div className="rounded border border-border bg-muted/30 p-4">
@@ -3128,78 +3451,72 @@ End of Metadata Export
               </div>
             </div>
 
-            {/* Attributes Summary */}
+            {/* Attributes Summary — product-wide once, then per-shot values per image (P0.2a) */}
             <div className="rounded border border-border bg-card p-4">
-              <h3 className="text-sm font-semibold text-foreground mb-3">
-                Image Attributes {applyToAll ? "(Applied to all)" : "(Per-image)"}
-              </h3>
-              
-              {applyToAll ? (
-                <div className="max-h-48 overflow-y-auto">
-                  <div className="grid grid-cols-2 gap-x-8 gap-y-2 text-sm">
-                    <div className="flex justify-between">
-                      <span className="text-muted-foreground">Image Type:</span>
-                      <span className="font-medium text-foreground">
-                        {IMAGE_TYPE_OPTIONS.find(o => o.value === attributes.imageType)?.label || attributes.imageType}
-                      </span>
-                    </div>
-                    <div className="flex justify-between">
-                      <span className="text-muted-foreground">Purpose:</span>
-                      <span className="font-medium text-foreground">
-                        {PURPOSE_OPTIONS.find(o => o.value === attributes.purpose)?.label || attributes.purpose}
-                      </span>
-                    </div>
-                    <div className="flex justify-between">
-                      <span className="text-muted-foreground">Orientation:</span>
-                      <span className="font-medium text-foreground">
-                        {ORIENTATION_OPTIONS.find(o => o.value === attributes.orientation)?.label || attributes.orientation}
-                      </span>
-                    </div>
-                    <div className="flex justify-between">
-                      <span className="text-muted-foreground">Location Type:</span>
-                      <span className="font-medium text-foreground">
-                        {attributes.locationType || "ACL"}
-                      </span>
-                    </div>
-                  </div>
+              <h3 className="text-sm font-semibold text-foreground mb-3">Product-wide Attributes</h3>
+              <div className="grid grid-cols-2 gap-x-8 gap-y-2 text-sm mb-4">
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">Image Type:</span>
+                  <span className="font-medium text-foreground">
+                    {IMAGE_TYPE_OPTIONS.find(o => o.value === attributes.imageType)?.label || attributes.imageType}
+                  </span>
                 </div>
-              ) : (
-                <div className="max-h-48 overflow-y-auto overflow-x-auto">
-                  <table className="w-full text-sm">
-                    <thead className="bg-muted/30 sticky top-0">
-                      <tr>
-                        <th className="px-3 py-2 text-left font-medium text-foreground">File</th>
-                        <th className="px-3 py-2 text-left font-medium text-foreground">Image Type</th>
-                        <th className="px-3 py-2 text-left font-medium text-foreground">Purpose</th>
-                        <th className="px-3 py-2 text-left font-medium text-foreground">Orientation</th>
-                        <th className="px-3 py-2 text-left font-medium text-foreground">Location</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {uploadedFiles.map((file, idx) => {
-                        const imgAttrs = attributesByImage[idx] || attributes
-                        return (
-                          <tr key={idx} className="border-t border-border">
-                            <td className="px-3 py-2 text-foreground truncate max-w-[150px]" title={file.name}>{file.name}</td>
-                            <td className="px-3 py-2 text-foreground">
-                              {IMAGE_TYPE_OPTIONS.find(o => o.value === imgAttrs.imageType)?.label || imgAttrs.imageType}
-                            </td>
-                            <td className="px-3 py-2 text-foreground">
-                              {PURPOSE_OPTIONS.find(o => o.value === imgAttrs.purpose)?.label || imgAttrs.purpose}
-                            </td>
-                            <td className="px-3 py-2 text-foreground">
-                              {ORIENTATION_OPTIONS.find(o => o.value === imgAttrs.orientation)?.label || imgAttrs.orientation}
-                            </td>
-                            <td className="px-3 py-2 text-foreground">
-                              {imgAttrs.locationType || "ACL"}
-                            </td>
-                          </tr>
-                        )
-                      })}
-                    </tbody>
-                  </table>
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">Purpose:</span>
+                  <span className="font-medium text-foreground">
+                    {PURPOSE_OPTIONS.find(o => o.value === attributes.purpose)?.label || attributes.purpose}
+                  </span>
                 </div>
-              )}
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">Location Type:</span>
+                  <span className="font-medium text-foreground">
+                    {attributes.locationType || "ACL"}
+                  </span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">Image Style:</span>
+                  <span className="font-medium text-foreground">
+                    {IMAGE_STYLE_OPTIONS.find(o => o.value === attributes.imageStyle)?.label || attributes.imageStyle || "—"}
+                  </span>
+                </div>
+              </div>
+
+              <h3 className="text-sm font-semibold text-foreground mb-3">Per-shot Attributes</h3>
+              <div className="max-h-48 overflow-y-auto overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead className="bg-muted/30 sticky top-0">
+                    <tr>
+                      <th className="px-3 py-2 text-left font-medium text-foreground">File</th>
+                      <th className="px-3 py-2 text-left font-medium text-foreground">Orientation</th>
+                      <th className="px-3 py-2 text-left font-medium text-foreground">Facing</th>
+                      <th className="px-3 py-2 text-left font-medium text-foreground">Angle</th>
+                      <th className="px-3 py-2 text-left font-medium text-foreground">Description</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {uploadedFiles.map((file, idx) => {
+                      const imgAttrs = effectiveAttrs(idx)
+                      return (
+                        <tr key={idx} className="border-t border-border">
+                          <td className="px-3 py-2 text-foreground truncate max-w-[150px]" title={file.name}>{file.name}</td>
+                          <td className="px-3 py-2 text-foreground">
+                            {ORIENTATION_OPTIONS.find(o => o.value === imgAttrs.orientation)?.label || imgAttrs.orientation || "—"}
+                          </td>
+                          <td className="px-3 py-2 text-foreground">
+                            {FACING_OPTIONS.find(o => o.value === imgAttrs.facing)?.label || imgAttrs.facing || "—"}
+                          </td>
+                          <td className="px-3 py-2 text-foreground">
+                            {ANGLE_OPTIONS.find(o => o.value === imgAttrs.angle)?.label || imgAttrs.angle || "—"}
+                          </td>
+                          <td className="px-3 py-2 text-foreground truncate max-w-[180px]" title={imgAttrs.imageDescription}>
+                            {imgAttrs.imageDescription || "—"}
+                          </td>
+                        </tr>
+                      )
+                    })}
+                  </tbody>
+                </table>
+              </div>
             </div>
 
             {/* AI-Extracted Product Attributes — product-level, shown once (not per image) */}
@@ -3217,6 +3534,33 @@ End of Metadata Export
                   imageCount={aiExtraction.imageCount}
                   imageNames={aiExtraction.imageNames}
                 />
+              </div>
+            )}
+
+            {/* Pending-suggestion interlock (P0.3): AI suggestions that were generated but never
+                accepted are dropped at submission — make that a visible decision, not a default. */}
+            {pendingExtractedCount > 0 && (
+              <div className="rounded border border-tg-warning/40 bg-tg-warning/5 p-4 flex flex-col gap-3">
+                <div className="flex items-start gap-3">
+                  <AlertCircle className="size-4 text-tg-warning mt-0.5 shrink-0" />
+                  <div className="flex flex-col gap-1">
+                    <p className="text-sm font-medium text-foreground">
+                      {pendingExtractedCount} AI-suggested attribute{pendingExtractedCount !== 1 ? "s are" : " is"} still pending review
+                    </p>
+                    <p className="text-sm text-muted-foreground">
+                      Pending suggestions will <span className="font-medium text-foreground">not</span> be submitted unless accepted. Accept them now, or go back to review them individually.
+                    </p>
+                  </div>
+                </div>
+                <div className="flex items-center gap-2 pl-7">
+                  <Button variant="outline" size="sm" className="gap-1" onClick={acceptAllPending}>
+                    <Check className="size-3.5" />
+                    Accept all {pendingExtractedCount}
+                  </Button>
+                  <Button variant="ghost" size="sm" onClick={handleBack}>
+                    Review suggestions
+                  </Button>
+                </div>
               </div>
             )}
 
