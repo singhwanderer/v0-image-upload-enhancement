@@ -96,9 +96,14 @@ export function useAiAttributes({ uploadedFiles, attributes, setAttributesByImag
   // ── Brick classification (P1.1) — AI proposes a brick from the images; the human confirms
   // or corrects via the manual pickers. Confirming (either way) auto-runs extraction only —
   // per-shot suggestion is a separate, independent action (see below). ──
-  const [classificationStatus, setClassificationStatus] = useState<"idle" | "loading" | "proposed" | "confirmed" | "error">("idle")
+  const [classificationStatus, setClassificationStatus] = useState<"idle" | "loading" | "proposed" | "confirmed" | "error" | "inconsistent">("idle")
   const [classificationConfidence, setClassificationConfidence] = useState<number | null>(null)
   const [classificationError, setClassificationError] = useState<string | null>(null)
+  // Set when the images look like they show different products (P1.1 follow-up) — the images
+  // Gemini flagged as not matching the majority, and its short explanation. Resolved by picking
+  // one image as the primary reference (see confirmPrimaryImage) or navigating back to re-upload.
+  const [classificationOutliers, setClassificationOutliers] = useState<string[] | null>(null)
+  const [classificationNote, setClassificationNote] = useState<string | null>(null)
   // Manual category/brick correction panel — hidden by default; "Set manually" / "Change" reveal it.
   const [showManualClassify, setShowManualClassify] = useState(false)
 
@@ -135,15 +140,18 @@ export function useAiAttributes({ uploadedFiles, attributes, setAttributesByImag
   // /api/suggest-brick) so the human confirms/corrects instead of picking blind from
   // dropdowns first. Only ever reaches "proposed" on success — nothing is applied until
   // confirmClassification runs.
-  const runClassification = async () => {
-    if (uploadedFiles.length === 0) return
+  const runClassification = async (filesOverride?: UploadedFile[]) => {
+    const files = filesOverride ?? uploadedFiles
+    if (files.length === 0) return
     setClassificationStatus("loading")
     setClassificationError(null)
+    setClassificationOutliers(null)
+    setClassificationNote(null)
     const productDescription = getAutoPopulatedData().productDescription
 
     try {
       const images = await Promise.all(
-        uploadedFiles.map(async (f) => ({ fileName: f.name, imageBase64: await fileToBase64(f.file), mimeType: f.type }))
+        files.map(async (f) => ({ fileName: f.name, imageBase64: await fileToBase64(f.file), mimeType: f.type }))
       )
       const res = await fetch("/api/suggest-brick", {
         method: "POST",
@@ -154,7 +162,16 @@ export function useAiAttributes({ uploadedFiles, attributes, setAttributesByImag
         const errBody = await res.json().catch(() => null)
         throw new Error(errBody?.error || `Classification failed (${res.status}).`)
       }
-      const data = await res.json() as { category: string; brickCode: string; brickName: string; confidence: number }
+      const data = await res.json() as {
+        category: string; brickCode: string; brickName: string; confidence: number
+        consistent?: boolean; outlierImages?: string[]; note?: string
+      }
+      if (data.consistent === false) {
+        setClassificationOutliers(Array.isArray(data.outlierImages) ? data.outlierImages : [])
+        setClassificationNote(typeof data.note === "string" ? data.note : null)
+        setClassificationStatus("inconsistent")
+        return
+      }
       const brick = getBrick(data.category, data.brickCode)
       if (!brick) throw new Error("Unknown brick returned.")
       setAiCategory(data.category)
@@ -167,6 +184,15 @@ export function useAiAttributes({ uploadedFiles, attributes, setAttributesByImag
     }
   }
 
+  // Resolves an "inconsistent images" warning by re-running classification scoped to just the
+  // one image the user confirms as the primary product reference. Reuses the same route/prompt
+  // unchanged — a single-image request is already a normal case for it.
+  const confirmPrimaryImage = (fileIndex: number) => {
+    const file = uploadedFiles[fileIndex]
+    if (!file) return
+    void runClassification([file])
+  }
+
   // Confirms a category+brick (from the proposal chip, or a manual pick) and auto-runs
   // extraction only. Takes explicit values rather than reading aiCategory/aiBrick state, since
   // a manual pick may call this in the same tick it sets that state (stale-closure otherwise).
@@ -174,6 +200,8 @@ export function useAiAttributes({ uploadedFiles, attributes, setAttributesByImag
     setClassificationConfidence(confidence)
     setClassificationStatus("confirmed")
     setClassificationError(null)
+    setClassificationOutliers(null)
+    setClassificationNote(null)
     setShowManualClassify(false)
     runExtraction(category, brick)
     // Per-shot suggestion (orientation/facing/angle/description) is a GDSN-field accelerator
@@ -400,9 +428,10 @@ export function useAiAttributes({ uploadedFiles, attributes, setAttributesByImag
     aiCategory, setAiCategory, aiBrick, setAiBrick,
     aiExtraction, aiEditing, setAiEditing, shotSuggestions, shotSuggestLoading, shotSuggestError,
     classificationStatus, setClassificationStatus, classificationConfidence, setClassificationConfidence, classificationError,
+    classificationOutliers, classificationNote,
     showManualClassify, setShowManualClassify,
     categoryOptions, valuesForCodeList, bricksForCategory,
-    runExtraction, runClassification, confirmClassification,
+    runExtraction, runClassification, confirmClassification, confirmPrimaryImage,
     setAttributeDecision, updateAttributeField, selectAttributeValue, resolveUnresolvedAttribute,
     clearExtraction, clearShotSuggestions, runShotSuggestions, acceptShotSuggestions, dismissShotSuggestion,
     isExtracting, isComplete, isError, hasExtraction, acceptedExtractedAttributes, pendingExtractedCount, acceptAllPending,
