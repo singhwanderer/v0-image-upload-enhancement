@@ -329,7 +329,7 @@ export function ImageUploadWizard({
   // deletion resets, Review-step gating, the "reset AI" action, and Step 3 summaries).
   const ai = useAiAttributes({ uploadedFiles, attributes, setAttributesByImage, getAutoPopulatedData })
   const {
-    setAiCategory, setAiBrick, setAiSkipped, aiExtraction,
+    setAiCategory, setAiBrick, aiExtraction,
     setClassificationStatus, setClassificationConfidence,
     clearExtraction, clearShotSuggestions,
     isComplete, hasExtraction, acceptedExtractedAttributes,
@@ -1299,7 +1299,7 @@ export function ImageUploadWizard({
             <div className="px-4 pb-4 flex flex-col gap-4">
               {/* P1.2/P1.1: the same classification-first, consolidated AI flow as Step 2 — no
                   skip affordance here (images are already submitted; nothing to skip past). */}
-              {uploadedFiles.length > 0 ? <AiSection ai={ai} uploadedFiles={uploadedFiles} showSkip={false} /> : <AiAttributesTable attributes={[]} />}
+              {uploadedFiles.length > 0 ? <AiSection ai={ai} uploadedFiles={uploadedFiles} /> : <AiAttributesTable attributes={[]} />}
             </div>
           </SheetContent>
         </Sheet>
@@ -1547,7 +1547,6 @@ export function ImageUploadWizard({
                     setAiBrick(null)
                     setClassificationStatus("idle")
                     setClassificationConfidence(null)
-                    setAiSkipped(false)
                   }}
                 >
                   <SelectTrigger className="w-full bg-background">
@@ -1866,7 +1865,7 @@ export function ImageUploadWizard({
               </p>
             </div>
 
-            {<AiSection ai={ai} uploadedFiles={uploadedFiles} showSkip={true} />}
+            {<AiSection ai={ai} uploadedFiles={uploadedFiles} />}
 
             {/* P0.2a: product-wide fields are entered once; per-shot fields are always per image.
                 With multiple files, the two-column layout with the image selector is the default. */}
@@ -1991,6 +1990,7 @@ export function ImageUploadWizard({
                   uploadLevel={uploadLevel}
                   autoData={getAutoPopulatedData()}
                   measuredFiles={uploadedFiles.map(f => ({ name: f.name, measured: f.measured }))}
+                  flatten
                 />
               </div>
             )}

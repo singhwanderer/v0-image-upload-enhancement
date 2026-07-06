@@ -127,8 +127,6 @@ export function useAiAttributes({ uploadedFiles, attributes, setAttributesByImag
   // Selected GPC brick (leaf classification) within the category. Extraction is brick-scoped:
   // only this brick's attributes are ever suggested. Null until a brick is chosen.
   const [aiBrick, setAiBrick] = useState<Brick | null>(null)
-  // Whether the user explicitly skipped the AI extraction section
-  const [aiSkipped, setAiSkipped] = useState(false)
   // Product-level extraction result (one consolidated result for all uploaded images).
   const [aiExtraction, setAiExtraction] = useState<ProductExtractionResult | null>(null)
   // The suggestion row currently being inline-edited (null = none), scoped by index only
@@ -279,7 +277,6 @@ export function useAiAttributes({ uploadedFiles, attributes, setAttributesByImag
     const brick = overrideBrick ?? aiBrick
     if (!category || !brick || uploadedFiles.length === 0) return
     const targets = uploadedFiles.map(f => ({ name: f.name, file: f.file, type: f.type }))
-    setAiSkipped(false)
     setAiEditing(null)
     setAiExtraction({
       category,
@@ -349,7 +346,6 @@ export function useAiAttributes({ uploadedFiles, attributes, setAttributesByImag
     const brick = overrideBrick ?? aiBrick
     if (!category || !brick || uploadedFiles.length === 0) return
     const imageNames = uploadedFiles.map(f => f.name)
-    setAiSkipped(false)
     setAiEditing(null)
     setAiExtraction({
       category,
@@ -521,7 +517,7 @@ export function useAiAttributes({ uploadedFiles, attributes, setAttributesByImag
   }
 
   return {
-    aiCategory, setAiCategory, aiBrick, setAiBrick, aiSkipped, setAiSkipped,
+    aiCategory, setAiCategory, aiBrick, setAiBrick,
     aiExtraction, aiEditing, setAiEditing, shotSuggestions, shotSuggestLoading,
     classificationStatus, setClassificationStatus, classificationConfidence, setClassificationConfidence,
     showManualClassify, setShowManualClassify,

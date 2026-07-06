@@ -45,6 +45,10 @@ export type StepTwoFormProps = {
   onApplyPerShotToAll?: () => void
   // Bulk edit targets per-shot fields only; product-wide values are edited once in the main form.
   hideProductWide?: boolean
+  // Single-image upload: the product-wide vs per-shot distinction is meaningless with one shot,
+  // so render every field as one flat list (drop the two group headers and the divider). The
+  // measured-from-file block still shows.
+  flatten?: boolean
 }
 
 // Read-only summary of a file's decoded dimensions/DPI. undefined = measurement in flight.
@@ -56,7 +60,7 @@ export function formatMeasured(m?: MeasuredImageMetadata): string {
   return [dims, dpi].filter(Boolean).join(" · ")
 }
 
-export function StepTwoForm({ currentAttrs, updateAttrs, uploadLevel, autoData, measuredFiles, onApplyPerShotToAll, hideProductWide }: StepTwoFormProps) {
+export function StepTwoForm({ currentAttrs, updateAttrs, uploadLevel, autoData, measuredFiles, onApplyPerShotToAll, hideProductWide, flatten }: StepTwoFormProps) {
   return (
     <div className="flex flex-col gap-4">
       {!hideProductWide && (
@@ -80,10 +84,12 @@ export function StepTwoForm({ currentAttrs, updateAttrs, uploadLevel, autoData, 
           )}
 
           {/* Product-wide group: one value for every image of this product */}
-          <div className="flex items-center gap-2">
-            <span className="text-xs font-semibold uppercase tracking-wide text-foreground">Product-wide attributes</span>
-            <span className="text-xs text-muted-foreground">apply to every image of this product</span>
-          </div>
+          {!flatten && (
+            <div className="flex items-center gap-2">
+              <span className="text-xs font-semibold uppercase tracking-wide text-foreground">Product-wide attributes</span>
+              <span className="text-xs text-muted-foreground">apply to every image of this product</span>
+            </div>
+          )}
 
           <div className="grid gap-4 md:grid-cols-2">
             <div className="flex flex-col gap-2">
@@ -137,15 +143,17 @@ export function StepTwoForm({ currentAttrs, updateAttrs, uploadLevel, autoData, 
             </div>
           )}
 
-          <div className="border-t border-border" />
+          {!flatten && <div className="border-t border-border" />}
         </>
       )}
 
       {/* Per-shot group: what makes each photo different — never blanket-applied */}
-      <div className="flex items-center gap-2">
-        <span className="text-xs font-semibold uppercase tracking-wide text-foreground">Per-shot attributes</span>
-        <span className="text-xs text-muted-foreground">describe this specific image</span>
-      </div>
+      {!flatten && (
+        <div className="flex items-center gap-2">
+          <span className="text-xs font-semibold uppercase tracking-wide text-foreground">Per-shot attributes</span>
+          <span className="text-xs text-muted-foreground">describe this specific image</span>
+        </div>
+      )}
 
       {/* Measured from file — auto-captured by decoding each staged binary (no AI, no typing). */}
       {measuredFiles && measuredFiles.length > 0 && (
