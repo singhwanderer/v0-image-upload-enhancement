@@ -6,37 +6,27 @@ The image upload wizard includes an optional AI Extended Attribute Extraction st
 3-step wizard). It extracts GS1-style extended product attributes from uploaded product images using
 a full CSV-derived allow-list of Code List Names, Attribute Values, and GS1 codes (generated at build time).
 
-Two modes are supported: **mock** (default) and **gemini** (real Gemini API).
+There is a single extraction path: the real Gemini API. There is no mock/demo mode — every
+classification, extraction, and per-shot suggestion call goes to Gemini, and any failure (including
+a missing API key) surfaces as a visible, retryable error in the UI rather than being silently
+substituted with fake data.
 
 ---
 
-## Running mock mode (recommended for stakeholder demos)
-
-No environment variables required. Mock mode is the default when `NEXT_PUBLIC_EXTRACTION_MODE` is
-not set.
-
-```
-# .env.development.local (or leave unset — mock is the default)
-NEXT_PUBLIC_EXTRACTION_MODE=mock
-```
-
-Mock mode returns pre-seeded, realistic suggestions whose GS1 codes are resolved against the same
-full CSV-derived options map used by Gemini mode (fetched per category via `/api/attribute-options`).
-The mock is stable, fast (~0.9 s simulated delay), and requires no API key. **Use this for all
-stakeholder demos.**
-
----
-
-## Running Gemini mode
+## Running Gemini
 
 ```
 # .env.development.local
-NEXT_PUBLIC_EXTRACTION_MODE=gemini
 GEMINI_API_KEY=<your Gemini API key>
 ```
 
+`GEMINI_API_KEY` is required in every environment, including local development — there is no
+fallback. Without it, the AI section's calls will fail with a clear error message and a "Try again" /
+"Continue manually" option; the rest of the wizard remains fully usable without AI.
+
 `GEMINI_API_KEY` is a **server-side only** variable. It is never referenced in client-side code and
-is not prefixed with `NEXT_PUBLIC_`. It is read exclusively in `app/api/extract-attributes/route.ts`.
+is not prefixed with `NEXT_PUBLIC_`. It is read in each of `app/api/extract-attributes/route.ts`,
+`app/api/suggest-brick/route.ts`, and `app/api/suggest-shot-attributes/route.ts`.
 
 The route:
 1. Validates the image, MIME type, and category.
@@ -50,14 +40,14 @@ The route:
 
 ## Expected behavior
 
-| Scenario | Mock | Gemini |
-|---|---|---|
-| Category selected, images uploaded | Runs instantly after ~0.9 s | Sends all images together in one request |
-| Images clearly match category | Returns seeded suggestions, accepted by default | Returns Gemini suggestions validated against full category map |
-| Images are ambiguous or unlabeled | Returns suggestions with low confidence | Returns empty attributes, all code lists in unresolvedAttributes |
-| Restricted attribute attempted | Never returned (not in mock data) | Blocked by prompt rules + server-side validation |
-| Extraction error | N/A (mock never errors) | Product-level error; all images fail together — user can retry |
-| Missing GEMINI_API_KEY | N/A | Returns 500 with clean error message |
+| Scenario | Behavior |
+|---|---|
+| Category selected, images uploaded | Sends all images together in one request |
+| Images clearly match category | Returns Gemini suggestions validated against full category map |
+| Images are ambiguous or unlabeled | Returns empty attributes, all code lists in unresolvedAttributes |
+| Restricted attribute attempted | Blocked by prompt rules + server-side validation |
+| Extraction/classification/shot-suggestion error | Surfaced as a visible error card with "Try again" / "Continue manually" — never silently replaced with fake data |
+| Missing GEMINI_API_KEY | Route returns 500 with a clean error message, shown directly in the error card |
 
 ---
 
@@ -125,10 +115,9 @@ The allowed-options map is **generated at build time from the full CSV** — no 
 - **Module layout:**
   - `lib/gs1/types.ts` — client-safe types + `PRODUCT_CATEGORIES` (no option data).
   - `lib/gs1/generated-options.ts` — full options, **server-only by convention** (imported by API routes).
-  - `lib/gs1/mock-scenarios.ts` — client-safe mock seeds; codes resolved at runtime against fetched options.
 - **Client never receives the whole CSV:** components fetch a single category via
-  `GET /api/attribute-options?category=<Category>` (used for edit dropdowns and mock-code grounding,
-  cached per category with SWR). Gemini grounding (`/api/extract-attributes`) uses the full map server-side.
+  `GET /api/attribute-options?category=<Category>` (used for edit dropdowns), cached per category
+  with SWR. Gemini grounding (`/api/extract-attributes`) uses the full map server-side.
 
 ---
 
@@ -138,32 +127,14 @@ The allowed-options map is **generated at build time from the full CSV** — no 
    Names (full values within those lists). Adding a new Code List to a category requires editing
    `CATEGORY_ROUTING` in `scripts/generate-gs1-options.mjs` and regenerating.
 
-2. **One consolidated result for all images.** Both mock and Gemini mode return a single product-level
-   attribute set — there is no per-image breakdown of which image contributed which attribute. If
-   images conflict Gemini must resolve internally; the app does not surface per-image attribution.
+2. **One consolidated result for all images.** Extraction returns a single product-level attribute
+   set — there is no per-image breakdown of which image contributed which attribute. If images
+   conflict Gemini must resolve internally; the app does not surface per-image attribution.
 
-3. **Default category heuristic is keyword-based.** `getDefaultCategory()` matches
-   `tops/dress/shirt/apparel/clothing` → Apparel, otherwise defaults to Shoes. It does not detect
-   Bags, Jewelry, Beauty, or Home automatically.
+3. **No streaming.** Results appear after the full request completes. There is no partial/streaming UI.
 
-4. **No streaming.** Results appear after the full request completes. There is no partial/streaming UI.
-
-5. **Error state has no mock trigger.** In mock mode the error state is never triggered.
-   To test the error UI, temporarily modify `runMockExtraction` to set `status: "error"`.
-
-6. **Generated module is committed.** Re-run the generator whenever the CSV or routing changes;
+4. **Generated module is committed.** Re-run the generator whenever the CSV or routing changes;
    the output `lib/gs1/generated-options.ts` is checked into the repo.
-
----
-
-## Demo recommendation
-
-**Use mock mode for stakeholder demos.** It is instant, stable, and requires no API key. The mock
-seeds are grounded against the same full CSV-derived options as Gemini mode (codes resolved from the
-category options the client fetches), so the UX (per-image results, Accept/Edit/Reject, Review
-summary, unresolved attributes) is fully exercisable without any real model calls.
-
-Switch to Gemini mode only for internal engineering demos or when real image analysis is needed.
 
 ---
 
@@ -175,7 +146,6 @@ Switch to Gemini mode only for internal engineering demos or when real image ana
 | `scripts/generate-gs1-options.mjs` | Build-time CSV parser and code generator |
 | `lib/gs1/generated-options.ts` | Generated full options map (server-only by convention) |
 | `lib/gs1/types.ts` | Client-safe types: `GS1AttributeOption`, `CategoryOptions`, `ProductCategory`, `isProductCategory` |
-| `lib/gs1/mock-scenarios.ts` | Mock seeds, codes resolved at runtime against fetched options |
 | `app/api/attribute-options/route.ts` | GET: serves single-category options to client (SWR cache) |
 | `app/api/extract-attributes/route.ts` | POST: accepts `{ category, images: [...] }`, sends all images in one Gemini call, returns one product-level result |
 | `components/trading-grid/image-upload-wizard.tsx` | `ProductExtractionResult` (product-level state), `aiExtraction` (singular), updated handlers and UI |
@@ -211,9 +181,6 @@ Rug Type, Watch Case Shape, Code List for Dinnerware Category — all absent. Pa
 **Category filtering (Apparel):** Shoe Type, Heel Type, Bag Type, Jewelry Type, SPF Rating,
 Bedding Size — all absent. Pass.
 
-**Mock extraction — all six categories:** all codes grounded (`groundedInList=true`), no mismatches.
-Pass.
-
 **Server-side validation — 400 paths:** malformed JSON → 400; empty `imageBase64` → 400;
 unsupported MIME (`image/bmp`) → 400; invalid category (`Furniture`) → 400. All with clean JSON
 error messages. Pass.
@@ -228,18 +195,27 @@ validated — no mismatches. Pass.
 **Gemini live — ambiguous (plain cardboard box, category=Shoes):** 0 accepted, 12 unresolved
 (all 12 Shoes code lists). Pass.
 
-**Client bundle:** `generated-options.ts` is not imported by any client component or page. The wizard
-imports only `useSWR`, `CategoryOptions` (type-only), and `buildMockExtraction` from `lib/gs1/`.
-The browser receives only the selected category's options via `GET /api/attribute-options`. Pass.
+**Client bundle:** `generated-options.ts` is not imported by any client component or page. The
+browser receives only the selected category's options via `GET /api/attribute-options`. Pass.
 
 **Edit dropdowns:** `valuesForCodeList(codeListName)` pulls from SWR-cached
 `CategoryOptions` (full CSV values for that code list), not the old ~6-value subset. Pass.
 
-**Mock mode (no API key):** works, no key required. Pass.
-**Gemini mode (`NEXT_PUBLIC_EXTRACTION_MODE=gemini`):** works with `GEMINI_API_KEY`. Pass.
 **Missing `GEMINI_API_KEY`:** route returns 500 with `"GEMINI_API_KEY is not configured on the server."`. Pass.
 **Review & Confirm:** renders `acceptedExtractedAttributes` from the single `aiExtraction` state as one product-level table (not grouped by image). Pass.
 
 **Product-level API request shape:** `POST /api/extract-attributes` now accepts `{ category, images: [{ fileName, imageBase64, mimeType }] }` and returns one `ExtractionApiResponse` with `imageCount` and `imageNames`. Pass.
 
 **State model:** `aiExtractions: Record<string, ExtractionResult>` replaced by `aiExtraction: ProductExtractionResult | null`. `aiEditing` scope reduced from `{ fileId, index }` to `{ index }`. All call sites (`removeFile`, `clearExtraction`, category select, skip, re-run, replace-image, delete-from-dialog, product-change) updated. Zero stale references. Pass.
+
+---
+
+## Demo mode removal
+
+Mock/demo mode (the `NEXT_PUBLIC_EXTRACTION_MODE` toggle, `lib/gs1/mock-scenarios.ts`, and the
+silent catch-and-substitute-fake-data fallback in `runClassification`/`runGeminiExtraction`/
+`runShotSuggestions`) has been removed. The app now always calls real Gemini; any failure (network
+error, bad response, missing `GEMINI_API_KEY`) surfaces as a visible error card with "Try again" /
+"Continue manually" instead of a fabricated result. This applies uniformly in every environment,
+including local dev — there is no dev/prod behavior split. All references above to "mock mode" or
+mock test results are historical and describe behavior that no longer exists.
