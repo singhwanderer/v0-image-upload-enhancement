@@ -781,7 +781,9 @@ export function ImageUploadWizard({
     setClassificationStatus("confirmed")
     setShowManualClassify(false)
     runExtraction(category, brick)
-    void runShotSuggestions()
+    // Per-shot suggestion (orientation/facing/angle/description) is a GDSN-field accelerator
+    // that never needed a brick — it must NOT be triggered here. It has its own independent
+    // button in renderAiSection so it's reachable with zero classification/extraction involved.
   }
 
   // Convert a File to a raw base64 string (no data: prefix) for the JSON API payload.
@@ -1115,8 +1117,8 @@ export function ImageUploadWizard({
       ) : (
         <p className="text-xs text-muted-foreground">
           {!aiBrick
-            ? "Select a category and brick — attributes and per-shot suggestions run automatically once both are set."
-            : "Picking a different brick re-runs both AI passes for this product."}
+            ? "Select a category and brick — extended attribute extraction runs automatically once both are set."
+            : "Picking a different brick re-runs extraction for this product."}
         </p>
       )}
     </>
@@ -1372,7 +1374,7 @@ export function ImageUploadWizard({
         <div className="flex-1">
           <h3 className="text-sm font-semibold text-foreground">Analyze this product&apos;s images with AI</h3>
           <p className="mt-0.5 text-sm text-muted-foreground">
-            Classifies your product, then suggests extended attributes and per-shot details for each image.
+            Two independent, optional passes: classify &amp; extract extended attributes, and/or suggest per-shot details for each image.
           </p>
         </div>
         {EXTRACTION_MODE === "mock" && (
@@ -1395,74 +1397,72 @@ export function ImageUploadWizard({
       )}
 
       {!aiSkipped && (
-        <div className="flex flex-col gap-4 p-4">
-          {/* Idle: single entry point, or the manual correction panel */}
-          {classificationStatus === "idle" && (
-            <div className="flex flex-col gap-3">
-              <div className="flex flex-wrap items-center gap-2">
-                <Button onClick={() => void runClassification()} disabled={uploadedFiles.length === 0} className="gap-2">
-                  <Sparkles className="size-4" />
-                  Analyze images with AI
-                </Button>
-                <Button variant="ghost" size="sm" onClick={() => setShowManualClassify(v => !v)}>
-                  {showManualClassify ? "Hide manual entry" : "Set category & brick manually"}
-                </Button>
-                {showSkip && (
-                  <Button variant="ghost" size="sm" onClick={() => setAiSkipped(true)}>
-                    Skip AI
+        <div className="flex flex-col gap-5 p-4">
+          {/* ── Product attributes (extended, non-GDSN) — genuinely needs a brick to scope its
+              vocabulary, so classification gates this pass only. ── */}
+          <div className="flex flex-col gap-3">
+            <h4 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Product attributes</h4>
+
+            {classificationStatus === "idle" && (
+              <div className="flex flex-col gap-3">
+                <div className="flex flex-wrap items-center gap-2">
+                  <Button onClick={() => void runClassification()} disabled={uploadedFiles.length === 0} className="gap-2">
+                    <Sparkles className="size-4" />
+                    Classify &amp; extract with AI
                   </Button>
+                  <Button variant="outline" size="sm" onClick={() => setShowManualClassify(v => !v)}>
+                    {showManualClassify ? "Hide manual entry" : "Set category & brick manually"}
+                  </Button>
+                  {showSkip && (
+                    <Button variant="outline" size="sm" onClick={() => setAiSkipped(true)}>
+                      Skip AI
+                    </Button>
+                  )}
+                </div>
+                {showManualClassify && renderAiIdleControls()}
+              </div>
+            )}
+
+            {classificationStatus === "loading" && (
+              <div className="flex items-center gap-3 rounded border border-border bg-muted/20 p-4">
+                <Loader2 className="size-5 animate-spin text-primary" />
+                <p className="text-sm text-foreground">Classifying your product…</p>
+              </div>
+            )}
+
+            {/* Proposed: confirm chip — human confirms or corrects before extraction runs */}
+            {classificationStatus === "proposed" && aiBrick && (
+              <div className="flex flex-col gap-3">
+                <div className="flex flex-wrap items-center gap-3 rounded border border-primary/30 bg-primary/5 p-3">
+                  <p className="text-sm text-foreground">
+                    Looks like <span className="font-medium">{aiBrick.name}</span> · {aiCategory}
+                    {classificationConfidence != null && ` (${Math.round(classificationConfidence * 100)}%)`}
+                  </p>
+                  <div className="ml-auto flex items-center gap-2">
+                    <Button size="sm" className="gap-1" onClick={() => confirmClassification(aiCategory, aiBrick, classificationConfidence)}>
+                      <Check className="size-3.5" /> Confirm
+                    </Button>
+                    <Button variant="outline" size="sm" onClick={() => setShowManualClassify(true)}>Change</Button>
+                  </div>
+                </div>
+                {showManualClassify && renderAiIdleControls()}
+                {showSkip && (
+                  <Button variant="outline" size="sm" className="w-fit" onClick={() => setAiSkipped(true)}>Skip AI</Button>
                 )}
               </div>
-              {showManualClassify && renderAiIdleControls()}
-            </div>
-          )}
+            )}
 
-          {/* Loading: classifying */}
-          {classificationStatus === "loading" && (
-            <div className="flex items-center gap-3 rounded border border-border bg-muted/20 p-4">
-              <Loader2 className="size-5 animate-spin text-primary" />
-              <p className="text-sm text-foreground">Classifying your product…</p>
-            </div>
-          )}
-
-          {/* Proposed: confirm chip — human confirms or corrects before anything else runs */}
-          {classificationStatus === "proposed" && aiBrick && (
-            <div className="flex flex-col gap-3">
-              <div className="flex flex-wrap items-center gap-3 rounded border border-primary/30 bg-primary/5 p-3">
-                <p className="text-sm text-foreground">
-                  Looks like <span className="font-medium">{aiBrick.name}</span> · {aiCategory}
-                  {classificationConfidence != null && ` (${Math.round(classificationConfidence * 100)}%)`}
-                </p>
-                <div className="ml-auto flex items-center gap-2">
-                  <Button size="sm" className="gap-1" onClick={() => confirmClassification(aiCategory, aiBrick, classificationConfidence)}>
-                    <Check className="size-3.5" /> Confirm
-                  </Button>
-                  <Button variant="outline" size="sm" onClick={() => setShowManualClassify(true)}>Change</Button>
-                </div>
-              </div>
-              {showManualClassify && renderAiIdleControls()}
-              {showSkip && (
-                <Button variant="ghost" size="sm" className="w-fit" onClick={() => setAiSkipped(true)}>Skip AI</Button>
-              )}
-            </div>
-          )}
-
-          {/* Confirmed: both AI passes run automatically, shown as two labeled subsections */}
-          {classificationStatus === "confirmed" && (
-            <div className="flex flex-col gap-5">
-              <div className="flex items-center justify-between gap-2">
-                <p className="text-xs text-muted-foreground">
-                  Classified as <span className="font-medium text-foreground">{aiBrick?.name}</span> · {aiCategory}
-                </p>
-                <Button variant="ghost" size="sm" onClick={() => setShowManualClassify(v => !v)}>
-                  {showManualClassify ? "Hide" : "Change classification"}
-                </Button>
-              </div>
-              {showManualClassify && renderAiIdleControls()}
-
-              {/* Product attributes (extended, product-level) */}
+            {classificationStatus === "confirmed" && (
               <div className="flex flex-col gap-3">
-                <h4 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Product attributes</h4>
+                <div className="flex items-center justify-between gap-2">
+                  <p className="text-xs text-muted-foreground">
+                    Classified as <span className="font-medium text-foreground">{aiBrick?.name}</span> · {aiCategory}
+                  </p>
+                  <Button variant="ghost" size="sm" onClick={() => setShowManualClassify(v => !v)}>
+                    {showManualClassify ? "Hide" : "Change classification"}
+                  </Button>
+                </div>
+                {showManualClassify && renderAiIdleControls()}
                 {isExtracting && (
                   <div className="flex items-center gap-3 rounded border border-border bg-muted/20 p-4">
                     <Loader2 className="size-5 animate-spin text-primary" />
@@ -1489,70 +1489,86 @@ export function ImageUploadWizard({
                 )}
                 {renderAiResultsCard()}
               </div>
+            )}
+          </div>
 
-              {/* Per-shot attributes (orientation/facing/angle/description, per image) */}
-              <div className="flex flex-col gap-3 border-t border-border pt-4">
-                <div className="flex items-center justify-between gap-2">
-                  <h4 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Per-shot attributes</h4>
-                  {shotSuggestions !== null && shotSuggestions.some(s => s.status === "pending") && (
-                    <Button variant="outline" size="sm" className="gap-1" onClick={() => acceptShotSuggestions(shotSuggestions.filter(s => s.status === "pending"))}>
-                      <Check className="size-3.5" />
-                      Accept all ({shotSuggestions.filter(s => s.status === "pending").length})
-                    </Button>
-                  )}
-                </div>
-                {shotSuggestLoading && (
-                  <div className="flex items-center gap-3 rounded border border-border bg-muted/20 p-4">
-                    <Loader2 className="size-5 animate-spin text-primary" />
-                    <p className="text-sm text-foreground">Analyzing {uploadedFiles.length} image{uploadedFiles.length !== 1 ? "s" : ""} for per-shot attributes…</p>
-                  </div>
-                )}
-                {shotSuggestions !== null && !shotSuggestLoading && (
-                  <div className="flex flex-col divide-y divide-border rounded border border-border">
-                    {shotSuggestions.map((s) => (
-                      <div key={s.fileIndex} className={cn("flex items-center gap-3 px-4 py-2", s.status === "dismissed" && "opacity-50")}>
-                        <div className="size-9 shrink-0 rounded border border-border overflow-hidden bg-muted">
-                          {uploadedFiles[s.fileIndex]?.preview && (
-                            <img src={uploadedFiles[s.fileIndex].preview} alt="" className="size-full object-cover" />
-                          )}
-                        </div>
-                        <div className="flex-1 min-w-0">
-                          <p className="text-xs font-medium text-foreground truncate">{s.fileName}</p>
-                          <p className="text-xs text-muted-foreground truncate">
-                            {ORIENTATION_OPTIONS.find(o => o.value === s.orientation)?.label ?? s.orientation}
-                            {s.facing && ` · Facing ${FACING_OPTIONS.find(o => o.value === s.facing)?.label ?? s.facing}`}
-                            {s.description && ` · “${s.description}”`}
-                          </p>
-                        </div>
-                        <span className={cn(
-                          "inline-flex shrink-0 items-center rounded-full px-2 py-0.5 text-xs font-medium",
-                          s.confidence >= 0.85 ? "bg-tg-success/15 text-tg-success" : "bg-tg-warning/15 text-tg-warning"
-                        )}>
-                          {Math.round(s.confidence * 100)}%
-                        </span>
-                        {s.status === "accepted" ? (
-                          <span className="inline-flex shrink-0 items-center gap-1 text-xs font-medium text-tg-success">
-                            <Check className="size-3.5" /> Accepted
-                          </span>
-                        ) : s.status === "dismissed" ? (
-                          <span className="text-xs text-muted-foreground shrink-0">Dismissed</span>
-                        ) : (
-                          <div className="flex items-center gap-1 shrink-0">
-                            <Button variant="outline" size="sm" className="h-7 gap-1 px-2 text-xs" onClick={() => acceptShotSuggestions([s])}>
-                              <Check className="size-3" /> Accept
-                            </Button>
-                            <Button variant="outline" size="sm" className="h-7 gap-1 px-2 text-xs text-muted-foreground" onClick={() => dismissShotSuggestion(s.fileIndex)}>
-                              <X className="size-3" /> Dismiss
-                            </Button>
-                          </div>
-                        )}
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
+          <div className="border-t border-border" />
+
+          {/* ── Per-shot attributes (orientation/facing/angle/description — GDSN spec fields).
+              Fully independent of the classification pass above: runShotSuggestions never
+              reads aiCategory/aiBrick, and this section is reachable regardless of
+              classificationStatus — getting GDSN help here never requires brick classification. ── */}
+          <div className="flex flex-col gap-3">
+            <div className="flex items-center justify-between gap-2">
+              <h4 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Per-shot attributes</h4>
+              {shotSuggestions === null && !shotSuggestLoading && (
+                <Button variant="outline" size="sm" className="gap-1" onClick={() => void runShotSuggestions()} disabled={uploadedFiles.length === 0}>
+                  <Sparkles className="size-3.5" />
+                  Suggest per-shot details with AI
+                </Button>
+              )}
+              {shotSuggestions !== null && shotSuggestions.some(s => s.status === "pending") && (
+                <Button variant="outline" size="sm" className="gap-1" onClick={() => acceptShotSuggestions(shotSuggestions.filter(s => s.status === "pending"))}>
+                  <Check className="size-3.5" />
+                  Accept all ({shotSuggestions.filter(s => s.status === "pending").length})
+                </Button>
+              )}
             </div>
-          )}
+            {shotSuggestions === null && !shotSuggestLoading && (
+              <p className="text-xs text-muted-foreground">
+                Optional — proposes orientation, facing, angle, and a draft description per image. No classification needed.
+              </p>
+            )}
+            {shotSuggestLoading && (
+              <div className="flex items-center gap-3 rounded border border-border bg-muted/20 p-4">
+                <Loader2 className="size-5 animate-spin text-primary" />
+                <p className="text-sm text-foreground">Analyzing {uploadedFiles.length} image{uploadedFiles.length !== 1 ? "s" : ""} for per-shot attributes…</p>
+              </div>
+            )}
+            {shotSuggestions !== null && !shotSuggestLoading && (
+              <div className="flex flex-col divide-y divide-border rounded border border-border">
+                {shotSuggestions.map((s) => (
+                  <div key={s.fileIndex} className={cn("flex items-center gap-3 px-4 py-2", s.status === "dismissed" && "opacity-50")}>
+                    <div className="size-9 shrink-0 rounded border border-border overflow-hidden bg-muted">
+                      {uploadedFiles[s.fileIndex]?.preview && (
+                        <img src={uploadedFiles[s.fileIndex].preview} alt="" className="size-full object-cover" />
+                      )}
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <p className="text-xs font-medium text-foreground truncate">{s.fileName}</p>
+                      <p className="text-xs text-muted-foreground truncate">
+                        {ORIENTATION_OPTIONS.find(o => o.value === s.orientation)?.label ?? s.orientation}
+                        {s.facing && ` · Facing ${FACING_OPTIONS.find(o => o.value === s.facing)?.label ?? s.facing}`}
+                        {s.description && ` · “${s.description}”`}
+                      </p>
+                    </div>
+                    <span className={cn(
+                      "inline-flex shrink-0 items-center rounded-full px-2 py-0.5 text-xs font-medium",
+                      s.confidence >= 0.85 ? "bg-tg-success/15 text-tg-success" : "bg-tg-warning/15 text-tg-warning"
+                    )}>
+                      {Math.round(s.confidence * 100)}%
+                    </span>
+                    {s.status === "accepted" ? (
+                      <span className="inline-flex shrink-0 items-center gap-1 text-xs font-medium text-tg-success">
+                        <Check className="size-3.5" /> Accepted
+                      </span>
+                    ) : s.status === "dismissed" ? (
+                      <span className="text-xs text-muted-foreground shrink-0">Dismissed</span>
+                    ) : (
+                      <div className="flex items-center gap-1 shrink-0">
+                        <Button variant="outline" size="sm" className="h-7 gap-1 px-2 text-xs" onClick={() => acceptShotSuggestions([s])}>
+                          <Check className="size-3" /> Accept
+                        </Button>
+                        <Button variant="outline" size="sm" className="h-7 gap-1 px-2 text-xs text-muted-foreground" onClick={() => dismissShotSuggestion(s.fileIndex)}>
+                          <X className="size-3" /> Dismiss
+                        </Button>
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
         </div>
       )}
     </div>
