@@ -47,19 +47,24 @@ import {
 } from "@/components/ui/sheet"
 import { cn } from "@/lib/utils"
 import { validateImageBatch, type ValidationError } from "./upload-validation"
-import { measureImageFile, type MeasuredImageMetadata } from "./image-metadata"
+import { measureImageFile } from "./image-metadata"
+import type { UploadedFile } from "./uploaded-file"
 import { buildImageMetadataCsv, downloadCsv, csvPreview, type ImageMetadataRow } from "./metadata-csv"
 import { toast } from "@/hooks/use-toast"
-import useSWR from "swr"
-import type { CategoryOptions, AttributeDecision, ExtractedAttribute, UnresolvedAttribute } from "@/lib/gs1/types"
-import { buildMockExtraction } from "@/lib/gs1/mock-scenarios"
-import { getCategoryBricks, getBrick, type Brick } from "@/lib/gs1/generated-bricks"
+import { getCategoryBricks } from "@/lib/gs1/generated-bricks"
 import { useMediaSelection } from "./use-media-selection"
 import { AiAttributesTable } from "./ai-attributes-table"
-
-// Response shape from GET /api/attribute-options (declared locally so this client component
-// never imports server route code). Mirrors AttributeOptionsResponse in that route.
-type AttributeOptionsResponse = { category: string; options: CategoryOptions }
+import { StepTwoForm, PER_SHOT_KEYS, isPerShotKey } from "./step-two-form"
+import { useAiAttributes, EXTRACTION_MODE, PRODUCT_CATEGORIES } from "./use-ai-attributes"
+import {
+  ORIENTATION_OPTIONS,
+  ANGLE_OPTIONS,
+  IMAGE_TYPE_OPTIONS,
+  PURPOSE_OPTIONS,
+  LOCATION_TYPE_OPTIONS,
+  FACING_OPTIONS,
+  IMAGE_STYLE_OPTIONS,
+} from "./attribute-options"
 
 interface ImageUploadWizardProps {
   uploadLevel: "product" | "product-color" | "gtin"
@@ -170,359 +175,6 @@ const MOCK_DATA = {
   ],
 }
 
-// Dropdown options from screenshots
-// Spec code list: PRI, VF1, VIK, VIS, SDL, SDR, VIB, VIT (VBK retained from legacy data).
-// VIK/VIS display the bare code until the authoritative GDSN label list is confirmed —
-// showing a code is honest; inventing a label would ship wrong data.
-const ORIENTATION_OPTIONS = [
-  { value: "PRI", label: "PRI-Primary" },
-  { value: "VF1", label: "VF1-Front" },
-  { value: "VIK", label: "VIK" },
-  { value: "VIS", label: "VIS" },
-  { value: "SDL", label: "SDL-Side Left" },
-  { value: "SDR", label: "SDR-Side Right" },
-  { value: "VIB", label: "VIB-Bottom" },
-  { value: "VIT", label: "VIT-Top" },
-  { value: "VBK", label: "VBK-Back" },
-]
-
-const ANGLE_OPTIONS = [
-  { value: "1", label: "1-Center, No plunge angle" },
-  { value: "2", label: "2-Left, No plunge angle" },
-  { value: "3", label: "3-Right, No plunge angle" },
-  { value: "7", label: "7-Center, Plunge angle present" },
-  { value: "8", label: "8-Left, Plunge angle present" },
-  { value: "9", label: "9-Right, Plunge angle present" },
-]
-
-const IMAGE_TYPE_OPTIONS = [
-  { value: "SI", label: "SI-Still Shot" },
-  { value: "LI", label: "LI-Lifestyle Image" },
-  { value: "SW", label: "SW-Swatch" },
-  { value: "DT", label: "DT-Detail Shot" },
-  { value: "PK", label: "PK-Packaging" },
-]
-
-const PURPOSE_OPTIONS = [
-  { value: "INT", label: "INT-Internet" },
-  { value: "CAT", label: "CAT-Catalog" },
-  { value: "PRT", label: "PRT-Print" },
-  { value: "PKG", label: "PKG-Packaging" },
-]
-
-// Spec: ACL, FTP, LMI, URL
-const LOCATION_TYPE_OPTIONS = [
-  { value: "ACL", label: "ACL" },
-  { value: "FTP", label: "FTP" },
-  { value: "LMI", label: "LMI" },
-  { value: "URL", label: "URL" },
-]
-
-// GS1 image-naming facing codes (same 1/2/3/7/8/9 scheme as the angle list below).
-const FACING_OPTIONS = [
-  { value: "1", label: "1-Front" },
-  { value: "2", label: "2-Left" },
-  { value: "3", label: "3-Top" },
-  { value: "7", label: "7-Back" },
-  { value: "8", label: "8-Right" },
-  { value: "9", label: "9-Bottom" },
-]
-
-// Spec: CSW (Color Swatch) or PRO (Product) only.
-const IMAGE_STYLE_OPTIONS = [
-  { value: "CSW", label: "CSW-Color Swatch" },
-  { value: "PRO", label: "PRO-Product" },
-]
-
-type UploadedFile = {
-  id: string
-  file: File
-  name: string
-  size: number
-  type: string
-  preview: string
-  status: "uploading" | "complete" | "error"
-  // Auto-captured at staging by decoding the file itself (no AI, no manual entry).
-  // Absent while measurement is in flight; fields are null when unreadable.
-  measured?: MeasuredImageMetadata
-}
-
-// ExtractionApiResponse: product-level shape returned by POST /api/extract-attributes.
-// Mirrors route.ts ExtractionApiResponse without importing server code into the client bundle.
-type ExtractionApiResponse = {
-  category: string
-  brickCode?: string
-  brickName?: string
-  imageCount: number
-  imageNames: string[]
-  attributes: Omit<ExtractedAttribute, "decision">[]
-  unresolvedAttributes: UnresolvedAttribute[]
-}
-
-// ProductExtractionResult: product-level frontend state (one result for the whole product,
-// not one per image). Replaces the old per-image ExtractionResult / aiExtractions Record.
-type ProductExtractionResult = {
-  category: string
-  brickCode?: string
-  brickName?: string
-  imageCount: number
-  imageNames: string[]
-  attributes: ExtractedAttribute[]
-  unresolvedAttributes: UnresolvedAttribute[]
-  status: "idle" | "extracting" | "complete" | "error"
-  error?: string
-  fallbackUsed?: boolean
-}
-
-// Product categories offered in the AI extraction card. Home is excluded — it has no GPC brick
-// coverage in the brick matrix, so its attributes cannot be scoped to a single brick.
-const PRODUCT_CATEGORIES = ["Shoes", "Apparel", "Bags", "Jewelry", "Beauty"] as const
-
-// Extraction mode: "mock" (default, stable demos) or "gemini" (real /api/extract-attributes).
-// Controlled by NEXT_PUBLIC_EXTRACTION_MODE; falls back to mock when unset. No UI toggle.
-const EXTRACTION_MODE = process.env.NEXT_PUBLIC_EXTRACTION_MODE === "gemini" ? "gemini" : "mock"
-
-// ── Per-shot AI suggestions (P0.2b) ──
-// One proposal per image for the fields a vision model reads directly from the shot.
-type ShotSuggestionRow = {
-  fileIndex: number
-  fileName: string
-  orientation: string
-  facing: string
-  angle: string
-  description: string
-  confidence: number
-  status: "pending" | "accepted" | "dismissed"
-}
-
-// Mock proposal from filename tokens (deterministic, demo-stable). Mirrors what the
-// Gemini route infers from pixels; falls back to a round-robin viewpoint.
-function mockShotSuggestion(name: string, index: number, productDescription: string) {
-  const n = name.toLowerCase()
-  let orientation = ["PRI", "SDL", "SDR"][index % 3]
-  let facing = ["1", "2", "8"][index % 3]
-  let confidence = 0.6
-  if (/front|hero|main|primary/.test(n)) { orientation = "PRI"; facing = "1"; confidence = 0.92 }
-  else if (/left/.test(n)) { orientation = "SDL"; facing = "2"; confidence = 0.9 }
-  else if (/side/.test(n)) { orientation = "SDL"; facing = "2"; confidence = 0.85 }
-  else if (/right/.test(n)) { orientation = "SDR"; facing = "8"; confidence = 0.9 }
-  else if (/back|rear/.test(n)) { orientation = "VBK"; facing = "7"; confidence = 0.9 }
-  else if (/top/.test(n)) { orientation = "VIT"; facing = "3"; confidence = 0.87 }
-  else if (/bottom|sole/.test(n)) { orientation = "VIB"; facing = "9"; confidence = 0.87 }
-  const label = ORIENTATION_OPTIONS.find(o => o.value === orientation)?.label ?? orientation
-  const view = label.includes("-") ? label.split("-").slice(1).join("-") : label
-  return {
-    orientation,
-    facing,
-    angle: "1",
-    description: productDescription ? `${productDescription} — ${view.toLowerCase()} view` : `${view} view`,
-    confidence,
-  }
-}
-
-// Mock brick classification (P1.1): keyword-matches brick names against the product
-// description/filenames within the given category; falls back to the category's first
-// brick. Deterministic and demo-stable, same style as mockShotSuggestion above.
-function mockClassifyBrick(category: string, productDescription: string, fileNames: string[]): { brick: Brick; confidence: number } | null {
-  const bricks = getCategoryBricks(category)
-  if (bricks.length === 0) return null
-  const hay = `${productDescription} ${fileNames.join(" ")}`.toLowerCase()
-  const matched = bricks.find(b => hay.includes(b.name.toLowerCase()))
-  return matched ? { brick: matched, confidence: 0.88 } : { brick: bricks[0], confidence: 0.62 }
-}
-
-// P0.2a: the attribute record splits into two groups. PRODUCT-WIDE fields hold one honest
-// value for every image of a product; PER-SHOT fields describe what makes each photo
-// different (which is exactly why they must never be blanket-applied).
-const PER_SHOT_KEYS = ["orientation", "facing", "angle", "clippingPath", "imageDescription"] as const
-type PerShotKey = (typeof PER_SHOT_KEYS)[number]
-const isPerShotKey = (k: string): k is PerShotKey => (PER_SHOT_KEYS as readonly string[]).includes(k)
-
-// Attribute form used in Step 2, the Edit dialog, and Bulk edit (Change 3 / Change 7 / P0.2a)
-type StepTwoFormProps = {
-  currentAttrs: {
-    imageType: string; purpose: string; orientation: string; locationType: string;
-    externalLocation: string; imageStyle: string; facing: string; angle: string;
-    clippingPath: string; imageDescription: string;
-  }
-  updateAttrs: (a: StepTwoFormProps["currentAttrs"]) => void
-  uploadLevel: "product" | "product-color" | "gtin"
-  autoData: { colorCode: string; selectedGtin: string }
-  // Auto-captured per-file facts (dimensions/DPI) shown read-only. Omitted in bulk edit,
-  // where no single file is in context — measured facts are never bulk-editable.
-  measuredFiles?: { name: string; measured?: MeasuredImageMetadata }[]
-  // Explicit, labeled copy action for per-shot values — a deliberate copy, not a silent default.
-  onApplyPerShotToAll?: () => void
-  // Bulk edit targets per-shot fields only; product-wide values are edited once in the main form.
-  hideProductWide?: boolean
-}
-
-// Read-only summary of a file's decoded dimensions/DPI. undefined = measurement in flight.
-function formatMeasured(m?: MeasuredImageMetadata): string {
-  if (!m) return "Measuring…"
-  const dims = m.width && m.height ? `${m.width} × ${m.height} px` : null
-  const dpi = m.dpi ? `${m.dpi} DPI` : null
-  if (!dims && !dpi) return "Not readable from file"
-  return [dims, dpi].filter(Boolean).join(" · ")
-}
-
-function StepTwoForm({ currentAttrs, updateAttrs, uploadLevel, autoData, measuredFiles, onApplyPerShotToAll, hideProductWide }: StepTwoFormProps) {
-  return (
-    <div className="flex flex-col gap-4">
-      {!hideProductWide && (
-        <>
-          {/* Auto-populated fields (read-only) */}
-          {(uploadLevel === "product-color" || uploadLevel === "gtin") && (
-            <div className="grid gap-4 md:grid-cols-2">
-              {uploadLevel === "product-color" && (
-                <div className="flex flex-col gap-2">
-                  <Label className="text-sm font-medium">Color Code</Label>
-                  <Input value={autoData.colorCode} readOnly className="bg-muted/30 text-foreground cursor-default" />
-                </div>
-              )}
-              {uploadLevel === "gtin" && (
-                <div className="flex flex-col gap-2">
-                  <Label className="text-sm font-medium">GTIN</Label>
-                  <Input value={autoData.selectedGtin} readOnly className="bg-muted/30 text-foreground cursor-default" />
-                </div>
-              )}
-            </div>
-          )}
-
-          {/* Product-wide group: one value for every image of this product */}
-          <div className="flex items-center gap-2">
-            <span className="text-xs font-semibold uppercase tracking-wide text-foreground">Product-wide attributes</span>
-            <span className="text-xs text-muted-foreground">apply to every image of this product</span>
-          </div>
-
-          <div className="grid gap-4 md:grid-cols-2">
-            <div className="flex flex-col gap-2">
-              <Label className="text-sm font-medium">
-                Image Type <span className="text-destructive">*</span>
-              </Label>
-              <Select value={currentAttrs.imageType} onValueChange={(v) => updateAttrs({ ...currentAttrs, imageType: v })}>
-                <SelectTrigger className="w-full bg-background"><SelectValue /></SelectTrigger>
-                <SelectContent>
-                  {IMAGE_TYPE_OPTIONS.map(o => <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>)}
-                </SelectContent>
-              </Select>
-            </div>
-
-            <div className="flex flex-col gap-2">
-              <Label className="text-sm font-medium">
-                Purpose <span className="text-destructive">*</span>
-              </Label>
-              <Select value={currentAttrs.purpose} onValueChange={(v) => updateAttrs({ ...currentAttrs, purpose: v })}>
-                <SelectTrigger className="w-full bg-background"><SelectValue /></SelectTrigger>
-                <SelectContent>
-                  {PURPOSE_OPTIONS.map(o => <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>)}
-                </SelectContent>
-              </Select>
-            </div>
-
-            {/* Location Type read-only */}
-            <div className="flex flex-col gap-2">
-              <Label className="text-sm font-medium">Location Type</Label>
-              <Input value={LOCATION_TYPE_OPTIONS.find(o => o.value === currentAttrs.locationType)?.label || ""} readOnly className="bg-muted/30 text-foreground cursor-default" />
-            </div>
-
-            <div className="flex flex-col gap-2">
-              <Label className="text-sm font-medium">Image Style <span className="text-xs font-normal text-muted-foreground">(optional)</span></Label>
-              <Select value={currentAttrs.imageStyle} onValueChange={(v) => updateAttrs({ ...currentAttrs, imageStyle: v })}>
-                <SelectTrigger className="w-full bg-background"><SelectValue placeholder="Select style..." /></SelectTrigger>
-                <SelectContent>{IMAGE_STYLE_OPTIONS.map(o => <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>)}</SelectContent>
-              </Select>
-            </div>
-          </div>
-
-          {(currentAttrs.locationType === "FTP" || currentAttrs.locationType === "URL") && (
-            <div className="flex flex-col gap-2">
-              <Label className="text-sm font-medium">External Location <span className="text-destructive">*</span></Label>
-              <Input
-                value={currentAttrs.externalLocation}
-                onChange={(e) => updateAttrs({ ...currentAttrs, externalLocation: e.target.value })}
-                placeholder={currentAttrs.locationType === "FTP" ? "ftp://..." : "https://..."}
-                className="bg-background"
-              />
-            </div>
-          )}
-
-          <div className="border-t border-border" />
-        </>
-      )}
-
-      {/* Per-shot group: what makes each photo different — never blanket-applied */}
-      <div className="flex items-center gap-2">
-        <span className="text-xs font-semibold uppercase tracking-wide text-foreground">Per-shot attributes</span>
-        <span className="text-xs text-muted-foreground">describe this specific image</span>
-      </div>
-
-      {/* Measured from file — auto-captured by decoding each staged binary (no AI, no typing). */}
-      {measuredFiles && measuredFiles.length > 0 && (
-        <div className="flex flex-col gap-1.5 rounded border border-border bg-muted/20 p-3">
-          <div className="flex items-center gap-2">
-            <span className="text-xs font-semibold uppercase tracking-wide text-foreground">Measured from file</span>
-            <span className="rounded bg-primary/10 px-1.5 py-0.5 text-xs font-medium text-primary">Auto-captured</span>
-          </div>
-          <div className="flex flex-col gap-0.5 max-h-24 overflow-y-auto">
-            {measuredFiles.map((f, i) => (
-              <div key={i} className="flex items-center gap-2 text-xs">
-                <span className="truncate max-w-[220px] text-muted-foreground" title={f.name}>{f.name}</span>
-                <span className="font-medium text-foreground">{formatMeasured(f.measured)}</span>
-              </div>
-            ))}
-          </div>
-          <p className="text-xs text-muted-foreground">
-            Dimensions and DPI are read directly from each image file — no manual entry needed.
-          </p>
-        </div>
-      )}
-
-      <div className="grid gap-4 md:grid-cols-2">
-        <div className="flex flex-col gap-2">
-          <Label className="text-sm font-medium">
-            Orientation <span className="text-destructive">*</span>
-          </Label>
-          <Select value={currentAttrs.orientation} onValueChange={(v) => updateAttrs({ ...currentAttrs, orientation: v })}>
-            <SelectTrigger className="w-full bg-background"><SelectValue placeholder="Select orientation..." /></SelectTrigger>
-            <SelectContent>
-              {ORIENTATION_OPTIONS.map(o => <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>)}
-            </SelectContent>
-          </Select>
-        </div>
-        <div className="flex flex-col gap-2">
-          <Label className="text-sm font-medium">Facing (GDSN) <span className="text-xs font-normal text-muted-foreground">(optional)</span></Label>
-          <Select value={currentAttrs.facing} onValueChange={(v) => updateAttrs({ ...currentAttrs, facing: v })}>
-            <SelectTrigger className="w-full bg-background"><SelectValue placeholder="Select facing..." /></SelectTrigger>
-            <SelectContent>{FACING_OPTIONS.map(o => <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>)}</SelectContent>
-          </Select>
-        </div>
-        <div className="flex flex-col gap-2">
-          <Label className="text-sm font-medium">Angle <span className="text-xs font-normal text-muted-foreground">(optional)</span></Label>
-          <Select value={currentAttrs.angle} onValueChange={(v) => updateAttrs({ ...currentAttrs, angle: v })}>
-            <SelectTrigger className="w-full bg-background"><SelectValue placeholder="Select angle..." /></SelectTrigger>
-            <SelectContent>{ANGLE_OPTIONS.map(o => <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>)}</SelectContent>
-          </Select>
-        </div>
-        <div className="flex flex-col gap-2">
-          <Label className="text-sm font-medium">Clipping Path <span className="text-xs font-normal text-muted-foreground">(optional)</span></Label>
-          <Input value={currentAttrs.clippingPath} onChange={(e) => updateAttrs({ ...currentAttrs, clippingPath: e.target.value })} placeholder="Path name..." className="bg-background" />
-        </div>
-        <div className="flex flex-col gap-2 md:col-span-2">
-          <Label className="text-sm font-medium">Image Description <span className="text-xs font-normal text-muted-foreground">(optional)</span></Label>
-          <Input value={currentAttrs.imageDescription} onChange={(e) => updateAttrs({ ...currentAttrs, imageDescription: e.target.value })} placeholder="Enter description..." className="bg-background" />
-        </div>
-      </div>
-
-      {onApplyPerShotToAll && (
-        <Button variant="outline" size="sm" className="w-fit" onClick={onApplyPerShotToAll}>
-          Apply this image&apos;s per-shot values to all images
-        </Button>
-      )}
-    </div>
-  )
-}
-
 export function ImageUploadWizard({
   uploadLevel,
   setUploadLevel,
@@ -535,6 +187,29 @@ export function ImageUploadWizard({
   const [selectedProduct, setSelectedProduct] = useState("DRESS001")
   const [selectedColorCode, setSelectedColorCode] = useState("")
   const [selectedGtin, setSelectedGtin] = useState("")
+
+  // Get auto-populated data based on selections
+  const getAutoPopulatedData = () => {
+    const selCode = MOCK_DATA.selectionCodes.find(s => s.code === selectedSelectionCode)
+    const product = MOCK_DATA.products.find(p => p.id === selectedProduct)
+    const color = MOCK_DATA.colorCodes.find(c => c.code === selectedColorCode)
+    const gtinEntry = product?.gtins.find(g => g.gtin === selectedGtin)
+    
+    return {
+      companyName: "KIBBLES N BITS",
+      accountNumber: "125103335555",
+      selectionCode: selCode?.code || "",
+      description: selCode?.description || "",
+      productId: product?.id || "",
+      productDescription: product?.description || "",
+      gtins: product?.gtins || [],
+      colorCode: color?.code || "",
+      colorName: color?.name || "",
+      selectedGtin: gtinEntry?.gtin || "",
+      selectedGtinType: gtinEntry?.type || "",
+    }
+  }
+
   const [uploadedFiles, setUploadedFiles] = useState<UploadedFile[]>([])
   const [isDragging, setIsDragging] = useState(false)
   const [showProductMedia, setShowProductMedia] = useState(false)
@@ -574,55 +249,6 @@ export function ImageUploadWizard({
   const [editAttrInitial, setEditAttrInitial] = useState<typeof attributes | null>(null)
   // Syndication acknowledgement checkbox in Step 3 — resets on Back (Task 2)
   const [syndicationAcknowledged, setSyndicationAcknowledged] = useState(false)
-  // ── AI Extended-Attribute extraction (Step 2 sub-section, mock-first) ──
-  // Selected product category for extraction
-  const [aiCategory, setAiCategory] = useState<string>("")
-  // Selected GPC brick (leaf classification) within the category. Extraction is brick-scoped:
-  // only this brick's attributes are ever suggested. Null until a brick is chosen.
-  const [aiBrick, setAiBrick] = useState<Brick | null>(null)
-  // Whether the user explicitly skipped the AI extraction section
-  const [aiSkipped, setAiSkipped] = useState(false)
-  // Product-level extraction result (one consolidated result for all uploaded images).
-  const [aiExtraction, setAiExtraction] = useState<ProductExtractionResult | null>(null)
-  // The suggestion row currently being inline-edited (null = none), scoped by index only
-  const [aiEditing, setAiEditing] = useState<{ index: number } | null>(null)
-  // ── Per-shot AI suggestions (P0.2b) — proposes orientation/facing/angle/description per
-  // image. Strictly optional: nothing is applied without an explicit Accept. ──
-  const [shotSuggestions, setShotSuggestions] = useState<ShotSuggestionRow[] | null>(null)
-  const [shotSuggestLoading, setShotSuggestLoading] = useState(false)
-  // ── Brick classification (P1.1) — AI proposes a brick from the images; the human confirms
-  // or corrects via the manual pickers. Confirming (either way) auto-runs both AI passes below. ──
-  const [classificationStatus, setClassificationStatus] = useState<"idle" | "loading" | "proposed" | "confirmed">("idle")
-  const [classificationConfidence, setClassificationConfidence] = useState<number | null>(null)
-  // Manual category/brick correction panel — hidden by default; "Set manually" / "Change" reveal it.
-  const [showManualClassify, setShowManualClassify] = useState(false)
-
-  // Fetch the FULL CSV-derived allowed options for the selected category from the server.
-  // Only one category's options are ever sent to the client (never the whole CSV). SWR caches
-  // per category, so switching back and forth is instant. Used for edit dropdowns + mock grounding.
-  const { data: optionsData } = useSWR<AttributeOptionsResponse>(
-    aiCategory ? `/api/attribute-options?category=${encodeURIComponent(aiCategory)}` : null,
-    (url: string) => fetch(url).then(r => r.json()),
-    { revalidateOnFocus: false, dedupingInterval: 60_000 },
-  )
-  const categoryOptions: CategoryOptions = optionsData?.options ?? []
-
-  // Allowed values for a Code List within the currently-loaded category options (full CSV set).
-  const valuesForCodeList = (codeListName: string) =>
-    categoryOptions.find(o => o.codeListName === codeListName)?.values ?? []
-
-  // Direct fetch fallback used by mock mode when SWR hasn't populated yet (e.g. immediate click).
-  const fetchCategoryOptions = async (category: string): Promise<CategoryOptions> => {
-    try {
-      const res = await fetch(`/api/attribute-options?category=${encodeURIComponent(category)}`)
-      if (!res.ok) return []
-      const data = (await res.json()) as AttributeOptionsResponse
-      return Array.isArray(data.options) ? data.options : []
-    } catch {
-      return []
-    }
-  }
-  
   // Form state for attributes
   const [attributes, setAttributes] = useState({
     imageType: "SI",
@@ -698,355 +324,20 @@ export function ImageUploadWizard({
     })
   }
 
-  // ── AI extraction handlers (mock-first) ──
-  // Default category heuristic from the current product/selection-code context (item #3).
-  // Not permanent — the user can still change the category manually.
-  const getDefaultCategory = () => {
-    const d = getAutoPopulatedData()
-    const hay = `${d.description} ${d.productDescription}`.toLowerCase()
-    if (/tops|dress|shirt|apparel|clothing/.test(hay)) return "Apparel"
-    return "Shoes"
-  }
-
-  // bricksForCategory derives from aiCategory for the manual-correction Selects. Every path
-  // that sets aiCategory (classification, the category Select, product change) already
-  // resolves aiBrick explicitly itself — no reactive effect here, since one previously stomped
-  // on a just-set classification brick by resetting it back to null on the same category change.
-  const bricksForCategory = aiCategory ? getCategoryBricks(aiCategory) : []
-
-  // Dispatcher: routes to Gemini or mock based on EXTRACTION_MODE. Wired to all extract triggers.
-  // Accepts optional overrides so a just-confirmed classification can be passed directly,
-  // rather than read back from aiCategory/aiBrick state in the same synchronous tick they
-  // were set in (a stale-closure trap — React doesn't re-render mid-handler).
-  const runExtraction = (overrideCategory?: string, overrideBrick?: Brick | null) => {
-    if (EXTRACTION_MODE === "gemini") {
-      void runGeminiExtraction(overrideCategory, overrideBrick)
-    } else {
-      void runMockExtraction(overrideCategory, overrideBrick)
-    }
-  }
-
-  // Runs brick classification (P1.1): proposes a category+brick from the images so the
-  // human confirms/corrects instead of picking blind from dropdowns first. Gemini mode calls
-  // /api/suggest-brick; mock mode uses the deterministic keyword heuristic. Either way this
-  // only ever reaches "proposed" — nothing is applied until confirmClassification runs.
-  const runClassification = async () => {
-    if (uploadedFiles.length === 0) return
-    setClassificationStatus("loading")
-    const productDescription = getAutoPopulatedData().productDescription
-    const guessCategory = getDefaultCategory()
-
-    if (EXTRACTION_MODE === "gemini") {
-      try {
-        const images = await Promise.all(
-          uploadedFiles.map(async (f) => ({ fileName: f.name, imageBase64: await fileToBase64(f.file), mimeType: f.type }))
-        )
-        const res = await fetch("/api/suggest-brick", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ images, productDescription }),
-        })
-        if (!res.ok) throw new Error(`Classification failed (${res.status}).`)
-        const data = await res.json() as { category: string; brickCode: string; brickName: string; confidence: number }
-        const brick = getBrick(data.category, data.brickCode)
-        if (!brick) throw new Error("Unknown brick returned.")
-        setAiCategory(data.category)
-        setAiBrick(brick)
-        setClassificationConfidence(data.confidence)
-        setClassificationStatus("proposed")
-        return
-      } catch {
-        // Fall through to the mock heuristic so the demo never dead-ends.
-      }
-    }
-
-    await new Promise(resolve => setTimeout(resolve, 600))
-    const mock = mockClassifyBrick(guessCategory, productDescription, uploadedFiles.map(f => f.name))
-    if (!mock) {
-      // No brick coverage for this category (e.g. Home) — nothing to propose; manual path only.
-      setClassificationStatus("idle")
-      return
-    }
-    setAiCategory(guessCategory)
-    setAiBrick(mock.brick)
-    setClassificationConfidence(mock.confidence)
-    setClassificationStatus("proposed")
-  }
-
-  // Confirms a category+brick (from the proposal chip, or a manual pick) and auto-runs both
-  // AI passes. Takes explicit values rather than reading aiCategory/aiBrick state, since a
-  // manual pick may call this in the same tick it sets that state (stale-closure otherwise).
-  const confirmClassification = (category: string, brick: Brick, confidence: number | null = null) => {
-    setClassificationConfidence(confidence)
-    setClassificationStatus("confirmed")
-    setShowManualClassify(false)
-    runExtraction(category, brick)
-    // Per-shot suggestion (orientation/facing/angle/description) is a GDSN-field accelerator
-    // that never needed a brick — it must NOT be triggered here. It has its own independent
-    // button in renderAiSection so it's reachable with zero classification/extraction involved.
-  }
-
-  // Convert a File to a raw base64 string (no data: prefix) for the JSON API payload.
-  const fileToBase64 = (file: File): Promise<string> =>
-    new Promise((resolve, reject) => {
-      const reader = new FileReader()
-      reader.onload = () => {
-        const result = typeof reader.result === "string" ? reader.result : ""
-        const comma = result.indexOf(",")
-        resolve(comma >= 0 ? result.slice(comma + 1) : result)
-      }
-      reader.onerror = () => reject(new Error("Failed to read image file."))
-      reader.readAsDataURL(file)
-    })
-
-  // Real Gemini extraction: all uploaded images are sent together in one request,
-  // producing one consolidated product-level attribute set.
-  const runGeminiExtraction = async (overrideCategory?: string, overrideBrick?: Brick | null) => {
-    const category = overrideCategory ?? aiCategory
-    const brick = overrideBrick ?? aiBrick
-    if (!category || !brick || uploadedFiles.length === 0) return
-    const targets = uploadedFiles.map(f => ({ name: f.name, file: f.file, type: f.type }))
-    setAiSkipped(false)
-    setAiEditing(null)
-    setAiExtraction({
-      category,
-      brickCode: brick.code,
-      brickName: brick.name,
-      imageCount: targets.length,
-      imageNames: targets.map(f => f.name),
-      attributes: [],
-      unresolvedAttributes: [],
-      status: "extracting",
-    })
-
-    try {
-      // Convert all files to base64 in parallel
-      const images = await Promise.all(
-        targets.map(async (f) => ({
-          fileName: f.name,
-          imageBase64: await fileToBase64(f.file),
-          mimeType: f.type,
-        }))
-      )
-
-      const res = await fetch("/api/extract-attributes", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ category, brick: brick.code, images }),
-      })
-
-      if (!res.ok) {
-        const errBody = await res.json().catch(() => null)
-        throw new Error(errBody?.error || `Extraction failed (${res.status}).`)
-      }
-
-      const data = await res.json() as ExtractionApiResponse
-      setAiExtraction({
-        category: typeof data.category === "string" ? data.category : category,
-        brickCode: typeof data.brickCode === "string" ? data.brickCode : brick.code,
-        brickName: typeof data.brickName === "string" ? data.brickName : brick.name,
-        imageCount: typeof data.imageCount === "number" ? data.imageCount : targets.length,
-        imageNames: Array.isArray(data.imageNames) ? data.imageNames : targets.map(f => f.name),
-        attributes: (Array.isArray(data.attributes) ? data.attributes : []).map(a => ({ ...a, decision: "pending" as const })),
-        unresolvedAttributes: Array.isArray(data.unresolvedAttributes) ? data.unresolvedAttributes : [],
-        status: "complete",
-      })
-    } catch {
-      // Auto-fallback to mock/demo results when Gemini is unavailable
-      const options = categoryOptions.length > 0 ? categoryOptions : await fetchCategoryOptions(category)
-      const mock = buildMockExtraction(category, brick, options)
-      setAiExtraction({
-        category,
-        brickCode: brick.code,
-        brickName: brick.name,
-        imageCount: targets.length,
-        imageNames: targets.map(f => f.name),
-        attributes: mock.attributes.map(a => ({ ...a, decision: "pending" as const })),
-        unresolvedAttributes: mock.unresolvedAttributes,
-        status: "complete",
-        fallbackUsed: true,
-      })
-    }
-  }
-
-  // Mock extraction: returns one consolidated product-level result (same shape as Gemini mode).
-  // Grounds GS1 codes in the same CSV-derived options used by Gemini + dropdowns.
-  const runMockExtraction = async (overrideCategory?: string, overrideBrick?: Brick | null) => {
-    const category = overrideCategory ?? aiCategory
-    const brick = overrideBrick ?? aiBrick
-    if (!category || !brick || uploadedFiles.length === 0) return
-    const imageNames = uploadedFiles.map(f => f.name)
-    setAiSkipped(false)
-    setAiEditing(null)
-    setAiExtraction({
-      category,
-      brickCode: brick.code,
-      brickName: brick.name,
-      imageCount: uploadedFiles.length,
-      imageNames,
-      attributes: [],
-      unresolvedAttributes: [],
-      status: "extracting",
-    })
-    // Ensure options are available (SWR cache, else direct fetch) so mock codes stay grounded.
-    const options = categoryOptions.length > 0 ? categoryOptions : await fetchCategoryOptions(category)
-    // Brief delay to simulate processing latency for a realistic demo feel.
-    await new Promise(resolve => setTimeout(resolve, 900))
-    const mock = buildMockExtraction(category, brick, options)
-    setAiExtraction({
-      category,
-      brickCode: brick.code,
-      brickName: brick.name,
-      imageCount: uploadedFiles.length,
-      imageNames,
-      attributes: mock.attributes.map(a => ({ ...a, decision: "pending" as const })),
-      unresolvedAttributes: mock.unresolvedAttributes,
-      status: "complete",
-    })
-  }
-
-  // Set the review decision on a single suggested attribute (explicit Accept / Reject).
-  const setAttributeDecision = (index: number, decision: AttributeDecision) => {
-    setAiExtraction(prev => {
-      if (!prev) return prev
-      return { ...prev, attributes: prev.attributes.map((a, i) => i === index ? { ...a, decision } : a) }
-    })
-  }
-
-  // Edit a single attribute's value or GS1 code (inline Edit). Edited rows stay accepted.
-  const updateAttributeField = (index: number, field: "attributeValue" | "code", value: string) => {
-    setAiExtraction(prev => {
-      if (!prev) return prev
-      return { ...prev, attributes: prev.attributes.map((a, i) => i === index ? { ...a, [field]: value } : a) }
-    })
-  }
-
-  // Select an allowed value for a suggestion from the curated GS1 list; sets value + matching code.
-  const selectAttributeValue = (index: number, value: string) => {
-    setAiExtraction(prev => {
-      if (!prev) return prev
-      return {
-        ...prev,
-        attributes: prev.attributes.map((a, i) => {
-          if (i !== index) return a
-          const match = valuesForCodeList(a.codeListName).find(v => v.value === value)
-          return { ...a, attributeValue: value, code: match?.code ?? a.code }
-        }),
-      }
-    })
-  }
-
-  // Resolve an unresolved attribute by selecting a value from the GS1 options.
-  const resolveUnresolvedAttribute = (unresolvedIndex: number, codeListName: string, value: string) => {
-    const match = valuesForCodeList(codeListName).find(v => v.value === value)
-    if (!match) return
-    setAiExtraction(prev => {
-      if (!prev) return prev
-      return {
-        ...prev,
-        attributes: [...prev.attributes, {
-          codeListName,
-          attributeValue: value,
-          code: match.code,
-          confidence: 1.0,
-          reason: "Manually added by user.",
-          decision: "accepted" as const,
-        }],
-        unresolvedAttributes: prev.unresolvedAttributes.filter((_, i) => i !== unresolvedIndex),
-      }
-    })
-  }
-
-  // Clear extraction state when files change, product changes, or category changes.
-  const clearExtraction = () => {
-    setAiExtraction(null)
-    setAiEditing(null)
-  }
-
-  // Per-shot suggestions are keyed by file index — any deletion/replacement invalidates them.
-  const clearShotSuggestions = () => setShotSuggestions(null)
-
-  // Runs the per-shot suggestion pass: Gemini route when configured, else the mock
-  // filename heuristic. Optional accelerator only — nothing applies without Accept.
-  const runShotSuggestions = async () => {
-    if (uploadedFiles.length === 0) return
-    setShotSuggestLoading(true)
-    const productDescription = getAutoPopulatedData().productDescription
-    if (EXTRACTION_MODE === "gemini") {
-      try {
-        const images = await Promise.all(
-          uploadedFiles.map(async (f) => ({ fileName: f.name, imageBase64: await fileToBase64(f.file), mimeType: f.type }))
-        )
-        const res = await fetch("/api/suggest-shot-attributes", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ images, productDescription }),
-        })
-        if (!res.ok) throw new Error(`Suggestion failed (${res.status}).`)
-        const data = await res.json() as { suggestions: { fileName: string; orientation: string; facing: string; angle: string; description: string; confidence: number }[] }
-        const rows: ShotSuggestionRow[] = []
-        uploadedFiles.forEach((f, i) => {
-          const s = Array.isArray(data.suggestions) ? data.suggestions.find(x => x.fileName === f.name) : undefined
-          if (s) rows.push({ fileIndex: i, fileName: f.name, orientation: s.orientation, facing: s.facing, angle: s.angle, description: s.description, confidence: s.confidence, status: "pending" })
-        })
-        setShotSuggestions(rows)
-        setShotSuggestLoading(false)
-        return
-      } catch {
-        // Fall through to the mock heuristic so the demo never dead-ends.
-      }
-    }
-    await new Promise(resolve => setTimeout(resolve, 600))
-    setShotSuggestions(uploadedFiles.map((f, i) => ({
-      fileIndex: i,
-      fileName: f.name,
-      ...mockShotSuggestion(f.name, i, productDescription),
-      status: "pending" as const,
-    })))
-    setShotSuggestLoading(false)
-  }
-
-  // Accept one or many per-shot suggestions: writes into the per-image records.
-  const acceptShotSuggestions = (rows: ShotSuggestionRow[]) => {
-    setAttributesByImage(prev => {
-      const next = { ...prev }
-      rows.forEach(r => {
-        const rec = { ...(next[r.fileIndex] ?? attributes) }
-        rec.orientation = r.orientation
-        if (r.facing) rec.facing = r.facing
-        if (r.angle) rec.angle = r.angle
-        if (r.description) rec.imageDescription = r.description
-        next[r.fileIndex] = rec
-      })
-      return next
-    })
-    const accepted = new Set(rows.map(r => r.fileIndex))
-    setShotSuggestions(prev => prev ? prev.map(p => accepted.has(p.fileIndex) ? { ...p, status: "accepted" as const } : p) : prev)
-  }
-
-  const dismissShotSuggestion = (fileIndex: number) => {
-    setShotSuggestions(prev => prev ? prev.map(p => p.fileIndex === fileIndex ? { ...p, status: "dismissed" as const } : p) : prev)
-  }
-
-  // Derived status flags from the single product-level extraction result
-  const isExtracting = aiExtraction?.status === "extracting"
-  const isComplete = aiExtraction?.status === "complete"
-  const isError = aiExtraction?.status === "error"
-  const hasExtraction = aiExtraction !== null
-  // Accepted suggestions at the product level (only explicit Accept clicks count)
-  const acceptedExtractedAttributes = aiExtraction?.attributes.filter(a => a.decision === "accepted") ?? []
-  // Suggestions still awaiting a decision — these are silently dropped at submission
-  // unless accepted, so both the results card and Step 3 surface the count (P0.3).
-  const pendingExtractedCount = isComplete ? (aiExtraction?.attributes.filter(a => a.decision === "pending").length ?? 0) : 0
-
-  // Accept every still-pending suggestion in one click.
-  const acceptAllPending = () => {
-    setAiExtraction(prev => {
-      if (!prev) return prev
-      return { ...prev, attributes: prev.attributes.map(a => a.decision === "pending" ? { ...a, decision: "accepted" as const } : a) }
-    })
-  }
-
+  // All AI/classification state and handlers (extraction, per-shot suggestion, brick
+  // classification) live in this shared hook. Destructured under identical names so the
+  // still-inline render functions below (pending further extraction) need no changes.
+  const {
+    aiCategory, setAiCategory, aiBrick, setAiBrick, aiSkipped, setAiSkipped,
+    aiExtraction, aiEditing, setAiEditing, shotSuggestions, shotSuggestLoading,
+    classificationStatus, setClassificationStatus, classificationConfidence, setClassificationConfidence,
+    showManualClassify, setShowManualClassify,
+    categoryOptions, valuesForCodeList, bricksForCategory,
+    runExtraction, runClassification, confirmClassification,
+    setAttributeDecision, updateAttributeField, selectAttributeValue, resolveUnresolvedAttribute,
+    clearExtraction, clearShotSuggestions, runShotSuggestions, acceptShotSuggestions, dismissShotSuggestion,
+    isExtracting, isComplete, isError, hasExtraction, acceptedExtractedAttributes, pendingExtractedCount, acceptAllPending,
+  } = useAiAttributes({ uploadedFiles, attributes, setAttributesByImage, getAutoPopulatedData })
 
   // Manual category+brick correction panel — the fallback path when the AI proposal (or its
   // absence) isn't right. Picking a brick here confirms classification directly (see the
@@ -1985,28 +1276,6 @@ export function ImageUploadWizard({
       setCurrentStep(currentStep - 1)
     } else {
       onCancel()
-    }
-  }
-
-  // Get auto-populated data based on selections
-  const getAutoPopulatedData = () => {
-    const selCode = MOCK_DATA.selectionCodes.find(s => s.code === selectedSelectionCode)
-    const product = MOCK_DATA.products.find(p => p.id === selectedProduct)
-    const color = MOCK_DATA.colorCodes.find(c => c.code === selectedColorCode)
-    const gtinEntry = product?.gtins.find(g => g.gtin === selectedGtin)
-    
-    return {
-      companyName: "KIBBLES N BITS",
-      accountNumber: "125103335555",
-      selectionCode: selCode?.code || "",
-      description: selCode?.description || "",
-      productId: product?.id || "",
-      productDescription: product?.description || "",
-      gtins: product?.gtins || [],
-      colorCode: color?.code || "",
-      colorName: color?.name || "",
-      selectedGtin: gtinEntry?.gtin || "",
-      selectedGtinType: gtinEntry?.type || "",
     }
   }
 
