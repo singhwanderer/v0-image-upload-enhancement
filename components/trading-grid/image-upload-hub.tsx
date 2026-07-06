@@ -335,6 +335,13 @@ export function RetailerImageBrowser() {
     setCurrentView("selection-codes")
   }
 
+  const handleVendorImagesClick = (vendor: typeof MOCK_VENDORS[0], e: React.MouseEvent) => {
+    e.stopPropagation()
+    setSelectedVendor(vendor)
+    setSelectedSelectionCode("ALL")
+    setCurrentView("product-list")
+  }
+
   const handleSelectionCodeSelect = (code: string) => {
     setSelectedSelectionCode(code)
     setCurrentView("product-list")
@@ -358,7 +365,7 @@ export function RetailerImageBrowser() {
       }
     })
     
-    if (selectedVendor && currentView !== "vendor-list") {
+    if (selectedVendor && currentView !== "vendor-list" && selectedSelectionCode !== "ALL") {
       crumbs.push({ 
         label: "Selection Code List", 
         onClick: () => {
@@ -418,7 +425,7 @@ export function RetailerImageBrowser() {
               title="Export vendor list as CSV"
               onClick={() => downloadCsv("vendor_list.csv", buildTableCsv(
                 ["trading_partner_name", "account_number", "selection_codes", "products", "gtins", "images", "image_coverage_pct"],
-                MOCK_VENDORS.map(v => [v.name, v.accountNumber, String(v.selectionCodes), String(v.products), String(v.gtins), String(v.images), `${Math.round((v.images / v.products) * 100)}%`])
+                MOCK_VENDORS.map(v => [v.name, v.accountNumber, String(v.selectionCodes), String(v.products), String(v.gtins), String(v.images), `${Math.min(100, Math.round((v.images / v.gtins) * 100))}%`])
               ))}
             >
               <Download className="size-4 text-muted-foreground" />
@@ -453,7 +460,7 @@ export function RetailerImageBrowser() {
             </thead>
             <tbody>
               {MOCK_VENDORS.map((vendor) => {
-                const coveragePct = Math.round((vendor.images / vendor.products) * 100)
+                const coveragePct = Math.min(100, Math.round((vendor.images / vendor.gtins) * 100))
                 return (
                   <tr
                     key={vendor.id}
@@ -466,7 +473,12 @@ export function RetailerImageBrowser() {
                     <td className="px-3 py-2 text-foreground">{vendor.products}</td>
                     <td className="px-3 py-2 text-tg-link">{vendor.gtins.toLocaleString()}</td>
                     <td className="px-3 py-2">
-                      <span className="text-tg-link hover:underline">{vendor.images.toLocaleString()}</span>
+                      <button
+                        className="text-tg-link hover:underline"
+                        onClick={(e) => handleVendorImagesClick(vendor, e)}
+                      >
+                        {vendor.images.toLocaleString()}
+                      </button>
                       <span className="ml-2 text-xs text-muted-foreground">{coveragePct}%</span>
                     </td>
                   </tr>
