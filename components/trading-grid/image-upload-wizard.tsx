@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useCallback, useEffect } from "react"
+import { useState, useCallback } from "react"
 import { 
   X, 
   ChevronRight, 
@@ -53,7 +53,7 @@ import { toast } from "@/hooks/use-toast"
 import useSWR from "swr"
 import type { CategoryOptions, AttributeDecision, ExtractedAttribute, UnresolvedAttribute } from "@/lib/gs1/types"
 import { buildMockExtraction } from "@/lib/gs1/mock-scenarios"
-import { getCategoryBricks, type Brick } from "@/lib/gs1/generated-bricks"
+import { getCategoryBricks, getBrick, type Brick } from "@/lib/gs1/generated-bricks"
 import { useMediaSelection } from "./use-media-selection"
 import { AiAttributesTable } from "./ai-attributes-table"
 
@@ -320,6 +320,17 @@ function mockShotSuggestion(name: string, index: number, productDescription: str
   }
 }
 
+// Mock brick classification (P1.1): keyword-matches brick names against the product
+// description/filenames within the given category; falls back to the category's first
+// brick. Deterministic and demo-stable, same style as mockShotSuggestion above.
+function mockClassifyBrick(category: string, productDescription: string, fileNames: string[]): { brick: Brick; confidence: number } | null {
+  const bricks = getCategoryBricks(category)
+  if (bricks.length === 0) return null
+  const hay = `${productDescription} ${fileNames.join(" ")}`.toLowerCase()
+  const matched = bricks.find(b => hay.includes(b.name.toLowerCase()))
+  return matched ? { brick: matched, confidence: 0.88 } : { brick: bricks[0], confidence: 0.62 }
+}
+
 // P0.2a: the attribute record splits into two groups. PRODUCT-WIDE fields hold one honest
 // value for every image of a product; PER-SHOT fields describe what makes each photo
 // different (which is exactly why they must never be blanket-applied).
@@ -579,6 +590,12 @@ export function ImageUploadWizard({
   // image. Strictly optional: nothing is applied without an explicit Accept. ──
   const [shotSuggestions, setShotSuggestions] = useState<ShotSuggestionRow[] | null>(null)
   const [shotSuggestLoading, setShotSuggestLoading] = useState(false)
+  // ── Brick classification (P1.1) — AI proposes a brick from the images; the human confirms
+  // or corrects via the manual pickers. Confirming (either way) auto-runs both AI passes below. ──
+  const [classificationStatus, setClassificationStatus] = useState<"idle" | "loading" | "proposed" | "confirmed">("idle")
+  const [classificationConfidence, setClassificationConfidence] = useState<number | null>(null)
+  // Manual category/brick correction panel — hidden by default; "Set manually" / "Change" reveal it.
+  const [showManualClassify, setShowManualClassify] = useState(false)
 
   // Fetch the FULL CSV-derived allowed options for the selected category from the server.
   // Only one category's options are ever sent to the client (never the whole CSV). SWR caches
@@ -691,30 +708,80 @@ export function ImageUploadWizard({
     return "Shoes"
   }
 
-  // Default the category once when the user first reaches Step 2 (only if not already chosen).
-  useEffect(() => {
-    if (currentStep === 2 && !aiCategory && uploadedFiles.length > 0) {
-      setAiCategory(getDefaultCategory())
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [currentStep, uploadedFiles.length])
-
-  // Keep the brick in sync with the category: reset on category change, auto-selecting when the
-  // category has exactly one brick (so single-brick categories need no extra click).
+  // bricksForCategory derives from aiCategory for the manual-correction Selects. Every path
+  // that sets aiCategory (classification, the category Select, product change) already
+  // resolves aiBrick explicitly itself — no reactive effect here, since one previously stomped
+  // on a just-set classification brick by resetting it back to null on the same category change.
   const bricksForCategory = aiCategory ? getCategoryBricks(aiCategory) : []
-  useEffect(() => {
-    const bricks = aiCategory ? getCategoryBricks(aiCategory) : []
-    setAiBrick(bricks.length === 1 ? bricks[0] : null)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [aiCategory])
 
   // Dispatcher: routes to Gemini or mock based on EXTRACTION_MODE. Wired to all extract triggers.
-  const runExtraction = () => {
+  // Accepts optional overrides so a just-confirmed classification can be passed directly,
+  // rather than read back from aiCategory/aiBrick state in the same synchronous tick they
+  // were set in (a stale-closure trap — React doesn't re-render mid-handler).
+  const runExtraction = (overrideCategory?: string, overrideBrick?: Brick | null) => {
     if (EXTRACTION_MODE === "gemini") {
-      void runGeminiExtraction()
+      void runGeminiExtraction(overrideCategory, overrideBrick)
     } else {
-      void runMockExtraction()
+      void runMockExtraction(overrideCategory, overrideBrick)
     }
+  }
+
+  // Runs brick classification (P1.1): proposes a category+brick from the images so the
+  // human confirms/corrects instead of picking blind from dropdowns first. Gemini mode calls
+  // /api/suggest-brick; mock mode uses the deterministic keyword heuristic. Either way this
+  // only ever reaches "proposed" — nothing is applied until confirmClassification runs.
+  const runClassification = async () => {
+    if (uploadedFiles.length === 0) return
+    setClassificationStatus("loading")
+    const productDescription = getAutoPopulatedData().productDescription
+    const guessCategory = getDefaultCategory()
+
+    if (EXTRACTION_MODE === "gemini") {
+      try {
+        const images = await Promise.all(
+          uploadedFiles.map(async (f) => ({ fileName: f.name, imageBase64: await fileToBase64(f.file), mimeType: f.type }))
+        )
+        const res = await fetch("/api/suggest-brick", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ images, productDescription }),
+        })
+        if (!res.ok) throw new Error(`Classification failed (${res.status}).`)
+        const data = await res.json() as { category: string; brickCode: string; brickName: string; confidence: number }
+        const brick = getBrick(data.category, data.brickCode)
+        if (!brick) throw new Error("Unknown brick returned.")
+        setAiCategory(data.category)
+        setAiBrick(brick)
+        setClassificationConfidence(data.confidence)
+        setClassificationStatus("proposed")
+        return
+      } catch {
+        // Fall through to the mock heuristic so the demo never dead-ends.
+      }
+    }
+
+    await new Promise(resolve => setTimeout(resolve, 600))
+    const mock = mockClassifyBrick(guessCategory, productDescription, uploadedFiles.map(f => f.name))
+    if (!mock) {
+      // No brick coverage for this category (e.g. Home) — nothing to propose; manual path only.
+      setClassificationStatus("idle")
+      return
+    }
+    setAiCategory(guessCategory)
+    setAiBrick(mock.brick)
+    setClassificationConfidence(mock.confidence)
+    setClassificationStatus("proposed")
+  }
+
+  // Confirms a category+brick (from the proposal chip, or a manual pick) and auto-runs both
+  // AI passes. Takes explicit values rather than reading aiCategory/aiBrick state, since a
+  // manual pick may call this in the same tick it sets that state (stale-closure otherwise).
+  const confirmClassification = (category: string, brick: Brick, confidence: number | null = null) => {
+    setClassificationConfidence(confidence)
+    setClassificationStatus("confirmed")
+    setShowManualClassify(false)
+    runExtraction(category, brick)
+    void runShotSuggestions()
   }
 
   // Convert a File to a raw base64 string (no data: prefix) for the JSON API payload.
@@ -732,10 +799,10 @@ export function ImageUploadWizard({
 
   // Real Gemini extraction: all uploaded images are sent together in one request,
   // producing one consolidated product-level attribute set.
-  const runGeminiExtraction = async () => {
-    if (!aiCategory || !aiBrick || uploadedFiles.length === 0) return
-    const category = aiCategory
-    const brick = aiBrick
+  const runGeminiExtraction = async (overrideCategory?: string, overrideBrick?: Brick | null) => {
+    const category = overrideCategory ?? aiCategory
+    const brick = overrideBrick ?? aiBrick
+    if (!category || !brick || uploadedFiles.length === 0) return
     const targets = uploadedFiles.map(f => ({ name: f.name, file: f.file, type: f.type }))
     setAiSkipped(false)
     setAiEditing(null)
@@ -802,10 +869,10 @@ export function ImageUploadWizard({
 
   // Mock extraction: returns one consolidated product-level result (same shape as Gemini mode).
   // Grounds GS1 codes in the same CSV-derived options used by Gemini + dropdowns.
-  const runMockExtraction = async () => {
-    if (!aiCategory || !aiBrick || uploadedFiles.length === 0) return
-    const category = aiCategory
-    const brick = aiBrick
+  const runMockExtraction = async (overrideCategory?: string, overrideBrick?: Brick | null) => {
+    const category = overrideCategory ?? aiCategory
+    const brick = overrideBrick ?? aiBrick
+    if (!category || !brick || uploadedFiles.length === 0) return
     const imageNames = uploadedFiles.map(f => f.name)
     setAiSkipped(false)
     setAiEditing(null)
@@ -978,59 +1045,31 @@ export function ImageUploadWizard({
     })
   }
 
-  // ── Data-richness meter (P1.2 / audit E4): makes record completeness visible so richness
-  // becomes a score suppliers close out, not an invisible virtue. Counts product-wide fields
-  // once, per-shot fields and measured facts per image, and extended-attribute progress. ──
-  const richness = (() => {
-    const productWideFields = ["imageType", "purpose", "locationType", "imageStyle"] as const
-    let filled = 0
-    let total = 0
-    productWideFields.forEach(k => { total++; if (attributes[k]) filled++ })
-    uploadedFiles.forEach((f, i) => {
-      const a = effectiveAttrs(i)
-      PER_SHOT_KEYS.forEach(k => { total++; if (a[k]) filled++ })
-      total += 3 // measured width / height / dpi
-      if (f.measured?.width) filled++
-      if (f.measured?.height) filled++
-      if (f.measured?.dpi) filled++
-    })
-    const extendedTotal = isComplete && aiExtraction
-      ? aiExtraction.attributes.length + aiExtraction.unresolvedAttributes.length
-      : 0
-    return { filled, total, extendedAccepted: acceptedExtractedAttributes.length, extendedTotal }
-  })()
 
-  const renderRichnessMeter = () => {
-    const pct = richness.total > 0 ? Math.round((richness.filled / richness.total) * 100) : 0
-    return (
-      <div className="flex flex-wrap items-center gap-3 rounded border border-border bg-card px-3 py-2 text-xs">
-        <span className="font-semibold uppercase tracking-wide text-muted-foreground shrink-0">Data richness</span>
-        <div className="h-1.5 w-24 rounded-full bg-muted overflow-hidden shrink-0">
-          <div
-            className={cn("h-full rounded-full transition-all", pct >= 80 ? "bg-tg-success" : pct >= 40 ? "bg-tg-warning" : "bg-destructive")}
-            style={{ width: `${pct}%` }}
-          />
-        </div>
-        <span className="text-foreground">{richness.filled} of {richness.total} image fields</span>
-        <span className="text-muted-foreground">·</span>
-        <span className="text-foreground">
-          {richness.extendedTotal > 0
-            ? `${richness.extendedAccepted} of ${richness.extendedTotal} extended attributes accepted`
-            : "extended attributes not extracted yet"}
-        </span>
-      </div>
-    )
-  }
-
-  // Idle AI controls (category + brick pickers, Extract button) — used in Step 2 and, per
-  // P1.2, in the post-submit drawer so extraction can be run after upload, not only during
-  // the wizard pass. showSkip hides the skip affordance where it makes no sense (drawer).
-  const renderAiIdleControls = (showSkip: boolean) => (
+  // Manual category+brick correction panel — the fallback path when the AI proposal (or its
+  // absence) isn't right. Picking a brick here confirms classification directly (see the
+  // Selects' onValueChange below) and auto-runs both AI passes, same as accepting a proposal.
+  const renderAiIdleControls = () => (
     <>
       <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:flex-wrap">
         <div className="flex flex-col gap-1">
           <Label htmlFor="ai-category" className="text-xs text-muted-foreground">Product category</Label>
-          <Select value={aiCategory} onValueChange={(v) => { setAiCategory(v); clearExtraction() }}>
+          <Select value={aiCategory} onValueChange={(v) => {
+            setAiCategory(v)
+            clearExtraction()
+            clearShotSuggestions()
+            const bricks = getCategoryBricks(v)
+            // A single-brick category fully determines classification on its own — confirm
+            // it directly (passing values explicitly avoids reading stale state this tick).
+            if (bricks.length === 1) {
+              setAiBrick(bricks[0])
+              confirmClassification(v, bricks[0])
+            } else {
+              setAiBrick(null)
+              setClassificationStatus("idle")
+              setClassificationConfidence(null)
+            }
+          }}>
             <SelectTrigger id="ai-category" className="w-56 bg-background">
               <SelectValue placeholder="Select a category..." />
             </SelectTrigger>
@@ -1046,7 +1085,16 @@ export function ImageUploadWizard({
           <Label htmlFor="ai-brick" className="text-xs text-muted-foreground">Product brick (GPC)</Label>
           <Select
             value={aiBrick?.code ?? ""}
-            onValueChange={(code) => { setAiBrick(bricksForCategory.find(b => b.code === code) ?? null); clearExtraction() }}
+            onValueChange={(code) => {
+              const brick = bricksForCategory.find(b => b.code === code) ?? null
+              setAiBrick(brick)
+              clearExtraction()
+              clearShotSuggestions()
+              // Picking a brick fully determines classification — confirm and auto-run both
+              // AI passes, same as accepting an AI-proposed brick.
+              if (brick) confirmClassification(aiCategory, brick)
+              else { setClassificationStatus("idle"); setClassificationConfidence(null) }
+            }}
             disabled={!aiCategory || bricksForCategory.length === 0}
           >
             <SelectTrigger id="ai-brick" className="w-72 bg-background">
@@ -1059,17 +1107,6 @@ export function ImageUploadWizard({
             </SelectContent>
           </Select>
         </div>
-        <div className="flex items-center gap-2">
-          <Button onClick={runExtraction} disabled={!aiCategory || !aiBrick || uploadedFiles.length === 0} className="gap-2">
-            <Sparkles className="size-4" />
-            Extract Extended Attributes with AI
-          </Button>
-          {showSkip && (
-            <Button variant="ghost" onClick={() => setAiSkipped(true)}>
-              Skip AI Extraction
-            </Button>
-          )}
-        </div>
       </div>
       {aiCategory && bricksForCategory.length === 0 ? (
         <p className="text-xs text-tg-warning">
@@ -1077,11 +1114,9 @@ export function ImageUploadWizard({
         </p>
       ) : (
         <p className="text-xs text-muted-foreground">
-          {!aiBrick && "Select the product brick to scope attributes to that classification. "}
-          {uploadedFiles.length === 1
-            ? "1 image will be analyzed for this product."
-            : `${uploadedFiles.length} images will be analyzed together for this product.`}{" "}
-          All uploaded images are treated as evidence for the same product.
+          {!aiBrick
+            ? "Select a category and brick — attributes and per-shot suggestions run automatically once both are set."
+            : "Picking a different brick re-runs both AI passes for this product."}
         </p>
       )}
     </>
@@ -1137,7 +1172,7 @@ export function ImageUploadWizard({
               <Info className="size-4 text-primary shrink-0" />
               <p className="text-sm text-foreground">AI service unavailable — showing demo results.</p>
             </div>
-            <Button variant="outline" size="sm" onClick={runExtraction}>Try again with AI</Button>
+            <Button variant="outline" size="sm" onClick={() => runExtraction()}>Try again with AI</Button>
           </div>
         )}
         <div className="flex items-start gap-2 rounded bg-muted/30 p-2">
@@ -1324,6 +1359,205 @@ export function ImageUploadWizard({
     )
   )
 
+  // Consolidated AI section (P1.1): one card, one entry point. Classification proposes a
+  // brick from the images; the human confirms (or corrects via the manual panel); confirming
+  // auto-runs both AI passes, shown as two labeled subsections below. showSkip hides the
+  // skip affordance where it doesn't make sense (post-submit drawer).
+  const renderAiSection = (showSkip: boolean) => (
+    <div className="rounded border border-border bg-card">
+      <div className="flex items-start gap-3 border-b border-border p-4">
+        <div className="flex size-9 shrink-0 items-center justify-center rounded bg-primary/10">
+          <Sparkles className="size-5 text-primary" />
+        </div>
+        <div className="flex-1">
+          <h3 className="text-sm font-semibold text-foreground">Analyze this product&apos;s images with AI</h3>
+          <p className="mt-0.5 text-sm text-muted-foreground">
+            Classifies your product, then suggests extended attributes and per-shot details for each image.
+          </p>
+        </div>
+        {EXTRACTION_MODE === "mock" && (
+          <span className="shrink-0 rounded-full bg-muted px-2 py-0.5 text-xs font-medium text-muted-foreground">
+            Demo mode — simulated results
+          </span>
+        )}
+        {aiSkipped && (
+          <Button variant="ghost" size="sm" onClick={() => setAiSkipped(false)}>
+            Show
+          </Button>
+        )}
+      </div>
+
+      {aiSkipped && (
+        <div className="flex items-center gap-2 p-4 text-sm text-muted-foreground">
+          <Info className="size-4 shrink-0" />
+          <span>AI analysis skipped. You can continue entering attributes manually.</span>
+        </div>
+      )}
+
+      {!aiSkipped && (
+        <div className="flex flex-col gap-4 p-4">
+          {/* Idle: single entry point, or the manual correction panel */}
+          {classificationStatus === "idle" && (
+            <div className="flex flex-col gap-3">
+              <div className="flex flex-wrap items-center gap-2">
+                <Button onClick={() => void runClassification()} disabled={uploadedFiles.length === 0} className="gap-2">
+                  <Sparkles className="size-4" />
+                  Analyze images with AI
+                </Button>
+                <Button variant="ghost" size="sm" onClick={() => setShowManualClassify(v => !v)}>
+                  {showManualClassify ? "Hide manual entry" : "Set category & brick manually"}
+                </Button>
+                {showSkip && (
+                  <Button variant="ghost" size="sm" onClick={() => setAiSkipped(true)}>
+                    Skip AI
+                  </Button>
+                )}
+              </div>
+              {showManualClassify && renderAiIdleControls()}
+            </div>
+          )}
+
+          {/* Loading: classifying */}
+          {classificationStatus === "loading" && (
+            <div className="flex items-center gap-3 rounded border border-border bg-muted/20 p-4">
+              <Loader2 className="size-5 animate-spin text-primary" />
+              <p className="text-sm text-foreground">Classifying your product…</p>
+            </div>
+          )}
+
+          {/* Proposed: confirm chip — human confirms or corrects before anything else runs */}
+          {classificationStatus === "proposed" && aiBrick && (
+            <div className="flex flex-col gap-3">
+              <div className="flex flex-wrap items-center gap-3 rounded border border-primary/30 bg-primary/5 p-3">
+                <p className="text-sm text-foreground">
+                  Looks like <span className="font-medium">{aiBrick.name}</span> · {aiCategory}
+                  {classificationConfidence != null && ` (${Math.round(classificationConfidence * 100)}%)`}
+                </p>
+                <div className="ml-auto flex items-center gap-2">
+                  <Button size="sm" className="gap-1" onClick={() => confirmClassification(aiCategory, aiBrick, classificationConfidence)}>
+                    <Check className="size-3.5" /> Confirm
+                  </Button>
+                  <Button variant="outline" size="sm" onClick={() => setShowManualClassify(true)}>Change</Button>
+                </div>
+              </div>
+              {showManualClassify && renderAiIdleControls()}
+              {showSkip && (
+                <Button variant="ghost" size="sm" className="w-fit" onClick={() => setAiSkipped(true)}>Skip AI</Button>
+              )}
+            </div>
+          )}
+
+          {/* Confirmed: both AI passes run automatically, shown as two labeled subsections */}
+          {classificationStatus === "confirmed" && (
+            <div className="flex flex-col gap-5">
+              <div className="flex items-center justify-between gap-2">
+                <p className="text-xs text-muted-foreground">
+                  Classified as <span className="font-medium text-foreground">{aiBrick?.name}</span> · {aiCategory}
+                </p>
+                <Button variant="ghost" size="sm" onClick={() => setShowManualClassify(v => !v)}>
+                  {showManualClassify ? "Hide" : "Change classification"}
+                </Button>
+              </div>
+              {showManualClassify && renderAiIdleControls()}
+
+              {/* Product attributes (extended, product-level) */}
+              <div className="flex flex-col gap-3">
+                <h4 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Product attributes</h4>
+                {isExtracting && (
+                  <div className="flex items-center gap-3 rounded border border-border bg-muted/20 p-4">
+                    <Loader2 className="size-5 animate-spin text-primary" />
+                    <p className="text-sm text-foreground">
+                      Analyzing {aiExtraction?.imageCount ?? uploadedFiles.length} image{(aiExtraction?.imageCount ?? uploadedFiles.length) !== 1 ? "s" : ""} together for {aiCategory} attributes…
+                    </p>
+                  </div>
+                )}
+                {isError && (
+                  <div className="flex flex-col gap-3 rounded border border-destructive/30 bg-destructive/5 p-4">
+                    <div className="flex items-start gap-2">
+                      <AlertCircle className="size-4 text-destructive mt-0.5 shrink-0" />
+                      <p className="text-sm text-foreground">
+                        {aiExtraction?.error ?? "Extraction failed. You can continue setting attributes manually."}
+                      </p>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <Button variant="outline" size="sm" onClick={() => runExtraction()}>Try again</Button>
+                      <Button variant="ghost" size="sm" onClick={() => { clearExtraction(); setAiSkipped(true) }}>
+                        Continue manually
+                      </Button>
+                    </div>
+                  </div>
+                )}
+                {renderAiResultsCard()}
+              </div>
+
+              {/* Per-shot attributes (orientation/facing/angle/description, per image) */}
+              <div className="flex flex-col gap-3 border-t border-border pt-4">
+                <div className="flex items-center justify-between gap-2">
+                  <h4 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Per-shot attributes</h4>
+                  {shotSuggestions !== null && shotSuggestions.some(s => s.status === "pending") && (
+                    <Button variant="outline" size="sm" className="gap-1" onClick={() => acceptShotSuggestions(shotSuggestions.filter(s => s.status === "pending"))}>
+                      <Check className="size-3.5" />
+                      Accept all ({shotSuggestions.filter(s => s.status === "pending").length})
+                    </Button>
+                  )}
+                </div>
+                {shotSuggestLoading && (
+                  <div className="flex items-center gap-3 rounded border border-border bg-muted/20 p-4">
+                    <Loader2 className="size-5 animate-spin text-primary" />
+                    <p className="text-sm text-foreground">Analyzing {uploadedFiles.length} image{uploadedFiles.length !== 1 ? "s" : ""} for per-shot attributes…</p>
+                  </div>
+                )}
+                {shotSuggestions !== null && !shotSuggestLoading && (
+                  <div className="flex flex-col divide-y divide-border rounded border border-border">
+                    {shotSuggestions.map((s) => (
+                      <div key={s.fileIndex} className={cn("flex items-center gap-3 px-4 py-2", s.status === "dismissed" && "opacity-50")}>
+                        <div className="size-9 shrink-0 rounded border border-border overflow-hidden bg-muted">
+                          {uploadedFiles[s.fileIndex]?.preview && (
+                            <img src={uploadedFiles[s.fileIndex].preview} alt="" className="size-full object-cover" />
+                          )}
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <p className="text-xs font-medium text-foreground truncate">{s.fileName}</p>
+                          <p className="text-xs text-muted-foreground truncate">
+                            {ORIENTATION_OPTIONS.find(o => o.value === s.orientation)?.label ?? s.orientation}
+                            {s.facing && ` · Facing ${FACING_OPTIONS.find(o => o.value === s.facing)?.label ?? s.facing}`}
+                            {s.description && ` · “${s.description}”`}
+                          </p>
+                        </div>
+                        <span className={cn(
+                          "inline-flex shrink-0 items-center rounded-full px-2 py-0.5 text-xs font-medium",
+                          s.confidence >= 0.85 ? "bg-tg-success/15 text-tg-success" : "bg-tg-warning/15 text-tg-warning"
+                        )}>
+                          {Math.round(s.confidence * 100)}%
+                        </span>
+                        {s.status === "accepted" ? (
+                          <span className="inline-flex shrink-0 items-center gap-1 text-xs font-medium text-tg-success">
+                            <Check className="size-3.5" /> Accepted
+                          </span>
+                        ) : s.status === "dismissed" ? (
+                          <span className="text-xs text-muted-foreground shrink-0">Dismissed</span>
+                        ) : (
+                          <div className="flex items-center gap-1 shrink-0">
+                            <Button variant="outline" size="sm" className="h-7 gap-1 px-2 text-xs" onClick={() => acceptShotSuggestions([s])}>
+                              <Check className="size-3" /> Accept
+                            </Button>
+                            <Button variant="outline" size="sm" className="h-7 gap-1 px-2 text-xs text-muted-foreground" onClick={() => dismissShotSuggestion(s.fileIndex)}>
+                              <X className="size-3" /> Dismiss
+                            </Button>
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  )
+
   const handleDragOver = useCallback((e: React.DragEvent) => {
     e.preventDefault()
     setIsDragging(true)
@@ -1380,6 +1614,8 @@ export function ImageUploadWizard({
     setUploadedFiles(prev => prev.filter(f => f.id !== fileId))
     clearExtraction() // file list changed — stale product-level extraction is invalid
     clearShotSuggestions() // index-keyed — deletion shifts indices
+    setClassificationStatus("idle") // re-confirm against the updated file set before re-running
+    setClassificationConfidence(null)
   }
 
   // Removes a set of confirmed images (single or bulk) and rebuilds attributesByImage against
@@ -1397,6 +1633,8 @@ export function ImageUploadWizard({
     setAttributesByImage(nextAttrsByImage)
     clearExtraction() // file list changed — stale product-level extraction is invalid
     clearShotSuggestions() // index-keyed — deletion shifts indices
+    setClassificationStatus("idle") // re-confirm against the updated file set before re-running
+    setClassificationConfidence(null)
     media.prune(remaining.map(f => f.id))
   }
 
@@ -1906,9 +2144,6 @@ export function ImageUploadWizard({
           </div>
         </div>
 
-        {/* Data-richness meter — post-submit view (P1.2) */}
-        {renderRichnessMeter()}
-
         {/* Syndication info block — supplier post-submit only (Change 6) */}
         {portalType === "supplier" && (
           <div className="rounded border border-border bg-card p-3 flex items-start gap-3">
@@ -2334,6 +2569,8 @@ export function ImageUploadWizard({
                           })
                           clearExtraction() // replaced image invalidates the product-level extraction
                           clearShotSuggestions() // filename/content changed under this index
+                          setClassificationStatus("idle") // re-confirm against the replacement image
+                          setClassificationConfidence(null)
                           setPendingReplaceFile(null)
                         }
                         // Commit attribute edits (Acceptance #8): product-wide keys apply to the
@@ -2511,35 +2748,9 @@ export function ImageUploadWizard({
               </SheetTitle>
             </SheetHeader>
             <div className="px-4 pb-4 flex flex-col gap-4">
-              {/* P1.2: extraction can be run from here after upload — not only during the wizard */}
-              {isExtracting && (
-                <div className="flex items-center gap-3 rounded border border-border bg-muted/20 p-4">
-                  <Loader2 className="size-5 animate-spin text-primary" />
-                  <p className="text-sm text-foreground">Analyzing {aiExtraction?.imageCount ?? uploadedFiles.length} image{(aiExtraction?.imageCount ?? uploadedFiles.length) !== 1 ? "s" : ""} for {aiCategory} attributes…</p>
-                </div>
-              )}
-              {isError && (
-                <div className="flex flex-col gap-3 rounded border border-destructive/30 bg-destructive/5 p-4">
-                  <div className="flex items-start gap-2">
-                    <AlertCircle className="size-4 text-destructive mt-0.5 shrink-0" />
-                    <p className="text-sm text-foreground">{aiExtraction?.error ?? "Extraction failed."}</p>
-                  </div>
-                  <Button variant="outline" size="sm" className="w-fit" onClick={runExtraction}>Try again</Button>
-                </div>
-              )}
-              {isComplete && renderAiResultsCard()}
-              {!hasExtraction && (
-                uploadedFiles.length > 0 ? (
-                  <>
-                    <p className="text-sm text-muted-foreground">
-                      No extraction has run for this product yet. Run it now — the images are already uploaded.
-                    </p>
-                    {renderAiIdleControls(false)}
-                  </>
-                ) : (
-                  <AiAttributesTable attributes={[]} />
-                )
-              )}
+              {/* P1.2/P1.1: the same classification-first, consolidated AI flow as Step 2 — no
+                  skip affordance here (images are already submitted; nothing to skip past). */}
+              {uploadedFiles.length > 0 ? renderAiSection(false) : <AiAttributesTable attributes={[]} />}
             </div>
           </SheetContent>
         </Sheet>
@@ -2770,10 +2981,13 @@ export function ImageUploadWizard({
                   onValueChange={(value) => {
                     setSelectedProduct(value)
                     setSelectedGtin("")
-                    // product context changed: drop stale product-level extraction and re-default category
+                    // product context changed: drop stale product-level extraction and classification
                     clearExtraction()
                     clearShotSuggestions()
                     setAiCategory("")
+                    setAiBrick(null)
+                    setClassificationStatus("idle")
+                    setClassificationConfidence(null)
                     setAiSkipped(false)
                   }}
                 >
@@ -3093,150 +3307,7 @@ export function ImageUploadWizard({
               </p>
             </div>
 
-            {renderRichnessMeter()}
-
-            {/* ── Optional: Extract Extended Attributes with AI (sub-section, not a numbered step) ── */}
-            <div className="rounded border border-border bg-card">
-              <div className="flex items-start gap-3 border-b border-border p-4">
-                <div className="flex size-9 shrink-0 items-center justify-center rounded bg-primary/10">
-                  <Sparkles className="size-5 text-primary" />
-                </div>
-                <div className="flex-1">
-                  <h3 className="text-sm font-semibold text-foreground">Extract Extended Attributes with AI</h3>
-                  <p className="mt-0.5 text-sm text-muted-foreground">
-                    Use AI to suggest GS1-style extended attributes from uploaded product images.
-                  </p>
-                </div>
-                {aiSkipped && (
-                  <Button variant="ghost" size="sm" onClick={() => setAiSkipped(false)}>
-                    Show
-                  </Button>
-                )}
-              </div>
-
-              {/* Skipped message — files & manual form remain available */}
-              {aiSkipped && (
-                <div className="flex items-center gap-2 p-4 text-sm text-muted-foreground">
-                  <Info className="size-4 shrink-0" />
-                  <span>AI extraction skipped. You can continue entering attributes manually.</span>
-                </div>
-              )}
-
-              {!aiSkipped && (
-                <div className="flex flex-col gap-4 p-4">
-                  {/* Idle / pre-extraction controls */}
-                  {!hasExtraction && renderAiIdleControls(true)}
-
-                  {/* Loading state */}
-                  {isExtracting && (
-                    <div className="flex items-center gap-3 rounded border border-border bg-muted/20 p-4">
-                      <Loader2 className="size-5 animate-spin text-primary" />
-                      <p className="text-sm text-foreground">
-                        Analyzing {aiExtraction?.imageCount ?? uploadedFiles.length} image{(aiExtraction?.imageCount ?? uploadedFiles.length) !== 1 ? "s" : ""} together for {aiCategory} attributes…
-                      </p>
-                    </div>
-                  )}
-
-                  {/* Error state */}
-                  {isError && (
-                    <div className="flex flex-col gap-3 rounded border border-destructive/30 bg-destructive/5 p-4">
-                      <div className="flex items-start gap-2">
-                        <AlertCircle className="size-4 text-destructive mt-0.5 shrink-0" />
-                        <p className="text-sm text-foreground">
-                          {aiExtraction?.error ?? "Extraction failed. You can continue setting attributes manually."}
-                        </p>
-                      </div>
-                      <div className="flex items-center gap-2">
-                        <Button variant="outline" size="sm" onClick={runExtraction}>Try again</Button>
-                        <Button variant="ghost" size="sm" onClick={() => { clearExtraction(); setAiSkipped(true) }}>
-                          Continue manually
-                        </Button>
-                      </div>
-                    </div>
-                  )}
-
-                  {renderAiResultsCard()}
-                </div>
-              )}
-            </div>
-
-            {/* Per-shot AI suggestions (P0.2b) — optional; proposes the fields the camera angle
-                shows. Nothing is written to any image without an explicit Accept. */}
-            {uploadedFiles.length > 0 && (
-              <div className="rounded border border-border bg-card">
-                <div className="flex items-start gap-3 border-b border-border p-4">
-                  <div className="flex size-9 shrink-0 items-center justify-center rounded bg-primary/10">
-                    <Sparkles className="size-5 text-primary" />
-                  </div>
-                  <div className="flex-1">
-                    <h3 className="text-sm font-semibold text-foreground">Suggest per-shot attributes with AI</h3>
-                    <p className="mt-0.5 text-sm text-muted-foreground">
-                      Proposes orientation, facing, angle, and a draft description for each image. Optional — accept or dismiss per image.
-                    </p>
-                  </div>
-                  {shotSuggestions === null && !shotSuggestLoading && (
-                    <Button variant="outline" size="sm" onClick={() => void runShotSuggestions()}>
-                      Suggest for {uploadedFiles.length} image{uploadedFiles.length !== 1 ? "s" : ""}
-                    </Button>
-                  )}
-                  {shotSuggestions !== null && shotSuggestions.some(s => s.status === "pending") && (
-                    <Button variant="outline" size="sm" className="gap-1" onClick={() => acceptShotSuggestions(shotSuggestions.filter(s => s.status === "pending"))}>
-                      <Check className="size-3.5" />
-                      Accept all ({shotSuggestions.filter(s => s.status === "pending").length})
-                    </Button>
-                  )}
-                </div>
-                {shotSuggestLoading && (
-                  <div className="flex items-center gap-3 p-4">
-                    <Loader2 className="size-5 animate-spin text-primary" />
-                    <p className="text-sm text-foreground">Analyzing {uploadedFiles.length} image{uploadedFiles.length !== 1 ? "s" : ""} for per-shot attributes…</p>
-                  </div>
-                )}
-                {shotSuggestions !== null && !shotSuggestLoading && (
-                  <div className="flex flex-col divide-y divide-border">
-                    {shotSuggestions.map((s) => (
-                      <div key={s.fileIndex} className={cn("flex items-center gap-3 px-4 py-2", s.status === "dismissed" && "opacity-50")}>
-                        <div className="size-9 shrink-0 rounded border border-border overflow-hidden bg-muted">
-                          {uploadedFiles[s.fileIndex]?.preview && (
-                            <img src={uploadedFiles[s.fileIndex].preview} alt="" className="size-full object-cover" />
-                          )}
-                        </div>
-                        <div className="flex-1 min-w-0">
-                          <p className="text-xs font-medium text-foreground truncate">{s.fileName}</p>
-                          <p className="text-xs text-muted-foreground truncate">
-                            {ORIENTATION_OPTIONS.find(o => o.value === s.orientation)?.label ?? s.orientation}
-                            {s.facing && ` · Facing ${FACING_OPTIONS.find(o => o.value === s.facing)?.label ?? s.facing}`}
-                            {s.description && ` · “${s.description}”`}
-                          </p>
-                        </div>
-                        <span className={cn(
-                          "inline-flex shrink-0 items-center rounded-full px-2 py-0.5 text-xs font-medium",
-                          s.confidence >= 0.85 ? "bg-tg-success/15 text-tg-success" : "bg-tg-warning/15 text-tg-warning"
-                        )}>
-                          {Math.round(s.confidence * 100)}%
-                        </span>
-                        {s.status === "accepted" ? (
-                          <span className="inline-flex shrink-0 items-center gap-1 text-xs font-medium text-tg-success">
-                            <Check className="size-3.5" /> Accepted
-                          </span>
-                        ) : s.status === "dismissed" ? (
-                          <span className="text-xs text-muted-foreground shrink-0">Dismissed</span>
-                        ) : (
-                          <div className="flex items-center gap-1 shrink-0">
-                            <Button variant="outline" size="sm" className="h-7 gap-1 px-2 text-xs" onClick={() => acceptShotSuggestions([s])}>
-                              <Check className="size-3" /> Accept
-                            </Button>
-                            <Button variant="outline" size="sm" className="h-7 gap-1 px-2 text-xs text-muted-foreground" onClick={() => dismissShotSuggestion(s.fileIndex)}>
-                              <X className="size-3" /> Dismiss
-                            </Button>
-                          </div>
-                        )}
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-            )}
+            {renderAiSection(true)}
 
             {/* P0.2a: product-wide fields are entered once; per-shot fields are always per image.
                 With multiple files, the two-column layout with the image selector is the default. */}
@@ -3388,8 +3459,6 @@ export function ImageUploadWizard({
                 Review your upload details before submitting. Click &quot;Confirm &amp; Upload&quot; to proceed.
               </p>
             </div>
-
-            {renderRichnessMeter()}
 
             {/* Target Selection Summary */}
             <div className="rounded border border-border bg-muted/30 p-4">
