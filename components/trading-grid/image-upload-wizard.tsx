@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useCallback, useEffect } from "react"
+import { useState, useCallback } from "react"
 import { 
   X, 
   ChevronRight, 
@@ -10,14 +10,12 @@ import {
   Trash2,
   FileImage,
   Download,
-  Package,
   FileText,
   CheckCircle2,
   Info,
   Pencil,
   AlertCircle,
   Sparkles,
-  Loader2,
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -47,19 +45,25 @@ import {
 } from "@/components/ui/sheet"
 import { cn } from "@/lib/utils"
 import { validateImageBatch, type ValidationError } from "./upload-validation"
-import { measureImageFile, type MeasuredImageMetadata } from "./image-metadata"
+import { measureImageFile } from "./image-metadata"
+import type { UploadedFile } from "./uploaded-file"
 import { buildImageMetadataCsv, downloadCsv, csvPreview, type ImageMetadataRow } from "./metadata-csv"
 import { toast } from "@/hooks/use-toast"
-import useSWR from "swr"
-import type { CategoryOptions, AttributeDecision, ExtractedAttribute, UnresolvedAttribute } from "@/lib/gs1/types"
-import { buildMockExtraction } from "@/lib/gs1/mock-scenarios"
-import { getCategoryBricks, type Brick } from "@/lib/gs1/generated-bricks"
 import { useMediaSelection } from "./use-media-selection"
 import { AiAttributesTable } from "./ai-attributes-table"
-
-// Response shape from GET /api/attribute-options (declared locally so this client component
-// never imports server route code). Mirrors AttributeOptionsResponse in that route.
-type AttributeOptionsResponse = { category: string; options: CategoryOptions }
+import { AiSection } from "./ai-section"
+import { DownloadModal } from "./download-modal"
+import { StepTwoForm, PER_SHOT_KEYS, isPerShotKey } from "./step-two-form"
+import { useAiAttributes } from "./use-ai-attributes"
+import {
+  ORIENTATION_OPTIONS,
+  ANGLE_OPTIONS,
+  IMAGE_TYPE_OPTIONS,
+  PURPOSE_OPTIONS,
+  LOCATION_TYPE_OPTIONS,
+  FACING_OPTIONS,
+  IMAGE_STYLE_OPTIONS,
+} from "./attribute-options"
 
 interface ImageUploadWizardProps {
   uploadLevel: "product" | "product-color" | "gtin"
@@ -170,348 +174,6 @@ const MOCK_DATA = {
   ],
 }
 
-// Dropdown options from screenshots
-// Spec code list: PRI, VF1, VIK, VIS, SDL, SDR, VIB, VIT (VBK retained from legacy data).
-// VIK/VIS display the bare code until the authoritative GDSN label list is confirmed —
-// showing a code is honest; inventing a label would ship wrong data.
-const ORIENTATION_OPTIONS = [
-  { value: "PRI", label: "PRI-Primary" },
-  { value: "VF1", label: "VF1-Front" },
-  { value: "VIK", label: "VIK" },
-  { value: "VIS", label: "VIS" },
-  { value: "SDL", label: "SDL-Side Left" },
-  { value: "SDR", label: "SDR-Side Right" },
-  { value: "VIB", label: "VIB-Bottom" },
-  { value: "VIT", label: "VIT-Top" },
-  { value: "VBK", label: "VBK-Back" },
-]
-
-const ANGLE_OPTIONS = [
-  { value: "1", label: "1-Center, No plunge angle" },
-  { value: "2", label: "2-Left, No plunge angle" },
-  { value: "3", label: "3-Right, No plunge angle" },
-  { value: "7", label: "7-Center, Plunge angle present" },
-  { value: "8", label: "8-Left, Plunge angle present" },
-  { value: "9", label: "9-Right, Plunge angle present" },
-]
-
-const IMAGE_TYPE_OPTIONS = [
-  { value: "SI", label: "SI-Still Shot" },
-  { value: "LI", label: "LI-Lifestyle Image" },
-  { value: "SW", label: "SW-Swatch" },
-  { value: "DT", label: "DT-Detail Shot" },
-  { value: "PK", label: "PK-Packaging" },
-]
-
-const PURPOSE_OPTIONS = [
-  { value: "INT", label: "INT-Internet" },
-  { value: "CAT", label: "CAT-Catalog" },
-  { value: "PRT", label: "PRT-Print" },
-  { value: "PKG", label: "PKG-Packaging" },
-]
-
-// Spec: ACL, FTP, LMI, URL
-const LOCATION_TYPE_OPTIONS = [
-  { value: "ACL", label: "ACL" },
-  { value: "FTP", label: "FTP" },
-  { value: "LMI", label: "LMI" },
-  { value: "URL", label: "URL" },
-]
-
-// GS1 image-naming facing codes (same 1/2/3/7/8/9 scheme as the angle list below).
-const FACING_OPTIONS = [
-  { value: "1", label: "1-Front" },
-  { value: "2", label: "2-Left" },
-  { value: "3", label: "3-Top" },
-  { value: "7", label: "7-Back" },
-  { value: "8", label: "8-Right" },
-  { value: "9", label: "9-Bottom" },
-]
-
-// Spec: CSW (Color Swatch) or PRO (Product) only.
-const IMAGE_STYLE_OPTIONS = [
-  { value: "CSW", label: "CSW-Color Swatch" },
-  { value: "PRO", label: "PRO-Product" },
-]
-
-type UploadedFile = {
-  id: string
-  file: File
-  name: string
-  size: number
-  type: string
-  preview: string
-  status: "uploading" | "complete" | "error"
-  // Auto-captured at staging by decoding the file itself (no AI, no manual entry).
-  // Absent while measurement is in flight; fields are null when unreadable.
-  measured?: MeasuredImageMetadata
-}
-
-// ExtractionApiResponse: product-level shape returned by POST /api/extract-attributes.
-// Mirrors route.ts ExtractionApiResponse without importing server code into the client bundle.
-type ExtractionApiResponse = {
-  category: string
-  brickCode?: string
-  brickName?: string
-  imageCount: number
-  imageNames: string[]
-  attributes: Omit<ExtractedAttribute, "decision">[]
-  unresolvedAttributes: UnresolvedAttribute[]
-}
-
-// ProductExtractionResult: product-level frontend state (one result for the whole product,
-// not one per image). Replaces the old per-image ExtractionResult / aiExtractions Record.
-type ProductExtractionResult = {
-  category: string
-  brickCode?: string
-  brickName?: string
-  imageCount: number
-  imageNames: string[]
-  attributes: ExtractedAttribute[]
-  unresolvedAttributes: UnresolvedAttribute[]
-  status: "idle" | "extracting" | "complete" | "error"
-  error?: string
-  fallbackUsed?: boolean
-}
-
-// Product categories offered in the AI extraction card. Home is excluded — it has no GPC brick
-// coverage in the brick matrix, so its attributes cannot be scoped to a single brick.
-const PRODUCT_CATEGORIES = ["Shoes", "Apparel", "Bags", "Jewelry", "Beauty"] as const
-
-// Extraction mode: "mock" (default, stable demos) or "gemini" (real /api/extract-attributes).
-// Controlled by NEXT_PUBLIC_EXTRACTION_MODE; falls back to mock when unset. No UI toggle.
-const EXTRACTION_MODE = process.env.NEXT_PUBLIC_EXTRACTION_MODE === "gemini" ? "gemini" : "mock"
-
-// ── Per-shot AI suggestions (P0.2b) ──
-// One proposal per image for the fields a vision model reads directly from the shot.
-type ShotSuggestionRow = {
-  fileIndex: number
-  fileName: string
-  orientation: string
-  facing: string
-  angle: string
-  description: string
-  confidence: number
-  status: "pending" | "accepted" | "dismissed"
-}
-
-// Mock proposal from filename tokens (deterministic, demo-stable). Mirrors what the
-// Gemini route infers from pixels; falls back to a round-robin viewpoint.
-function mockShotSuggestion(name: string, index: number, productDescription: string) {
-  const n = name.toLowerCase()
-  let orientation = ["PRI", "SDL", "SDR"][index % 3]
-  let facing = ["1", "2", "8"][index % 3]
-  let confidence = 0.6
-  if (/front|hero|main|primary/.test(n)) { orientation = "PRI"; facing = "1"; confidence = 0.92 }
-  else if (/left/.test(n)) { orientation = "SDL"; facing = "2"; confidence = 0.9 }
-  else if (/side/.test(n)) { orientation = "SDL"; facing = "2"; confidence = 0.85 }
-  else if (/right/.test(n)) { orientation = "SDR"; facing = "8"; confidence = 0.9 }
-  else if (/back|rear/.test(n)) { orientation = "VBK"; facing = "7"; confidence = 0.9 }
-  else if (/top/.test(n)) { orientation = "VIT"; facing = "3"; confidence = 0.87 }
-  else if (/bottom|sole/.test(n)) { orientation = "VIB"; facing = "9"; confidence = 0.87 }
-  const label = ORIENTATION_OPTIONS.find(o => o.value === orientation)?.label ?? orientation
-  const view = label.includes("-") ? label.split("-").slice(1).join("-") : label
-  return {
-    orientation,
-    facing,
-    angle: "1",
-    description: productDescription ? `${productDescription} — ${view.toLowerCase()} view` : `${view} view`,
-    confidence,
-  }
-}
-
-// P0.2a: the attribute record splits into two groups. PRODUCT-WIDE fields hold one honest
-// value for every image of a product; PER-SHOT fields describe what makes each photo
-// different (which is exactly why they must never be blanket-applied).
-const PER_SHOT_KEYS = ["orientation", "facing", "angle", "clippingPath", "imageDescription"] as const
-type PerShotKey = (typeof PER_SHOT_KEYS)[number]
-const isPerShotKey = (k: string): k is PerShotKey => (PER_SHOT_KEYS as readonly string[]).includes(k)
-
-// Attribute form used in Step 2, the Edit dialog, and Bulk edit (Change 3 / Change 7 / P0.2a)
-type StepTwoFormProps = {
-  currentAttrs: {
-    imageType: string; purpose: string; orientation: string; locationType: string;
-    externalLocation: string; imageStyle: string; facing: string; angle: string;
-    clippingPath: string; imageDescription: string;
-  }
-  updateAttrs: (a: StepTwoFormProps["currentAttrs"]) => void
-  uploadLevel: "product" | "product-color" | "gtin"
-  autoData: { colorCode: string; selectedGtin: string }
-  // Auto-captured per-file facts (dimensions/DPI) shown read-only. Omitted in bulk edit,
-  // where no single file is in context — measured facts are never bulk-editable.
-  measuredFiles?: { name: string; measured?: MeasuredImageMetadata }[]
-  // Explicit, labeled copy action for per-shot values — a deliberate copy, not a silent default.
-  onApplyPerShotToAll?: () => void
-  // Bulk edit targets per-shot fields only; product-wide values are edited once in the main form.
-  hideProductWide?: boolean
-}
-
-// Read-only summary of a file's decoded dimensions/DPI. undefined = measurement in flight.
-function formatMeasured(m?: MeasuredImageMetadata): string {
-  if (!m) return "Measuring…"
-  const dims = m.width && m.height ? `${m.width} × ${m.height} px` : null
-  const dpi = m.dpi ? `${m.dpi} DPI` : null
-  if (!dims && !dpi) return "Not readable from file"
-  return [dims, dpi].filter(Boolean).join(" · ")
-}
-
-function StepTwoForm({ currentAttrs, updateAttrs, uploadLevel, autoData, measuredFiles, onApplyPerShotToAll, hideProductWide }: StepTwoFormProps) {
-  return (
-    <div className="flex flex-col gap-4">
-      {!hideProductWide && (
-        <>
-          {/* Auto-populated fields (read-only) */}
-          {(uploadLevel === "product-color" || uploadLevel === "gtin") && (
-            <div className="grid gap-4 md:grid-cols-2">
-              {uploadLevel === "product-color" && (
-                <div className="flex flex-col gap-2">
-                  <Label className="text-sm font-medium">Color Code</Label>
-                  <Input value={autoData.colorCode} readOnly className="bg-muted/30 text-foreground cursor-default" />
-                </div>
-              )}
-              {uploadLevel === "gtin" && (
-                <div className="flex flex-col gap-2">
-                  <Label className="text-sm font-medium">GTIN</Label>
-                  <Input value={autoData.selectedGtin} readOnly className="bg-muted/30 text-foreground cursor-default" />
-                </div>
-              )}
-            </div>
-          )}
-
-          {/* Product-wide group: one value for every image of this product */}
-          <div className="flex items-center gap-2">
-            <span className="text-xs font-semibold uppercase tracking-wide text-foreground">Product-wide attributes</span>
-            <span className="text-xs text-muted-foreground">apply to every image of this product</span>
-          </div>
-
-          <div className="grid gap-4 md:grid-cols-2">
-            <div className="flex flex-col gap-2">
-              <Label className="text-sm font-medium">
-                Image Type <span className="text-destructive">*</span>
-              </Label>
-              <Select value={currentAttrs.imageType} onValueChange={(v) => updateAttrs({ ...currentAttrs, imageType: v })}>
-                <SelectTrigger className="w-full bg-background"><SelectValue /></SelectTrigger>
-                <SelectContent>
-                  {IMAGE_TYPE_OPTIONS.map(o => <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>)}
-                </SelectContent>
-              </Select>
-            </div>
-
-            <div className="flex flex-col gap-2">
-              <Label className="text-sm font-medium">
-                Purpose <span className="text-destructive">*</span>
-              </Label>
-              <Select value={currentAttrs.purpose} onValueChange={(v) => updateAttrs({ ...currentAttrs, purpose: v })}>
-                <SelectTrigger className="w-full bg-background"><SelectValue /></SelectTrigger>
-                <SelectContent>
-                  {PURPOSE_OPTIONS.map(o => <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>)}
-                </SelectContent>
-              </Select>
-            </div>
-
-            {/* Location Type read-only */}
-            <div className="flex flex-col gap-2">
-              <Label className="text-sm font-medium">Location Type</Label>
-              <Input value={LOCATION_TYPE_OPTIONS.find(o => o.value === currentAttrs.locationType)?.label || ""} readOnly className="bg-muted/30 text-foreground cursor-default" />
-            </div>
-
-            <div className="flex flex-col gap-2">
-              <Label className="text-sm font-medium">Image Style <span className="text-xs font-normal text-muted-foreground">(optional)</span></Label>
-              <Select value={currentAttrs.imageStyle} onValueChange={(v) => updateAttrs({ ...currentAttrs, imageStyle: v })}>
-                <SelectTrigger className="w-full bg-background"><SelectValue placeholder="Select style..." /></SelectTrigger>
-                <SelectContent>{IMAGE_STYLE_OPTIONS.map(o => <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>)}</SelectContent>
-              </Select>
-            </div>
-          </div>
-
-          {(currentAttrs.locationType === "FTP" || currentAttrs.locationType === "URL") && (
-            <div className="flex flex-col gap-2">
-              <Label className="text-sm font-medium">External Location <span className="text-destructive">*</span></Label>
-              <Input
-                value={currentAttrs.externalLocation}
-                onChange={(e) => updateAttrs({ ...currentAttrs, externalLocation: e.target.value })}
-                placeholder={currentAttrs.locationType === "FTP" ? "ftp://..." : "https://..."}
-                className="bg-background"
-              />
-            </div>
-          )}
-
-          <div className="border-t border-border" />
-        </>
-      )}
-
-      {/* Per-shot group: what makes each photo different — never blanket-applied */}
-      <div className="flex items-center gap-2">
-        <span className="text-xs font-semibold uppercase tracking-wide text-foreground">Per-shot attributes</span>
-        <span className="text-xs text-muted-foreground">describe this specific image</span>
-      </div>
-
-      {/* Measured from file — auto-captured by decoding each staged binary (no AI, no typing). */}
-      {measuredFiles && measuredFiles.length > 0 && (
-        <div className="flex flex-col gap-1.5 rounded border border-border bg-muted/20 p-3">
-          <div className="flex items-center gap-2">
-            <span className="text-xs font-semibold uppercase tracking-wide text-foreground">Measured from file</span>
-            <span className="rounded bg-primary/10 px-1.5 py-0.5 text-xs font-medium text-primary">Auto-captured</span>
-          </div>
-          <div className="flex flex-col gap-0.5 max-h-24 overflow-y-auto">
-            {measuredFiles.map((f, i) => (
-              <div key={i} className="flex items-center gap-2 text-xs">
-                <span className="truncate max-w-[220px] text-muted-foreground" title={f.name}>{f.name}</span>
-                <span className="font-medium text-foreground">{formatMeasured(f.measured)}</span>
-              </div>
-            ))}
-          </div>
-          <p className="text-xs text-muted-foreground">
-            Dimensions and DPI are read directly from each image file — no manual entry needed.
-          </p>
-        </div>
-      )}
-
-      <div className="grid gap-4 md:grid-cols-2">
-        <div className="flex flex-col gap-2">
-          <Label className="text-sm font-medium">
-            Orientation <span className="text-destructive">*</span>
-          </Label>
-          <Select value={currentAttrs.orientation} onValueChange={(v) => updateAttrs({ ...currentAttrs, orientation: v })}>
-            <SelectTrigger className="w-full bg-background"><SelectValue placeholder="Select orientation..." /></SelectTrigger>
-            <SelectContent>
-              {ORIENTATION_OPTIONS.map(o => <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>)}
-            </SelectContent>
-          </Select>
-        </div>
-        <div className="flex flex-col gap-2">
-          <Label className="text-sm font-medium">Facing (GDSN) <span className="text-xs font-normal text-muted-foreground">(optional)</span></Label>
-          <Select value={currentAttrs.facing} onValueChange={(v) => updateAttrs({ ...currentAttrs, facing: v })}>
-            <SelectTrigger className="w-full bg-background"><SelectValue placeholder="Select facing..." /></SelectTrigger>
-            <SelectContent>{FACING_OPTIONS.map(o => <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>)}</SelectContent>
-          </Select>
-        </div>
-        <div className="flex flex-col gap-2">
-          <Label className="text-sm font-medium">Angle <span className="text-xs font-normal text-muted-foreground">(optional)</span></Label>
-          <Select value={currentAttrs.angle} onValueChange={(v) => updateAttrs({ ...currentAttrs, angle: v })}>
-            <SelectTrigger className="w-full bg-background"><SelectValue placeholder="Select angle..." /></SelectTrigger>
-            <SelectContent>{ANGLE_OPTIONS.map(o => <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>)}</SelectContent>
-          </Select>
-        </div>
-        <div className="flex flex-col gap-2">
-          <Label className="text-sm font-medium">Clipping Path <span className="text-xs font-normal text-muted-foreground">(optional)</span></Label>
-          <Input value={currentAttrs.clippingPath} onChange={(e) => updateAttrs({ ...currentAttrs, clippingPath: e.target.value })} placeholder="Path name..." className="bg-background" />
-        </div>
-        <div className="flex flex-col gap-2 md:col-span-2">
-          <Label className="text-sm font-medium">Image Description <span className="text-xs font-normal text-muted-foreground">(optional)</span></Label>
-          <Input value={currentAttrs.imageDescription} onChange={(e) => updateAttrs({ ...currentAttrs, imageDescription: e.target.value })} placeholder="Enter description..." className="bg-background" />
-        </div>
-      </div>
-
-      {onApplyPerShotToAll && (
-        <Button variant="outline" size="sm" className="w-fit" onClick={onApplyPerShotToAll}>
-          Apply this image&apos;s per-shot values to all images
-        </Button>
-      )}
-    </div>
-  )
-}
-
 export function ImageUploadWizard({
   uploadLevel,
   setUploadLevel,
@@ -524,6 +186,29 @@ export function ImageUploadWizard({
   const [selectedProduct, setSelectedProduct] = useState("DRESS001")
   const [selectedColorCode, setSelectedColorCode] = useState("")
   const [selectedGtin, setSelectedGtin] = useState("")
+
+  // Get auto-populated data based on selections
+  const getAutoPopulatedData = () => {
+    const selCode = MOCK_DATA.selectionCodes.find(s => s.code === selectedSelectionCode)
+    const product = MOCK_DATA.products.find(p => p.id === selectedProduct)
+    const color = MOCK_DATA.colorCodes.find(c => c.code === selectedColorCode)
+    const gtinEntry = product?.gtins.find(g => g.gtin === selectedGtin)
+    
+    return {
+      companyName: "KIBBLES N BITS",
+      accountNumber: "125103335555",
+      selectionCode: selCode?.code || "",
+      description: selCode?.description || "",
+      productId: product?.id || "",
+      productDescription: product?.description || "",
+      gtins: product?.gtins || [],
+      colorCode: color?.code || "",
+      colorName: color?.name || "",
+      selectedGtin: gtinEntry?.gtin || "",
+      selectedGtinType: gtinEntry?.type || "",
+    }
+  }
+
   const [uploadedFiles, setUploadedFiles] = useState<UploadedFile[]>([])
   const [isDragging, setIsDragging] = useState(false)
   const [showProductMedia, setShowProductMedia] = useState(false)
@@ -563,49 +248,6 @@ export function ImageUploadWizard({
   const [editAttrInitial, setEditAttrInitial] = useState<typeof attributes | null>(null)
   // Syndication acknowledgement checkbox in Step 3 — resets on Back (Task 2)
   const [syndicationAcknowledged, setSyndicationAcknowledged] = useState(false)
-  // ── AI Extended-Attribute extraction (Step 2 sub-section, mock-first) ──
-  // Selected product category for extraction
-  const [aiCategory, setAiCategory] = useState<string>("")
-  // Selected GPC brick (leaf classification) within the category. Extraction is brick-scoped:
-  // only this brick's attributes are ever suggested. Null until a brick is chosen.
-  const [aiBrick, setAiBrick] = useState<Brick | null>(null)
-  // Whether the user explicitly skipped the AI extraction section
-  const [aiSkipped, setAiSkipped] = useState(false)
-  // Product-level extraction result (one consolidated result for all uploaded images).
-  const [aiExtraction, setAiExtraction] = useState<ProductExtractionResult | null>(null)
-  // The suggestion row currently being inline-edited (null = none), scoped by index only
-  const [aiEditing, setAiEditing] = useState<{ index: number } | null>(null)
-  // ── Per-shot AI suggestions (P0.2b) — proposes orientation/facing/angle/description per
-  // image. Strictly optional: nothing is applied without an explicit Accept. ──
-  const [shotSuggestions, setShotSuggestions] = useState<ShotSuggestionRow[] | null>(null)
-  const [shotSuggestLoading, setShotSuggestLoading] = useState(false)
-
-  // Fetch the FULL CSV-derived allowed options for the selected category from the server.
-  // Only one category's options are ever sent to the client (never the whole CSV). SWR caches
-  // per category, so switching back and forth is instant. Used for edit dropdowns + mock grounding.
-  const { data: optionsData } = useSWR<AttributeOptionsResponse>(
-    aiCategory ? `/api/attribute-options?category=${encodeURIComponent(aiCategory)}` : null,
-    (url: string) => fetch(url).then(r => r.json()),
-    { revalidateOnFocus: false, dedupingInterval: 60_000 },
-  )
-  const categoryOptions: CategoryOptions = optionsData?.options ?? []
-
-  // Allowed values for a Code List within the currently-loaded category options (full CSV set).
-  const valuesForCodeList = (codeListName: string) =>
-    categoryOptions.find(o => o.codeListName === codeListName)?.values ?? []
-
-  // Direct fetch fallback used by mock mode when SWR hasn't populated yet (e.g. immediate click).
-  const fetchCategoryOptions = async (category: string): Promise<CategoryOptions> => {
-    try {
-      const res = await fetch(`/api/attribute-options?category=${encodeURIComponent(category)}`)
-      if (!res.ok) return []
-      const data = (await res.json()) as AttributeOptionsResponse
-      return Array.isArray(data.options) ? data.options : []
-    } catch {
-      return []
-    }
-  }
-  
   // Form state for attributes
   const [attributes, setAttributes] = useState({
     imageType: "SI",
@@ -681,648 +323,18 @@ export function ImageUploadWizard({
     })
   }
 
-  // ── AI extraction handlers (mock-first) ──
-  // Default category heuristic from the current product/selection-code context (item #3).
-  // Not permanent — the user can still change the category manually.
-  const getDefaultCategory = () => {
-    const d = getAutoPopulatedData()
-    const hay = `${d.description} ${d.productDescription}`.toLowerCase()
-    if (/tops|dress|shirt|apparel|clothing/.test(hay)) return "Apparel"
-    return "Shoes"
-  }
-
-  // Default the category once when the user first reaches Step 2 (only if not already chosen).
-  useEffect(() => {
-    if (currentStep === 2 && !aiCategory && uploadedFiles.length > 0) {
-      setAiCategory(getDefaultCategory())
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [currentStep, uploadedFiles.length])
-
-  // Keep the brick in sync with the category: reset on category change, auto-selecting when the
-  // category has exactly one brick (so single-brick categories need no extra click).
-  const bricksForCategory = aiCategory ? getCategoryBricks(aiCategory) : []
-  useEffect(() => {
-    const bricks = aiCategory ? getCategoryBricks(aiCategory) : []
-    setAiBrick(bricks.length === 1 ? bricks[0] : null)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [aiCategory])
-
-  // Dispatcher: routes to Gemini or mock based on EXTRACTION_MODE. Wired to all extract triggers.
-  const runExtraction = () => {
-    if (EXTRACTION_MODE === "gemini") {
-      void runGeminiExtraction()
-    } else {
-      void runMockExtraction()
-    }
-  }
-
-  // Convert a File to a raw base64 string (no data: prefix) for the JSON API payload.
-  const fileToBase64 = (file: File): Promise<string> =>
-    new Promise((resolve, reject) => {
-      const reader = new FileReader()
-      reader.onload = () => {
-        const result = typeof reader.result === "string" ? reader.result : ""
-        const comma = result.indexOf(",")
-        resolve(comma >= 0 ? result.slice(comma + 1) : result)
-      }
-      reader.onerror = () => reject(new Error("Failed to read image file."))
-      reader.readAsDataURL(file)
-    })
-
-  // Real Gemini extraction: all uploaded images are sent together in one request,
-  // producing one consolidated product-level attribute set.
-  const runGeminiExtraction = async () => {
-    if (!aiCategory || !aiBrick || uploadedFiles.length === 0) return
-    const category = aiCategory
-    const brick = aiBrick
-    const targets = uploadedFiles.map(f => ({ name: f.name, file: f.file, type: f.type }))
-    setAiSkipped(false)
-    setAiEditing(null)
-    setAiExtraction({
-      category,
-      brickCode: brick.code,
-      brickName: brick.name,
-      imageCount: targets.length,
-      imageNames: targets.map(f => f.name),
-      attributes: [],
-      unresolvedAttributes: [],
-      status: "extracting",
-    })
-
-    try {
-      // Convert all files to base64 in parallel
-      const images = await Promise.all(
-        targets.map(async (f) => ({
-          fileName: f.name,
-          imageBase64: await fileToBase64(f.file),
-          mimeType: f.type,
-        }))
-      )
-
-      const res = await fetch("/api/extract-attributes", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ category, brick: brick.code, images }),
-      })
-
-      if (!res.ok) {
-        const errBody = await res.json().catch(() => null)
-        throw new Error(errBody?.error || `Extraction failed (${res.status}).`)
-      }
-
-      const data = await res.json() as ExtractionApiResponse
-      setAiExtraction({
-        category: typeof data.category === "string" ? data.category : category,
-        brickCode: typeof data.brickCode === "string" ? data.brickCode : brick.code,
-        brickName: typeof data.brickName === "string" ? data.brickName : brick.name,
-        imageCount: typeof data.imageCount === "number" ? data.imageCount : targets.length,
-        imageNames: Array.isArray(data.imageNames) ? data.imageNames : targets.map(f => f.name),
-        attributes: (Array.isArray(data.attributes) ? data.attributes : []).map(a => ({ ...a, decision: "pending" as const })),
-        unresolvedAttributes: Array.isArray(data.unresolvedAttributes) ? data.unresolvedAttributes : [],
-        status: "complete",
-      })
-    } catch {
-      // Auto-fallback to mock/demo results when Gemini is unavailable
-      const options = categoryOptions.length > 0 ? categoryOptions : await fetchCategoryOptions(category)
-      const mock = buildMockExtraction(category, brick, options)
-      setAiExtraction({
-        category,
-        brickCode: brick.code,
-        brickName: brick.name,
-        imageCount: targets.length,
-        imageNames: targets.map(f => f.name),
-        attributes: mock.attributes.map(a => ({ ...a, decision: "pending" as const })),
-        unresolvedAttributes: mock.unresolvedAttributes,
-        status: "complete",
-        fallbackUsed: true,
-      })
-    }
-  }
-
-  // Mock extraction: returns one consolidated product-level result (same shape as Gemini mode).
-  // Grounds GS1 codes in the same CSV-derived options used by Gemini + dropdowns.
-  const runMockExtraction = async () => {
-    if (!aiCategory || !aiBrick || uploadedFiles.length === 0) return
-    const category = aiCategory
-    const brick = aiBrick
-    const imageNames = uploadedFiles.map(f => f.name)
-    setAiSkipped(false)
-    setAiEditing(null)
-    setAiExtraction({
-      category,
-      brickCode: brick.code,
-      brickName: brick.name,
-      imageCount: uploadedFiles.length,
-      imageNames,
-      attributes: [],
-      unresolvedAttributes: [],
-      status: "extracting",
-    })
-    // Ensure options are available (SWR cache, else direct fetch) so mock codes stay grounded.
-    const options = categoryOptions.length > 0 ? categoryOptions : await fetchCategoryOptions(category)
-    // Brief delay to simulate processing latency for a realistic demo feel.
-    await new Promise(resolve => setTimeout(resolve, 900))
-    const mock = buildMockExtraction(category, brick, options)
-    setAiExtraction({
-      category,
-      brickCode: brick.code,
-      brickName: brick.name,
-      imageCount: uploadedFiles.length,
-      imageNames,
-      attributes: mock.attributes.map(a => ({ ...a, decision: "pending" as const })),
-      unresolvedAttributes: mock.unresolvedAttributes,
-      status: "complete",
-    })
-  }
-
-  // Set the review decision on a single suggested attribute (explicit Accept / Reject).
-  const setAttributeDecision = (index: number, decision: AttributeDecision) => {
-    setAiExtraction(prev => {
-      if (!prev) return prev
-      return { ...prev, attributes: prev.attributes.map((a, i) => i === index ? { ...a, decision } : a) }
-    })
-  }
-
-  // Edit a single attribute's value or GS1 code (inline Edit). Edited rows stay accepted.
-  const updateAttributeField = (index: number, field: "attributeValue" | "code", value: string) => {
-    setAiExtraction(prev => {
-      if (!prev) return prev
-      return { ...prev, attributes: prev.attributes.map((a, i) => i === index ? { ...a, [field]: value } : a) }
-    })
-  }
-
-  // Select an allowed value for a suggestion from the curated GS1 list; sets value + matching code.
-  const selectAttributeValue = (index: number, value: string) => {
-    setAiExtraction(prev => {
-      if (!prev) return prev
-      return {
-        ...prev,
-        attributes: prev.attributes.map((a, i) => {
-          if (i !== index) return a
-          const match = valuesForCodeList(a.codeListName).find(v => v.value === value)
-          return { ...a, attributeValue: value, code: match?.code ?? a.code }
-        }),
-      }
-    })
-  }
-
-  // Resolve an unresolved attribute by selecting a value from the GS1 options.
-  const resolveUnresolvedAttribute = (unresolvedIndex: number, codeListName: string, value: string) => {
-    const match = valuesForCodeList(codeListName).find(v => v.value === value)
-    if (!match) return
-    setAiExtraction(prev => {
-      if (!prev) return prev
-      return {
-        ...prev,
-        attributes: [...prev.attributes, {
-          codeListName,
-          attributeValue: value,
-          code: match.code,
-          confidence: 1.0,
-          reason: "Manually added by user.",
-          decision: "accepted" as const,
-        }],
-        unresolvedAttributes: prev.unresolvedAttributes.filter((_, i) => i !== unresolvedIndex),
-      }
-    })
-  }
-
-  // Clear extraction state when files change, product changes, or category changes.
-  const clearExtraction = () => {
-    setAiExtraction(null)
-    setAiEditing(null)
-  }
-
-  // Per-shot suggestions are keyed by file index — any deletion/replacement invalidates them.
-  const clearShotSuggestions = () => setShotSuggestions(null)
-
-  // Runs the per-shot suggestion pass: Gemini route when configured, else the mock
-  // filename heuristic. Optional accelerator only — nothing applies without Accept.
-  const runShotSuggestions = async () => {
-    if (uploadedFiles.length === 0) return
-    setShotSuggestLoading(true)
-    const productDescription = getAutoPopulatedData().productDescription
-    if (EXTRACTION_MODE === "gemini") {
-      try {
-        const images = await Promise.all(
-          uploadedFiles.map(async (f) => ({ fileName: f.name, imageBase64: await fileToBase64(f.file), mimeType: f.type }))
-        )
-        const res = await fetch("/api/suggest-shot-attributes", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ images, productDescription }),
-        })
-        if (!res.ok) throw new Error(`Suggestion failed (${res.status}).`)
-        const data = await res.json() as { suggestions: { fileName: string; orientation: string; facing: string; angle: string; description: string; confidence: number }[] }
-        const rows: ShotSuggestionRow[] = []
-        uploadedFiles.forEach((f, i) => {
-          const s = Array.isArray(data.suggestions) ? data.suggestions.find(x => x.fileName === f.name) : undefined
-          if (s) rows.push({ fileIndex: i, fileName: f.name, orientation: s.orientation, facing: s.facing, angle: s.angle, description: s.description, confidence: s.confidence, status: "pending" })
-        })
-        setShotSuggestions(rows)
-        setShotSuggestLoading(false)
-        return
-      } catch {
-        // Fall through to the mock heuristic so the demo never dead-ends.
-      }
-    }
-    await new Promise(resolve => setTimeout(resolve, 600))
-    setShotSuggestions(uploadedFiles.map((f, i) => ({
-      fileIndex: i,
-      fileName: f.name,
-      ...mockShotSuggestion(f.name, i, productDescription),
-      status: "pending" as const,
-    })))
-    setShotSuggestLoading(false)
-  }
-
-  // Accept one or many per-shot suggestions: writes into the per-image records.
-  const acceptShotSuggestions = (rows: ShotSuggestionRow[]) => {
-    setAttributesByImage(prev => {
-      const next = { ...prev }
-      rows.forEach(r => {
-        const rec = { ...(next[r.fileIndex] ?? attributes) }
-        rec.orientation = r.orientation
-        if (r.facing) rec.facing = r.facing
-        if (r.angle) rec.angle = r.angle
-        if (r.description) rec.imageDescription = r.description
-        next[r.fileIndex] = rec
-      })
-      return next
-    })
-    const accepted = new Set(rows.map(r => r.fileIndex))
-    setShotSuggestions(prev => prev ? prev.map(p => accepted.has(p.fileIndex) ? { ...p, status: "accepted" as const } : p) : prev)
-  }
-
-  const dismissShotSuggestion = (fileIndex: number) => {
-    setShotSuggestions(prev => prev ? prev.map(p => p.fileIndex === fileIndex ? { ...p, status: "dismissed" as const } : p) : prev)
-  }
-
-  // Derived status flags from the single product-level extraction result
-  const isExtracting = aiExtraction?.status === "extracting"
-  const isComplete = aiExtraction?.status === "complete"
-  const isError = aiExtraction?.status === "error"
-  const hasExtraction = aiExtraction !== null
-  // Accepted suggestions at the product level (only explicit Accept clicks count)
-  const acceptedExtractedAttributes = aiExtraction?.attributes.filter(a => a.decision === "accepted") ?? []
-  // Suggestions still awaiting a decision — these are silently dropped at submission
-  // unless accepted, so both the results card and Step 3 surface the count (P0.3).
-  const pendingExtractedCount = isComplete ? (aiExtraction?.attributes.filter(a => a.decision === "pending").length ?? 0) : 0
-
-  // Accept every still-pending suggestion in one click.
-  const acceptAllPending = () => {
-    setAiExtraction(prev => {
-      if (!prev) return prev
-      return { ...prev, attributes: prev.attributes.map(a => a.decision === "pending" ? { ...a, decision: "accepted" as const } : a) }
-    })
-  }
-
-  // ── Data-richness meter (P1.2 / audit E4): makes record completeness visible so richness
-  // becomes a score suppliers close out, not an invisible virtue. Counts product-wide fields
-  // once, per-shot fields and measured facts per image, and extended-attribute progress. ──
-  const richness = (() => {
-    const productWideFields = ["imageType", "purpose", "locationType", "imageStyle"] as const
-    let filled = 0
-    let total = 0
-    productWideFields.forEach(k => { total++; if (attributes[k]) filled++ })
-    uploadedFiles.forEach((f, i) => {
-      const a = effectiveAttrs(i)
-      PER_SHOT_KEYS.forEach(k => { total++; if (a[k]) filled++ })
-      total += 3 // measured width / height / dpi
-      if (f.measured?.width) filled++
-      if (f.measured?.height) filled++
-      if (f.measured?.dpi) filled++
-    })
-    const extendedTotal = isComplete && aiExtraction
-      ? aiExtraction.attributes.length + aiExtraction.unresolvedAttributes.length
-      : 0
-    return { filled, total, extendedAccepted: acceptedExtractedAttributes.length, extendedTotal }
-  })()
-
-  const renderRichnessMeter = () => {
-    const pct = richness.total > 0 ? Math.round((richness.filled / richness.total) * 100) : 0
-    return (
-      <div className="flex flex-wrap items-center gap-3 rounded border border-border bg-card px-3 py-2 text-xs">
-        <span className="font-semibold uppercase tracking-wide text-muted-foreground shrink-0">Data richness</span>
-        <div className="h-1.5 w-24 rounded-full bg-muted overflow-hidden shrink-0">
-          <div
-            className={cn("h-full rounded-full transition-all", pct >= 80 ? "bg-tg-success" : pct >= 40 ? "bg-tg-warning" : "bg-destructive")}
-            style={{ width: `${pct}%` }}
-          />
-        </div>
-        <span className="text-foreground">{richness.filled} of {richness.total} image fields</span>
-        <span className="text-muted-foreground">·</span>
-        <span className="text-foreground">
-          {richness.extendedTotal > 0
-            ? `${richness.extendedAccepted} of ${richness.extendedTotal} extended attributes accepted`
-            : "extended attributes not extracted yet"}
-        </span>
-      </div>
-    )
-  }
-
-  // Idle AI controls (category + brick pickers, Extract button) — used in Step 2 and, per
-  // P1.2, in the post-submit drawer so extraction can be run after upload, not only during
-  // the wizard pass. showSkip hides the skip affordance where it makes no sense (drawer).
-  const renderAiIdleControls = (showSkip: boolean) => (
-    <>
-      <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:flex-wrap">
-        <div className="flex flex-col gap-1">
-          <Label htmlFor="ai-category" className="text-xs text-muted-foreground">Product category</Label>
-          <Select value={aiCategory} onValueChange={(v) => { setAiCategory(v); clearExtraction() }}>
-            <SelectTrigger id="ai-category" className="w-56 bg-background">
-              <SelectValue placeholder="Select a category..." />
-            </SelectTrigger>
-            <SelectContent>
-              {PRODUCT_CATEGORIES.map(c => (
-                <SelectItem key={c} value={c}>{c}</SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </div>
-        {/* GPC brick — attributes are scoped to this single classification */}
-        <div className="flex flex-col gap-1">
-          <Label htmlFor="ai-brick" className="text-xs text-muted-foreground">Product brick (GPC)</Label>
-          <Select
-            value={aiBrick?.code ?? ""}
-            onValueChange={(code) => { setAiBrick(bricksForCategory.find(b => b.code === code) ?? null); clearExtraction() }}
-            disabled={!aiCategory || bricksForCategory.length === 0}
-          >
-            <SelectTrigger id="ai-brick" className="w-72 bg-background">
-              <SelectValue placeholder={aiCategory ? "Select a brick..." : "Select a category first"} />
-            </SelectTrigger>
-            <SelectContent>
-              {bricksForCategory.map(b => (
-                <SelectItem key={b.code} value={b.code}>{b.name}</SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </div>
-        <div className="flex items-center gap-2">
-          <Button onClick={runExtraction} disabled={!aiCategory || !aiBrick || uploadedFiles.length === 0} className="gap-2">
-            <Sparkles className="size-4" />
-            Extract Extended Attributes with AI
-          </Button>
-          {showSkip && (
-            <Button variant="ghost" onClick={() => setAiSkipped(true)}>
-              Skip AI Extraction
-            </Button>
-          )}
-        </div>
-      </div>
-      {aiCategory && bricksForCategory.length === 0 ? (
-        <p className="text-xs text-tg-warning">
-          No GS1 brick mapping is available for this category — continue entering attributes manually.
-        </p>
-      ) : (
-        <p className="text-xs text-muted-foreground">
-          {!aiBrick && "Select the product brick to scope attributes to that classification. "}
-          {uploadedFiles.length === 1
-            ? "1 image will be analyzed for this product."
-            : `${uploadedFiles.length} images will be analyzed together for this product.`}{" "}
-          All uploaded images are treated as evidence for the same product.
-        </p>
-      )}
-    </>
-  )
-
-  // Editable AI results card — the same Accept/Reject/Edit UI used in Step 2, extracted into a
-  // render function so it can also be shown post-confirm in the "View AI Attributes" drawer
-  // (AI attributes are the primary editing surface, so that drawer stays editable, unlike the
-  // Retailer's read-only equivalent).
-  const renderAiResultsCard = () => (
-    isComplete && aiExtraction && (
-      <div className="flex flex-col gap-4">
-        {/* Results header */}
-        <div className="flex items-center justify-between">
-          <div className="flex flex-col gap-0.5">
-            <p className="text-sm text-foreground">
-              Category: <span className="font-medium">{aiExtraction.category}</span>
-              {aiExtraction.brickName && (
-                <>
-                  {" · "}Brick: <span className="font-medium">{aiExtraction.brickName}</span>
-                  {aiExtraction.brickCode && <span className="font-mono text-xs text-muted-foreground"> ({aiExtraction.brickCode})</span>}
-                </>
-              )}
-              <span className="text-muted-foreground">
-                {" "}· {acceptedExtractedAttributes.length} attribute{acceptedExtractedAttributes.length !== 1 ? "s" : ""} accepted
-              </span>
-            </p>
-            <p className="text-xs text-muted-foreground">
-              {aiExtraction.imageCount === 1
-                ? "1 image analyzed"
-                : `${aiExtraction.imageCount} images analyzed together`}
-              {aiExtraction.imageNames.length > 0 && (
-                <span> — {aiExtraction.imageNames.join(", ")}</span>
-              )}
-            </p>
-          </div>
-          <div className="flex items-center gap-1 shrink-0">
-            {pendingExtractedCount > 0 && (
-              <Button variant="outline" size="sm" className="gap-1" onClick={acceptAllPending}>
-                <Check className="size-3.5" />
-                Accept all pending ({pendingExtractedCount})
-              </Button>
-            )}
-            <Button variant="ghost" size="sm" onClick={clearExtraction}>
-              Re-run
-            </Button>
-          </div>
-        </div>
-        {/* Fallback banner when Gemini was unavailable */}
-        {aiExtraction.fallbackUsed && (
-          <div className="flex items-center justify-between rounded border border-primary/30 bg-primary/5 px-3 py-2">
-            <div className="flex items-center gap-2">
-              <Info className="size-4 text-primary shrink-0" />
-              <p className="text-sm text-foreground">AI service unavailable — showing demo results.</p>
-            </div>
-            <Button variant="outline" size="sm" onClick={runExtraction}>Try again with AI</Button>
-          </div>
-        )}
-        <div className="flex items-start gap-2 rounded bg-muted/30 p-2">
-          <Info className="size-3.5 text-muted-foreground mt-0.5 shrink-0" />
-          <p className="text-xs text-muted-foreground">AI-generated attributes should be reviewed before saving. All images were analyzed together to produce this single product-level attribute set. AI attributes apply to all images of this product.</p>
-        </div>
-
-        {/* Product-level attribute cards */}
-        <div className="flex flex-col gap-3 rounded border border-border p-3">
-          {aiExtraction.attributes.length === 0 ? (
-            <p className="text-sm text-muted-foreground">No extended attributes were suggested for this category.</p>
-          ) : (
-            <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
-              {aiExtraction.attributes.map((attr, idx) => {
-                const editing = aiEditing?.index === idx
-                return (
-                  <div
-                    key={`${attr.code}-${idx}`}
-                    className={cn(
-                      "flex flex-col gap-2 rounded border p-3",
-                      attr.decision === "accepted" ? "border-tg-success/40 bg-card"
-                        : attr.decision === "rejected" ? "border-border bg-muted/30 opacity-70"
-                        : "border-border bg-card"
-                    )}
-                  >
-                    <div className="flex items-center justify-between gap-2">
-                      <div className="flex items-center gap-2 min-w-0">
-                        <span className="text-xs font-medium uppercase tracking-wide text-muted-foreground truncate">{attr.codeListName}</span>
-                        <span
-                          className={cn(
-                            "inline-flex shrink-0 items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium",
-                            attr.decision === "accepted" ? "bg-tg-success/15 text-tg-success"
-                              : attr.decision === "rejected" ? "bg-muted text-muted-foreground"
-                              : "bg-tg-warning/15 text-tg-warning"
-                          )}
-                        >
-                          {attr.decision === "accepted" ? <Check className="size-3" />
-                            : attr.decision === "rejected" ? <X className="size-3" />
-                            : <AlertCircle className="size-3" />}
-                          {attr.decision === "accepted" ? "Accepted" : attr.decision === "rejected" ? "Rejected" : "Pending review"}
-                        </span>
-                      </div>
-                      <span
-                        className={cn(
-                          "inline-flex shrink-0 items-center rounded-full px-2 py-0.5 text-xs font-medium",
-                          attr.confidence >= 0.85 ? "bg-tg-success/15 text-tg-success"
-                            : attr.confidence >= 0.75 ? "bg-tg-warning/15 text-tg-warning"
-                            : "bg-muted text-muted-foreground"
-                        )}
-                      >
-                        {Math.round(attr.confidence * 100)}%
-                      </span>
-                    </div>
-                    {editing ? (
-                      (() => {
-                        const allowed = valuesForCodeList(attr.codeListName)
-                        return (
-                          <div className="flex flex-col gap-2">
-                            <div className="flex flex-col gap-1">
-                              <Label className="text-xs text-muted-foreground">Attribute Value</Label>
-                              {allowed.length > 0 ? (
-                                <Select
-                                  value={allowed.some(v => v.value === attr.attributeValue) ? attr.attributeValue : undefined}
-                                  onValueChange={(v) => selectAttributeValue(idx, v)}
-                                >
-                                  <SelectTrigger className="h-8 bg-background">
-                                    <SelectValue placeholder="Select a value…" />
-                                  </SelectTrigger>
-                                  <SelectContent>
-                                    {allowed.map(v => (
-                                      <SelectItem key={v.code} value={v.value}>{v.value}</SelectItem>
-                                    ))}
-                                  </SelectContent>
-                                </Select>
-                              ) : (
-                                <Input
-                                  value={attr.attributeValue}
-                                  onChange={(e) => updateAttributeField(idx, "attributeValue", e.target.value)}
-                                  className="h-8 bg-background"
-                                  autoFocus
-                                />
-                              )}
-                            </div>
-                            <div className="flex flex-col gap-1">
-                              <Label className="text-xs text-muted-foreground">GS1 Code</Label>
-                              <Input
-                                value={attr.code}
-                                onChange={(e) => updateAttributeField(idx, "code", e.target.value)}
-                                readOnly={allowed.length > 0}
-                                className={cn("h-8 bg-background font-mono", allowed.length > 0 && "text-muted-foreground")}
-                              />
-                            </div>
-                            <Button size="sm" variant="outline" className="h-7 w-fit gap-1 px-2 text-xs" onClick={() => setAiEditing(null)}>
-                              <Check className="size-3" /> Done
-                            </Button>
-                          </div>
-                        )
-                      })()
-                    ) : (
-                      <>
-                        <p className="text-sm font-medium text-foreground">{attr.attributeValue}</p>
-                        <p className="text-xs text-muted-foreground">GS1 Code: <span className="font-mono text-foreground">{attr.code}</span></p>
-                      </>
-                    )}
-                    <p className="text-xs text-muted-foreground">{attr.reason}</p>
-                    <div className="flex items-center gap-1 pt-1">
-                      {/* Explicit review actions: Accept and Reject are always shown as
-                          separate buttons; the active decision is highlighted. Suggestions
-                          start "pending" and only count once Accept is clicked. */}
-                      <Button
-                        variant={attr.decision === "accepted" ? "default" : "outline"}
-                        size="sm"
-                        className="h-7 gap-1 px-2 text-xs"
-                        aria-pressed={attr.decision === "accepted"}
-                        onClick={() => setAttributeDecision(idx, attr.decision === "accepted" ? "pending" : "accepted")}
-                      >
-                        <Check className="size-3" /> Accept
-                      </Button>
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        className={cn(
-                          "h-7 gap-1 px-2 text-xs",
-                          attr.decision === "rejected"
-                            ? "border-destructive/50 bg-destructive/10 text-destructive"
-                            : "text-muted-foreground hover:text-destructive"
-                        )}
-                        aria-pressed={attr.decision === "rejected"}
-                        onClick={() => setAttributeDecision(idx, attr.decision === "rejected" ? "pending" : "rejected")}
-                      >
-                        <X className="size-3" /> Reject
-                      </Button>
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        className="h-7 gap-1 px-2 text-xs"
-                        onClick={() => setAiEditing(editing ? null : { index: idx })}
-                      >
-                        <Pencil className="size-3" /> Edit
-                      </Button>
-                    </div>
-                  </div>
-                )
-              })}
-            </div>
-          )}
-
-          {/* Unresolved attributes — product level */}
-          {aiExtraction.unresolvedAttributes.length > 0 && (
-            <div className="flex flex-col gap-2 rounded border border-border bg-muted/20 p-3 mt-1">
-              <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Unresolved attributes</p>
-              <ul className="flex flex-col gap-2">
-                {aiExtraction.unresolvedAttributes.map((u, i) => {
-                  const options = valuesForCodeList(u.codeListName)
-                  return (
-                    <li key={i} className="flex items-start gap-2 text-sm">
-                      <AlertCircle className="size-3.5 text-tg-warning mt-0.5 shrink-0" />
-                      <div className="flex-1">
-                        <span className="text-foreground">{u.codeListName}: </span>
-                        <span className="text-muted-foreground">{u.reason}</span>
-                      </div>
-                      {options.length > 0 && (
-                        <select
-                          className="h-7 rounded border border-border bg-background px-2 text-xs text-foreground"
-                          defaultValue=""
-                          onChange={(e) => {
-                            if (e.target.value) resolveUnresolvedAttribute(i, u.codeListName, e.target.value)
-                          }}
-                        >
-                          <option value="" disabled>Add manually…</option>
-                          {options.map(o => (
-                            <option key={o.code} value={o.value}>{o.value}</option>
-                          ))}
-                        </select>
-                      )}
-                    </li>
-                  )
-                })}
-              </ul>
-            </div>
-          )}
-        </div>
-      </div>
-    )
-  )
+  // All AI/classification state and handlers (extraction, per-shot suggestion, brick
+  // classification) live in this shared hook. The whole return value is handed to <AiSection>
+  // as one prop; the wizard body itself only needs the few values destructured below (file
+  // deletion resets, Review-step gating, the "reset AI" action, and Step 3 summaries).
+  const ai = useAiAttributes({ uploadedFiles, attributes, setAttributesByImage, getAutoPopulatedData })
+  const {
+    setAiCategory, setAiBrick, setAiSkipped, aiExtraction,
+    setClassificationStatus, setClassificationConfidence,
+    clearExtraction, clearShotSuggestions,
+    isComplete, hasExtraction, acceptedExtractedAttributes,
+    pendingExtractedCount, acceptAllPending,
+  } = ai
 
   const handleDragOver = useCallback((e: React.DragEvent) => {
     e.preventDefault()
@@ -1380,6 +392,8 @@ export function ImageUploadWizard({
     setUploadedFiles(prev => prev.filter(f => f.id !== fileId))
     clearExtraction() // file list changed — stale product-level extraction is invalid
     clearShotSuggestions() // index-keyed — deletion shifts indices
+    setClassificationStatus("idle") // re-confirm against the updated file set before re-running
+    setClassificationConfidence(null)
   }
 
   // Removes a set of confirmed images (single or bulk) and rebuilds attributesByImage against
@@ -1397,6 +411,8 @@ export function ImageUploadWizard({
     setAttributesByImage(nextAttrsByImage)
     clearExtraction() // file list changed — stale product-level extraction is invalid
     clearShotSuggestions() // index-keyed — deletion shifts indices
+    setClassificationStatus("idle") // re-confirm against the updated file set before re-running
+    setClassificationConfidence(null)
     media.prune(remaining.map(f => f.id))
   }
 
@@ -1414,213 +430,6 @@ export function ImageUploadWizard({
   // Product Media view and the pre-confirm Step 1 file grid, which are two separate `return`
   // statements in this component; `showDownloadModal`/`downloadPhase` are already top-level
   // state, so this is a pure JSX relocation with no behavior change.
-  const renderDownloadModal = () => {
-    const selectedFiles = uploadedFiles.filter(f => media.isChecked(f.id))
-    return showDownloadModal && (
-      <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
-        <div className="w-full max-w-lg rounded border border-border bg-card shadow-xl">
-          {/* Modal Header */}
-          <div className="flex items-center justify-between border-b border-border bg-gradient-to-r from-tg-header-start to-tg-header-end px-4 py-3">
-            <h2 className="text-base font-semibold text-white">
-              {downloadPhase === "select" && "Download Images with Metadata"}
-              {downloadPhase === "preparing" && "Preparing Download"}
-              {downloadPhase === "complete" && "Download Complete"}
-            </h2>
-            <button
-              onClick={() => setShowDownloadModal(false)}
-              className="text-white/80 hover:text-white"
-            >
-              <X className="size-5" />
-            </button>
-          </div>
-
-          {/* Modal Content */}
-          <div className="p-6">
-            {/* Phase 1: Select */}
-            {downloadPhase === "select" && (
-              <>
-                {/* Download Summary */}
-                <div className="mb-6">
-                  <div className="flex items-center gap-3 mb-4">
-                    <div className="flex size-10 items-center justify-center rounded-full bg-primary/10">
-                      <Package className="size-5 text-primary" />
-                    </div>
-                    <div>
-                      <h3 className="font-medium text-foreground">Download Package</h3>
-                      <p className="text-sm text-muted-foreground">
-                        {uploadLevel === "product"
-                          ? "Product Level"
-                          : uploadLevel === "gtin"
-                          ? "Item Level (GTIN)"
-                          : "Product + Color Code Level"} images
-                      </p>
-                    </div>
-                  </div>
-
-                  <div className="rounded border border-border bg-muted/20 p-4">
-                    <div className="text-sm space-y-1 mb-4">
-                      <div className="flex justify-between">
-                        <span className="text-muted-foreground">Product:</span>
-                        <span className="font-medium text-foreground">{getAutoPopulatedData().productId}</span>
-                      </div>
-                      {uploadLevel === "gtin" && (
-                        <div className="flex justify-between">
-                          <span className="text-muted-foreground">GTIN:</span>
-                          <span className="font-medium text-foreground">{getAutoPopulatedData().selectedGtin}</span>
-                        </div>
-                      )}
-                      {uploadLevel === "product-color" && (
-                        <div className="flex justify-between">
-                          <span className="text-muted-foreground">Color Code:</span>
-                          <span className="font-medium text-foreground">{getAutoPopulatedData().colorCode}</span>
-                        </div>
-                      )}
-                      <div className="flex justify-between">
-                        <span className="text-muted-foreground">Total Images:</span>
-                        <span className="font-medium text-foreground">{selectedFiles.length} of {uploadedFiles.length}</span>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-
-                {/* Files to Download — reflects the selection already made on the Product Media
-                    grid/toolbar; no in-modal checkboxes, to keep selection to a single control. */}
-                <div className="mb-6">
-                  <h4 className="text-sm font-medium text-foreground mb-3">Package Contents:</h4>
-                  <div className="space-y-2 max-h-48 overflow-y-auto">
-                    {selectedFiles.map((file) => (
-                      <div key={file.id} className="flex items-center gap-3 rounded border border-border bg-card p-3">
-                        <div className="flex size-10 items-center justify-center rounded bg-muted">
-                          {file.preview ? (
-                            <img
-                              src={file.preview}
-                              alt=""
-                              className="size-10 rounded object-cover"
-                            />
-                          ) : (
-                            <FileImage className="size-5 text-muted-foreground" />
-                          )}
-                        </div>
-                        <div className="flex-1 min-w-0">
-                          <div className="flex items-center gap-2">
-                            <FileImage className="size-4 text-primary shrink-0" />
-                            <span className="text-sm font-medium text-foreground truncate">{file.name}</span>
-                          </div>
-                        </div>
-                        <div className="text-right text-xs text-muted-foreground shrink-0">
-                          <div>{formatFileSize(file.size)}</div>
-                        </div>
-                      </div>
-                    ))}
-                    {/* Single machine-readable metadata artifact for the whole selection */}
-                    <div className="flex items-center gap-3 rounded border border-border bg-card p-3">
-                      <div className="flex size-10 items-center justify-center rounded bg-muted">
-                        <FileText className="size-5 text-tg-success" />
-                      </div>
-                      <div className="flex-1 min-w-0">
-                        <span className="text-sm font-medium text-foreground truncate block">
-                          {getAutoPopulatedData().productId || "product"}_image_metadata.csv
-                        </span>
-                        <span className="text-xs text-muted-foreground">
-                          {selectedFiles.length} row{selectedFiles.length !== 1 ? "s" : ""} — one per image
-                        </span>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-
-                {/* Info Note */}
-                <div className="mb-6 flex items-start gap-2 rounded bg-primary/5 p-3 text-sm">
-                  <FileText className="size-4 text-primary mt-0.5 shrink-0" />
-                  <div>
-                    <span className="font-medium text-foreground">Metadata file (.csv)</span>
-                    <span className="text-muted-foreground"> contains one row per image with all attributes in the standard field layout — including measured file properties and accepted GS1 extended attributes — ready for PIM/DAM import.</span>
-                  </div>
-                </div>
-
-                {/* Actions */}
-                <div className="flex items-center justify-end gap-3">
-                  <Button variant="outline" onClick={() => setShowDownloadModal(false)}>
-                    Cancel
-                  </Button>
-                  <Button onClick={handleBulkDownload} disabled={selectedFiles.length === 0}>
-                    <Download className="size-4 mr-2" />
-                    Download {selectedFiles.length} image{selectedFiles.length !== 1 ? "s" : ""} + metadata CSV
-                  </Button>
-                </div>
-              </>
-            )}
-
-            {/* Phase 2: Preparing */}
-            {downloadPhase === "preparing" && (
-              <div className="py-8 flex flex-col items-center justify-center gap-4">
-                <div className="flex size-16 items-center justify-center rounded-full bg-primary/10">
-                  <Download className="size-8 text-primary animate-pulse" />
-                </div>
-                <div className="text-center">
-                  <h3 className="text-lg font-medium text-foreground">Preparing your download</h3>
-                  <p className="text-sm text-muted-foreground mt-1">
-                    Packaging {selectedFiles.length} images with metadata...
-                  </p>
-                </div>
-                <div className="w-48 h-1.5 rounded-full bg-muted overflow-hidden">
-                  <div className="h-full bg-primary rounded-full animate-[progress_1.5s_ease-in-out_infinite]" style={{ width: "60%" }} />
-                </div>
-              </div>
-            )}
-
-            {/* Phase 3: Complete */}
-            {downloadPhase === "complete" && (
-              <div className="text-center py-4">
-                <div className="flex size-16 items-center justify-center rounded-full bg-tg-success/10 mx-auto mb-4">
-                  <CheckCircle2 className="size-8 text-tg-success" />
-                </div>
-                <h3 className="text-lg font-medium text-foreground mb-2">Download Complete</h3>
-                <p className="text-sm text-muted-foreground mb-6">
-                  Your images and metadata files have been downloaded successfully.
-                </p>
-
-                {/* Downloaded Files Summary */}
-                <div className="rounded border border-border bg-muted/20 p-4 mb-6 text-left">
-                  <div className="text-sm font-medium text-foreground mb-3">Downloaded Files:</div>
-                  <div className="space-y-2 max-h-32 overflow-y-auto">
-                    {selectedFiles.map((file) => (
-                      <div key={file.id} className="flex items-center gap-2 text-sm text-foreground">
-                        <Check className="size-4 text-tg-success" />
-                        <span>{file.name}</span>
-                      </div>
-                    ))}
-                    <div className="flex items-center gap-2 text-sm text-foreground">
-                      <Check className="size-4 text-tg-success" />
-                      <span>{getAutoPopulatedData().productId || "product"}_image_metadata.csv</span>
-                    </div>
-                  </div>
-                </div>
-
-                {/* Metadata CSV Preview — first rows of the actually-downloaded file */}
-                <div className="rounded border border-border bg-card p-4 mb-6 text-left">
-                  <div className="flex items-center justify-between mb-2">
-                    <span className="text-sm font-medium text-foreground">Metadata Preview</span>
-                    <span className="text-xs text-muted-foreground">
-                      {getAutoPopulatedData().productId || "product"}_image_metadata.csv
-                    </span>
-                  </div>
-                  <pre className="text-xs text-muted-foreground bg-muted/30 p-3 rounded overflow-x-auto max-h-40 overflow-y-auto font-mono">
-{lastCsvPreview || "No metadata available"}
-                  </pre>
-                </div>
-
-                <Button onClick={() => setShowDownloadModal(false)}>
-                  Close
-                </Button>
-              </div>
-            )}
-          </div>
-        </div>
-      </div>
-    )
-  }
-
   const formatFileSize = (bytes: number) => {
     if (bytes < 1024) return bytes + " B"
     if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + " KB"
@@ -1731,28 +540,6 @@ export function ImageUploadWizard({
       setCurrentStep(currentStep - 1)
     } else {
       onCancel()
-    }
-  }
-
-  // Get auto-populated data based on selections
-  const getAutoPopulatedData = () => {
-    const selCode = MOCK_DATA.selectionCodes.find(s => s.code === selectedSelectionCode)
-    const product = MOCK_DATA.products.find(p => p.id === selectedProduct)
-    const color = MOCK_DATA.colorCodes.find(c => c.code === selectedColorCode)
-    const gtinEntry = product?.gtins.find(g => g.gtin === selectedGtin)
-    
-    return {
-      companyName: "KIBBLES N BITS",
-      accountNumber: "125103335555",
-      selectionCode: selCode?.code || "",
-      description: selCode?.description || "",
-      productId: product?.id || "",
-      productDescription: product?.description || "",
-      gtins: product?.gtins || [],
-      colorCode: color?.code || "",
-      colorName: color?.name || "",
-      selectedGtin: gtinEntry?.gtin || "",
-      selectedGtinType: gtinEntry?.type || "",
     }
   }
 
@@ -1905,9 +692,6 @@ export function ImageUploadWizard({
             </div>
           </div>
         </div>
-
-        {/* Data-richness meter — post-submit view (P1.2) */}
-        {renderRichnessMeter()}
 
         {/* Syndication info block — supplier post-submit only (Change 6) */}
         {portalType === "supplier" && (
@@ -2334,6 +1118,8 @@ export function ImageUploadWizard({
                           })
                           clearExtraction() // replaced image invalidates the product-level extraction
                           clearShotSuggestions() // filename/content changed under this index
+                          setClassificationStatus("idle") // re-confirm against the replacement image
+                          setClassificationConfidence(null)
                           setPendingReplaceFile(null)
                         }
                         // Commit attribute edits (Acceptance #8): product-wide keys apply to the
@@ -2511,40 +1297,24 @@ export function ImageUploadWizard({
               </SheetTitle>
             </SheetHeader>
             <div className="px-4 pb-4 flex flex-col gap-4">
-              {/* P1.2: extraction can be run from here after upload — not only during the wizard */}
-              {isExtracting && (
-                <div className="flex items-center gap-3 rounded border border-border bg-muted/20 p-4">
-                  <Loader2 className="size-5 animate-spin text-primary" />
-                  <p className="text-sm text-foreground">Analyzing {aiExtraction?.imageCount ?? uploadedFiles.length} image{(aiExtraction?.imageCount ?? uploadedFiles.length) !== 1 ? "s" : ""} for {aiCategory} attributes…</p>
-                </div>
-              )}
-              {isError && (
-                <div className="flex flex-col gap-3 rounded border border-destructive/30 bg-destructive/5 p-4">
-                  <div className="flex items-start gap-2">
-                    <AlertCircle className="size-4 text-destructive mt-0.5 shrink-0" />
-                    <p className="text-sm text-foreground">{aiExtraction?.error ?? "Extraction failed."}</p>
-                  </div>
-                  <Button variant="outline" size="sm" className="w-fit" onClick={runExtraction}>Try again</Button>
-                </div>
-              )}
-              {isComplete && renderAiResultsCard()}
-              {!hasExtraction && (
-                uploadedFiles.length > 0 ? (
-                  <>
-                    <p className="text-sm text-muted-foreground">
-                      No extraction has run for this product yet. Run it now — the images are already uploaded.
-                    </p>
-                    {renderAiIdleControls(false)}
-                  </>
-                ) : (
-                  <AiAttributesTable attributes={[]} />
-                )
-              )}
+              {/* P1.2/P1.1: the same classification-first, consolidated AI flow as Step 2 — no
+                  skip affordance here (images are already submitted; nothing to skip past). */}
+              {uploadedFiles.length > 0 ? <AiSection ai={ai} uploadedFiles={uploadedFiles} showSkip={false} /> : <AiAttributesTable attributes={[]} />}
             </div>
           </SheetContent>
         </Sheet>
 
-        {renderDownloadModal()}
+        <DownloadModal
+          open={showDownloadModal}
+          phase={downloadPhase}
+          uploadedFiles={uploadedFiles}
+          isChecked={media.isChecked}
+          uploadLevel={uploadLevel}
+          autoData={getAutoPopulatedData()}
+          lastCsvPreview={lastCsvPreview}
+          onClose={() => setShowDownloadModal(false)}
+          onDownload={handleBulkDownload}
+        />
       </div>
     )
   }
@@ -2770,10 +1540,13 @@ export function ImageUploadWizard({
                   onValueChange={(value) => {
                     setSelectedProduct(value)
                     setSelectedGtin("")
-                    // product context changed: drop stale product-level extraction and re-default category
+                    // product context changed: drop stale product-level extraction and classification
                     clearExtraction()
                     clearShotSuggestions()
                     setAiCategory("")
+                    setAiBrick(null)
+                    setClassificationStatus("idle")
+                    setClassificationConfidence(null)
                     setAiSkipped(false)
                   }}
                 >
@@ -3093,150 +1866,7 @@ export function ImageUploadWizard({
               </p>
             </div>
 
-            {renderRichnessMeter()}
-
-            {/* ── Optional: Extract Extended Attributes with AI (sub-section, not a numbered step) ── */}
-            <div className="rounded border border-border bg-card">
-              <div className="flex items-start gap-3 border-b border-border p-4">
-                <div className="flex size-9 shrink-0 items-center justify-center rounded bg-primary/10">
-                  <Sparkles className="size-5 text-primary" />
-                </div>
-                <div className="flex-1">
-                  <h3 className="text-sm font-semibold text-foreground">Extract Extended Attributes with AI</h3>
-                  <p className="mt-0.5 text-sm text-muted-foreground">
-                    Use AI to suggest GS1-style extended attributes from uploaded product images.
-                  </p>
-                </div>
-                {aiSkipped && (
-                  <Button variant="ghost" size="sm" onClick={() => setAiSkipped(false)}>
-                    Show
-                  </Button>
-                )}
-              </div>
-
-              {/* Skipped message — files & manual form remain available */}
-              {aiSkipped && (
-                <div className="flex items-center gap-2 p-4 text-sm text-muted-foreground">
-                  <Info className="size-4 shrink-0" />
-                  <span>AI extraction skipped. You can continue entering attributes manually.</span>
-                </div>
-              )}
-
-              {!aiSkipped && (
-                <div className="flex flex-col gap-4 p-4">
-                  {/* Idle / pre-extraction controls */}
-                  {!hasExtraction && renderAiIdleControls(true)}
-
-                  {/* Loading state */}
-                  {isExtracting && (
-                    <div className="flex items-center gap-3 rounded border border-border bg-muted/20 p-4">
-                      <Loader2 className="size-5 animate-spin text-primary" />
-                      <p className="text-sm text-foreground">
-                        Analyzing {aiExtraction?.imageCount ?? uploadedFiles.length} image{(aiExtraction?.imageCount ?? uploadedFiles.length) !== 1 ? "s" : ""} together for {aiCategory} attributes…
-                      </p>
-                    </div>
-                  )}
-
-                  {/* Error state */}
-                  {isError && (
-                    <div className="flex flex-col gap-3 rounded border border-destructive/30 bg-destructive/5 p-4">
-                      <div className="flex items-start gap-2">
-                        <AlertCircle className="size-4 text-destructive mt-0.5 shrink-0" />
-                        <p className="text-sm text-foreground">
-                          {aiExtraction?.error ?? "Extraction failed. You can continue setting attributes manually."}
-                        </p>
-                      </div>
-                      <div className="flex items-center gap-2">
-                        <Button variant="outline" size="sm" onClick={runExtraction}>Try again</Button>
-                        <Button variant="ghost" size="sm" onClick={() => { clearExtraction(); setAiSkipped(true) }}>
-                          Continue manually
-                        </Button>
-                      </div>
-                    </div>
-                  )}
-
-                  {renderAiResultsCard()}
-                </div>
-              )}
-            </div>
-
-            {/* Per-shot AI suggestions (P0.2b) — optional; proposes the fields the camera angle
-                shows. Nothing is written to any image without an explicit Accept. */}
-            {uploadedFiles.length > 0 && (
-              <div className="rounded border border-border bg-card">
-                <div className="flex items-start gap-3 border-b border-border p-4">
-                  <div className="flex size-9 shrink-0 items-center justify-center rounded bg-primary/10">
-                    <Sparkles className="size-5 text-primary" />
-                  </div>
-                  <div className="flex-1">
-                    <h3 className="text-sm font-semibold text-foreground">Suggest per-shot attributes with AI</h3>
-                    <p className="mt-0.5 text-sm text-muted-foreground">
-                      Proposes orientation, facing, angle, and a draft description for each image. Optional — accept or dismiss per image.
-                    </p>
-                  </div>
-                  {shotSuggestions === null && !shotSuggestLoading && (
-                    <Button variant="outline" size="sm" onClick={() => void runShotSuggestions()}>
-                      Suggest for {uploadedFiles.length} image{uploadedFiles.length !== 1 ? "s" : ""}
-                    </Button>
-                  )}
-                  {shotSuggestions !== null && shotSuggestions.some(s => s.status === "pending") && (
-                    <Button variant="outline" size="sm" className="gap-1" onClick={() => acceptShotSuggestions(shotSuggestions.filter(s => s.status === "pending"))}>
-                      <Check className="size-3.5" />
-                      Accept all ({shotSuggestions.filter(s => s.status === "pending").length})
-                    </Button>
-                  )}
-                </div>
-                {shotSuggestLoading && (
-                  <div className="flex items-center gap-3 p-4">
-                    <Loader2 className="size-5 animate-spin text-primary" />
-                    <p className="text-sm text-foreground">Analyzing {uploadedFiles.length} image{uploadedFiles.length !== 1 ? "s" : ""} for per-shot attributes…</p>
-                  </div>
-                )}
-                {shotSuggestions !== null && !shotSuggestLoading && (
-                  <div className="flex flex-col divide-y divide-border">
-                    {shotSuggestions.map((s) => (
-                      <div key={s.fileIndex} className={cn("flex items-center gap-3 px-4 py-2", s.status === "dismissed" && "opacity-50")}>
-                        <div className="size-9 shrink-0 rounded border border-border overflow-hidden bg-muted">
-                          {uploadedFiles[s.fileIndex]?.preview && (
-                            <img src={uploadedFiles[s.fileIndex].preview} alt="" className="size-full object-cover" />
-                          )}
-                        </div>
-                        <div className="flex-1 min-w-0">
-                          <p className="text-xs font-medium text-foreground truncate">{s.fileName}</p>
-                          <p className="text-xs text-muted-foreground truncate">
-                            {ORIENTATION_OPTIONS.find(o => o.value === s.orientation)?.label ?? s.orientation}
-                            {s.facing && ` · Facing ${FACING_OPTIONS.find(o => o.value === s.facing)?.label ?? s.facing}`}
-                            {s.description && ` · “${s.description}”`}
-                          </p>
-                        </div>
-                        <span className={cn(
-                          "inline-flex shrink-0 items-center rounded-full px-2 py-0.5 text-xs font-medium",
-                          s.confidence >= 0.85 ? "bg-tg-success/15 text-tg-success" : "bg-tg-warning/15 text-tg-warning"
-                        )}>
-                          {Math.round(s.confidence * 100)}%
-                        </span>
-                        {s.status === "accepted" ? (
-                          <span className="inline-flex shrink-0 items-center gap-1 text-xs font-medium text-tg-success">
-                            <Check className="size-3.5" /> Accepted
-                          </span>
-                        ) : s.status === "dismissed" ? (
-                          <span className="text-xs text-muted-foreground shrink-0">Dismissed</span>
-                        ) : (
-                          <div className="flex items-center gap-1 shrink-0">
-                            <Button variant="outline" size="sm" className="h-7 gap-1 px-2 text-xs" onClick={() => acceptShotSuggestions([s])}>
-                              <Check className="size-3" /> Accept
-                            </Button>
-                            <Button variant="outline" size="sm" className="h-7 gap-1 px-2 text-xs text-muted-foreground" onClick={() => dismissShotSuggestion(s.fileIndex)}>
-                              <X className="size-3" /> Dismiss
-                            </Button>
-                          </div>
-                        )}
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-            )}
+            {<AiSection ai={ai} uploadedFiles={uploadedFiles} showSkip={true} />}
 
             {/* P0.2a: product-wide fields are entered once; per-shot fields are always per image.
                 With multiple files, the two-column layout with the image selector is the default. */}
@@ -3388,8 +2018,6 @@ export function ImageUploadWizard({
                 Review your upload details before submitting. Click &quot;Confirm &amp; Upload&quot; to proceed.
               </p>
             </div>
-
-            {renderRichnessMeter()}
 
             {/* Target Selection Summary */}
             <div className="rounded border border-border bg-muted/30 p-4">
@@ -3634,7 +2262,17 @@ export function ImageUploadWizard({
         </div>
       </div>
 
-      {renderDownloadModal()}
+      <DownloadModal
+        open={showDownloadModal}
+        phase={downloadPhase}
+        uploadedFiles={uploadedFiles}
+        isChecked={media.isChecked}
+        uploadLevel={uploadLevel}
+        autoData={getAutoPopulatedData()}
+        lastCsvPreview={lastCsvPreview}
+        onClose={() => setShowDownloadModal(false)}
+        onDownload={handleBulkDownload}
+      />
     </div>
   )
 }

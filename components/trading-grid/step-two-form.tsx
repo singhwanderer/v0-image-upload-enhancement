@@ -1,0 +1,214 @@
+"use client"
+
+import { Button } from "@/components/ui/button"
+import { Input } from "@/components/ui/input"
+import { Label } from "@/components/ui/label"
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select"
+import type { MeasuredImageMetadata } from "./image-metadata"
+import {
+  ORIENTATION_OPTIONS,
+  ANGLE_OPTIONS,
+  IMAGE_TYPE_OPTIONS,
+  PURPOSE_OPTIONS,
+  LOCATION_TYPE_OPTIONS,
+  FACING_OPTIONS,
+  IMAGE_STYLE_OPTIONS,
+} from "./attribute-options"
+
+// P0.2a: the attribute record splits into two groups. PRODUCT-WIDE fields hold one honest
+// value for every image of a product; PER-SHOT fields describe what makes each photo
+// different (which is exactly why they must never be blanket-applied).
+export const PER_SHOT_KEYS = ["orientation", "facing", "angle", "clippingPath", "imageDescription"] as const
+export type PerShotKey = (typeof PER_SHOT_KEYS)[number]
+export const isPerShotKey = (k: string): k is PerShotKey => (PER_SHOT_KEYS as readonly string[]).includes(k)
+
+// Attribute form used in Step 2, the Edit dialog, and Bulk edit (Change 3 / Change 7 / P0.2a)
+export type StepTwoFormProps = {
+  currentAttrs: {
+    imageType: string; purpose: string; orientation: string; locationType: string;
+    externalLocation: string; imageStyle: string; facing: string; angle: string;
+    clippingPath: string; imageDescription: string;
+  }
+  updateAttrs: (a: StepTwoFormProps["currentAttrs"]) => void
+  uploadLevel: "product" | "product-color" | "gtin"
+  autoData: { colorCode: string; selectedGtin: string }
+  // Auto-captured per-file facts (dimensions/DPI) shown read-only. Omitted in bulk edit,
+  // where no single file is in context — measured facts are never bulk-editable.
+  measuredFiles?: { name: string; measured?: MeasuredImageMetadata }[]
+  // Explicit, labeled copy action for per-shot values — a deliberate copy, not a silent default.
+  onApplyPerShotToAll?: () => void
+  // Bulk edit targets per-shot fields only; product-wide values are edited once in the main form.
+  hideProductWide?: boolean
+}
+
+// Read-only summary of a file's decoded dimensions/DPI. undefined = measurement in flight.
+export function formatMeasured(m?: MeasuredImageMetadata): string {
+  if (!m) return "Measuring…"
+  const dims = m.width && m.height ? `${m.width} × ${m.height} px` : null
+  const dpi = m.dpi ? `${m.dpi} DPI` : null
+  if (!dims && !dpi) return "Not readable from file"
+  return [dims, dpi].filter(Boolean).join(" · ")
+}
+
+export function StepTwoForm({ currentAttrs, updateAttrs, uploadLevel, autoData, measuredFiles, onApplyPerShotToAll, hideProductWide }: StepTwoFormProps) {
+  return (
+    <div className="flex flex-col gap-4">
+      {!hideProductWide && (
+        <>
+          {/* Auto-populated fields (read-only) */}
+          {(uploadLevel === "product-color" || uploadLevel === "gtin") && (
+            <div className="grid gap-4 md:grid-cols-2">
+              {uploadLevel === "product-color" && (
+                <div className="flex flex-col gap-2">
+                  <Label className="text-sm font-medium">Color Code</Label>
+                  <Input value={autoData.colorCode} readOnly className="bg-muted/30 text-foreground cursor-default" />
+                </div>
+              )}
+              {uploadLevel === "gtin" && (
+                <div className="flex flex-col gap-2">
+                  <Label className="text-sm font-medium">GTIN</Label>
+                  <Input value={autoData.selectedGtin} readOnly className="bg-muted/30 text-foreground cursor-default" />
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Product-wide group: one value for every image of this product */}
+          <div className="flex items-center gap-2">
+            <span className="text-xs font-semibold uppercase tracking-wide text-foreground">Product-wide attributes</span>
+            <span className="text-xs text-muted-foreground">apply to every image of this product</span>
+          </div>
+
+          <div className="grid gap-4 md:grid-cols-2">
+            <div className="flex flex-col gap-2">
+              <Label className="text-sm font-medium">
+                Image Type <span className="text-destructive">*</span>
+              </Label>
+              <Select value={currentAttrs.imageType} onValueChange={(v) => updateAttrs({ ...currentAttrs, imageType: v })}>
+                <SelectTrigger className="w-full bg-background"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  {IMAGE_TYPE_OPTIONS.map(o => <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>)}
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div className="flex flex-col gap-2">
+              <Label className="text-sm font-medium">
+                Purpose <span className="text-destructive">*</span>
+              </Label>
+              <Select value={currentAttrs.purpose} onValueChange={(v) => updateAttrs({ ...currentAttrs, purpose: v })}>
+                <SelectTrigger className="w-full bg-background"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  {PURPOSE_OPTIONS.map(o => <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>)}
+                </SelectContent>
+              </Select>
+            </div>
+
+            {/* Location Type read-only */}
+            <div className="flex flex-col gap-2">
+              <Label className="text-sm font-medium">Location Type</Label>
+              <Input value={LOCATION_TYPE_OPTIONS.find(o => o.value === currentAttrs.locationType)?.label || ""} readOnly className="bg-muted/30 text-foreground cursor-default" />
+            </div>
+
+            <div className="flex flex-col gap-2">
+              <Label className="text-sm font-medium">Image Style <span className="text-xs font-normal text-muted-foreground">(optional)</span></Label>
+              <Select value={currentAttrs.imageStyle} onValueChange={(v) => updateAttrs({ ...currentAttrs, imageStyle: v })}>
+                <SelectTrigger className="w-full bg-background"><SelectValue placeholder="Select style..." /></SelectTrigger>
+                <SelectContent>{IMAGE_STYLE_OPTIONS.map(o => <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>)}</SelectContent>
+              </Select>
+            </div>
+          </div>
+
+          {(currentAttrs.locationType === "FTP" || currentAttrs.locationType === "URL") && (
+            <div className="flex flex-col gap-2">
+              <Label className="text-sm font-medium">External Location <span className="text-destructive">*</span></Label>
+              <Input
+                value={currentAttrs.externalLocation}
+                onChange={(e) => updateAttrs({ ...currentAttrs, externalLocation: e.target.value })}
+                placeholder={currentAttrs.locationType === "FTP" ? "ftp://..." : "https://..."}
+                className="bg-background"
+              />
+            </div>
+          )}
+
+          <div className="border-t border-border" />
+        </>
+      )}
+
+      {/* Per-shot group: what makes each photo different — never blanket-applied */}
+      <div className="flex items-center gap-2">
+        <span className="text-xs font-semibold uppercase tracking-wide text-foreground">Per-shot attributes</span>
+        <span className="text-xs text-muted-foreground">describe this specific image</span>
+      </div>
+
+      {/* Measured from file — auto-captured by decoding each staged binary (no AI, no typing). */}
+      {measuredFiles && measuredFiles.length > 0 && (
+        <div className="flex flex-col gap-1.5 rounded border border-border bg-muted/20 p-3">
+          <div className="flex items-center gap-2">
+            <span className="text-xs font-semibold uppercase tracking-wide text-foreground">Measured from file</span>
+            <span className="rounded bg-primary/10 px-1.5 py-0.5 text-xs font-medium text-primary">Auto-captured</span>
+          </div>
+          <div className="flex flex-col gap-0.5 max-h-24 overflow-y-auto">
+            {measuredFiles.map((f, i) => (
+              <div key={i} className="flex items-center gap-2 text-xs">
+                <span className="truncate max-w-[220px] text-muted-foreground" title={f.name}>{f.name}</span>
+                <span className="font-medium text-foreground">{formatMeasured(f.measured)}</span>
+              </div>
+            ))}
+          </div>
+          <p className="text-xs text-muted-foreground">
+            Dimensions and DPI are read directly from each image file — no manual entry needed.
+          </p>
+        </div>
+      )}
+
+      <div className="grid gap-4 md:grid-cols-2">
+        <div className="flex flex-col gap-2">
+          <Label className="text-sm font-medium">
+            Orientation <span className="text-destructive">*</span>
+          </Label>
+          <Select value={currentAttrs.orientation} onValueChange={(v) => updateAttrs({ ...currentAttrs, orientation: v })}>
+            <SelectTrigger className="w-full bg-background"><SelectValue placeholder="Select orientation..." /></SelectTrigger>
+            <SelectContent>
+              {ORIENTATION_OPTIONS.map(o => <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>)}
+            </SelectContent>
+          </Select>
+        </div>
+        <div className="flex flex-col gap-2">
+          <Label className="text-sm font-medium">Facing (GDSN) <span className="text-xs font-normal text-muted-foreground">(optional)</span></Label>
+          <Select value={currentAttrs.facing} onValueChange={(v) => updateAttrs({ ...currentAttrs, facing: v })}>
+            <SelectTrigger className="w-full bg-background"><SelectValue placeholder="Select facing..." /></SelectTrigger>
+            <SelectContent>{FACING_OPTIONS.map(o => <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>)}</SelectContent>
+          </Select>
+        </div>
+        <div className="flex flex-col gap-2">
+          <Label className="text-sm font-medium">Angle <span className="text-xs font-normal text-muted-foreground">(optional)</span></Label>
+          <Select value={currentAttrs.angle} onValueChange={(v) => updateAttrs({ ...currentAttrs, angle: v })}>
+            <SelectTrigger className="w-full bg-background"><SelectValue placeholder="Select angle..." /></SelectTrigger>
+            <SelectContent>{ANGLE_OPTIONS.map(o => <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>)}</SelectContent>
+          </Select>
+        </div>
+        <div className="flex flex-col gap-2">
+          <Label className="text-sm font-medium">Clipping Path <span className="text-xs font-normal text-muted-foreground">(optional)</span></Label>
+          <Input value={currentAttrs.clippingPath} onChange={(e) => updateAttrs({ ...currentAttrs, clippingPath: e.target.value })} placeholder="Path name..." className="bg-background" />
+        </div>
+        <div className="flex flex-col gap-2 md:col-span-2">
+          <Label className="text-sm font-medium">Image Description <span className="text-xs font-normal text-muted-foreground">(optional)</span></Label>
+          <Input value={currentAttrs.imageDescription} onChange={(e) => updateAttrs({ ...currentAttrs, imageDescription: e.target.value })} placeholder="Enter description..." className="bg-background" />
+        </div>
+      </div>
+
+      {onApplyPerShotToAll && (
+        <Button variant="outline" size="sm" className="w-fit" onClick={onApplyPerShotToAll}>
+          Apply this image&apos;s per-shot values to all images
+        </Button>
+      )}
+    </div>
+  )
+}

@@ -1,0 +1,246 @@
+"use client"
+
+import {
+  X,
+  Check,
+  Download,
+  Package,
+  FileImage,
+  FileText,
+  CheckCircle2,
+} from "lucide-react"
+import { Button } from "@/components/ui/button"
+import type { UploadedFile } from "./uploaded-file"
+
+// Three-phase download modal (Select → Preparing → Complete). Reachable from both the
+// post-confirm Product Media view and the pre-confirm Step 1 file grid — two separate `return`
+// statements in the wizard — so it lives as its own component taking the download state and
+// selection predicate as props. Pure relocation from the wizard, no behavior change.
+type DownloadModalProps = {
+  open: boolean
+  phase: "select" | "preparing" | "complete"
+  uploadedFiles: UploadedFile[]
+  // Selection is owned by the Product Media grid/toolbar; the modal only reads it.
+  isChecked: (id: string) => boolean
+  uploadLevel: "product" | "product-color" | "gtin"
+  autoData: { productId: string; selectedGtin: string; colorCode: string }
+  lastCsvPreview: string
+  onClose: () => void
+  onDownload: () => void
+}
+
+// Local copy of the wizard's trivial pure size formatter (kept in both places rather than
+// coupling the modal to the wizard's internals for three lines).
+function formatFileSize(bytes: number): string {
+  if (bytes < 1024) return bytes + " B"
+  if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + " KB"
+  return (bytes / (1024 * 1024)).toFixed(1) + " MB"
+}
+
+export function DownloadModal({ open, phase, uploadedFiles, isChecked, uploadLevel, autoData, lastCsvPreview, onClose, onDownload }: DownloadModalProps) {
+  if (!open) return null
+  const selectedFiles = uploadedFiles.filter(f => isChecked(f.id))
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+      <div className="w-full max-w-lg rounded border border-border bg-card shadow-xl">
+        {/* Modal Header */}
+        <div className="flex items-center justify-between border-b border-border bg-gradient-to-r from-tg-header-start to-tg-header-end px-4 py-3">
+          <h2 className="text-base font-semibold text-white">
+            {phase === "select" && "Download Images with Metadata"}
+            {phase === "preparing" && "Preparing Download"}
+            {phase === "complete" && "Download Complete"}
+          </h2>
+          <button
+            onClick={onClose}
+            className="text-white/80 hover:text-white"
+          >
+            <X className="size-5" />
+          </button>
+        </div>
+
+        {/* Modal Content */}
+        <div className="p-6">
+          {/* Phase 1: Select */}
+          {phase === "select" && (
+            <>
+              {/* Download Summary */}
+              <div className="mb-6">
+                <div className="flex items-center gap-3 mb-4">
+                  <div className="flex size-10 items-center justify-center rounded-full bg-primary/10">
+                    <Package className="size-5 text-primary" />
+                  </div>
+                  <div>
+                    <h3 className="font-medium text-foreground">Download Package</h3>
+                    <p className="text-sm text-muted-foreground">
+                      {uploadLevel === "product"
+                        ? "Product Level"
+                        : uploadLevel === "gtin"
+                        ? "Item Level (GTIN)"
+                        : "Product + Color Code Level"} images
+                    </p>
+                  </div>
+                </div>
+
+                <div className="rounded border border-border bg-muted/20 p-4">
+                  <div className="text-sm space-y-1 mb-4">
+                    <div className="flex justify-between">
+                      <span className="text-muted-foreground">Product:</span>
+                      <span className="font-medium text-foreground">{autoData.productId}</span>
+                    </div>
+                    {uploadLevel === "gtin" && (
+                      <div className="flex justify-between">
+                        <span className="text-muted-foreground">GTIN:</span>
+                        <span className="font-medium text-foreground">{autoData.selectedGtin}</span>
+                      </div>
+                    )}
+                    {uploadLevel === "product-color" && (
+                      <div className="flex justify-between">
+                        <span className="text-muted-foreground">Color Code:</span>
+                        <span className="font-medium text-foreground">{autoData.colorCode}</span>
+                      </div>
+                    )}
+                    <div className="flex justify-between">
+                      <span className="text-muted-foreground">Total Images:</span>
+                      <span className="font-medium text-foreground">{selectedFiles.length} of {uploadedFiles.length}</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* Files to Download — reflects the selection already made on the Product Media
+                  grid/toolbar; no in-modal checkboxes, to keep selection to a single control. */}
+              <div className="mb-6">
+                <h4 className="text-sm font-medium text-foreground mb-3">Package Contents:</h4>
+                <div className="space-y-2 max-h-48 overflow-y-auto">
+                  {selectedFiles.map((file) => (
+                    <div key={file.id} className="flex items-center gap-3 rounded border border-border bg-card p-3">
+                      <div className="flex size-10 items-center justify-center rounded bg-muted">
+                        {file.preview ? (
+                          <img
+                            src={file.preview}
+                            alt=""
+                            className="size-10 rounded object-cover"
+                          />
+                        ) : (
+                          <FileImage className="size-5 text-muted-foreground" />
+                        )}
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2">
+                          <FileImage className="size-4 text-primary shrink-0" />
+                          <span className="text-sm font-medium text-foreground truncate">{file.name}</span>
+                        </div>
+                      </div>
+                      <div className="text-right text-xs text-muted-foreground shrink-0">
+                        <div>{formatFileSize(file.size)}</div>
+                      </div>
+                    </div>
+                  ))}
+                  {/* Single machine-readable metadata artifact for the whole selection */}
+                  <div className="flex items-center gap-3 rounded border border-border bg-card p-3">
+                    <div className="flex size-10 items-center justify-center rounded bg-muted">
+                      <FileText className="size-5 text-tg-success" />
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <span className="text-sm font-medium text-foreground truncate block">
+                        {autoData.productId || "product"}_image_metadata.csv
+                      </span>
+                      <span className="text-xs text-muted-foreground">
+                        {selectedFiles.length} row{selectedFiles.length !== 1 ? "s" : ""} — one per image
+                      </span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* Info Note */}
+              <div className="mb-6 flex items-start gap-2 rounded bg-primary/5 p-3 text-sm">
+                <FileText className="size-4 text-primary mt-0.5 shrink-0" />
+                <div>
+                  <span className="font-medium text-foreground">Metadata file (.csv)</span>
+                  <span className="text-muted-foreground"> contains one row per image with all attributes in the standard field layout — including measured file properties and accepted GS1 extended attributes — ready for PIM/DAM import.</span>
+                </div>
+              </div>
+
+              {/* Actions */}
+              <div className="flex items-center justify-end gap-3">
+                <Button variant="outline" onClick={onClose}>
+                  Cancel
+                </Button>
+                <Button onClick={onDownload} disabled={selectedFiles.length === 0}>
+                  <Download className="size-4 mr-2" />
+                  Download {selectedFiles.length} image{selectedFiles.length !== 1 ? "s" : ""} + metadata CSV
+                </Button>
+              </div>
+            </>
+          )}
+
+          {/* Phase 2: Preparing */}
+          {phase === "preparing" && (
+            <div className="py-8 flex flex-col items-center justify-center gap-4">
+              <div className="flex size-16 items-center justify-center rounded-full bg-primary/10">
+                <Download className="size-8 text-primary animate-pulse" />
+              </div>
+              <div className="text-center">
+                <h3 className="text-lg font-medium text-foreground">Preparing your download</h3>
+                <p className="text-sm text-muted-foreground mt-1">
+                  Packaging {selectedFiles.length} images with metadata...
+                </p>
+              </div>
+              <div className="w-48 h-1.5 rounded-full bg-muted overflow-hidden">
+                <div className="h-full bg-primary rounded-full animate-[progress_1.5s_ease-in-out_infinite]" style={{ width: "60%" }} />
+              </div>
+            </div>
+          )}
+
+          {/* Phase 3: Complete */}
+          {phase === "complete" && (
+            <div className="text-center py-4">
+              <div className="flex size-16 items-center justify-center rounded-full bg-tg-success/10 mx-auto mb-4">
+                <CheckCircle2 className="size-8 text-tg-success" />
+              </div>
+              <h3 className="text-lg font-medium text-foreground mb-2">Download Complete</h3>
+              <p className="text-sm text-muted-foreground mb-6">
+                Your images and metadata files have been downloaded successfully.
+              </p>
+
+              {/* Downloaded Files Summary */}
+              <div className="rounded border border-border bg-muted/20 p-4 mb-6 text-left">
+                <div className="text-sm font-medium text-foreground mb-3">Downloaded Files:</div>
+                <div className="space-y-2 max-h-32 overflow-y-auto">
+                  {selectedFiles.map((file) => (
+                    <div key={file.id} className="flex items-center gap-2 text-sm text-foreground">
+                      <Check className="size-4 text-tg-success" />
+                      <span>{file.name}</span>
+                    </div>
+                  ))}
+                  <div className="flex items-center gap-2 text-sm text-foreground">
+                    <Check className="size-4 text-tg-success" />
+                    <span>{autoData.productId || "product"}_image_metadata.csv</span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Metadata CSV Preview — first rows of the actually-downloaded file */}
+              <div className="rounded border border-border bg-card p-4 mb-6 text-left">
+                <div className="flex items-center justify-between mb-2">
+                  <span className="text-sm font-medium text-foreground">Metadata Preview</span>
+                  <span className="text-xs text-muted-foreground">
+                    {autoData.productId || "product"}_image_metadata.csv
+                  </span>
+                </div>
+                <pre className="text-xs text-muted-foreground bg-muted/30 p-3 rounded overflow-x-auto max-h-40 overflow-y-auto font-mono">
+{lastCsvPreview || "No metadata available"}
+                </pre>
+              </div>
+
+              <Button onClick={onClose}>
+                Close
+              </Button>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  )
+}
