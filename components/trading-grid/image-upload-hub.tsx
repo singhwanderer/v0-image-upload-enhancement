@@ -31,9 +31,9 @@ interface ImageUploadLandingProps {
 
 // Mock vendor data for retailer portal
 const MOCK_VENDORS = [
-  { id: "1", name: "APEX ATHLETIC FOOTWEAR", accountNumber: "125103335555", selectionCodes: 5, products: 156, gtins: 2858, images: 2340 },
-  { id: "2", name: "TRAILBLAZE FOOTWEAR", accountNumber: "127142417199", selectionCodes: 3, products: 89, gtins: 445, images: 89 },
-  { id: "3", name: "STRIDEWORKS INC", accountNumber: "198765432100", selectionCodes: 8, products: 234, gtins: 1102, images: 908 },
+  { id: "1", name: "APEX ATHLETIC FOOTWEAR", accountNumber: "125103335555", selectionCodes: 5, products: 156, gtins: 2858, images: 156, productsWithImages: 156 },
+  { id: "2", name: "TRAILBLAZE FOOTWEAR", accountNumber: "127142417199", selectionCodes: 3, products: 89, gtins: 445, images: 89, productsWithImages: 89 },
+  { id: "3", name: "STRIDEWORKS INC", accountNumber: "198765432100", selectionCodes: 8, products: 234, gtins: 1102, images: 908, productsWithImages: 221 },
 ]
 
 const MOCK_PRODUCTS = [
@@ -452,7 +452,7 @@ export function RetailerImageBrowser() {
                       </span>
                     </TooltipTrigger>
                     <TooltipContent side="top">
-                      Total product images available · % of products with images
+                      Total images · % = products with images / total products
                     </TooltipContent>
                   </Tooltip>
                 </th>
@@ -460,22 +460,26 @@ export function RetailerImageBrowser() {
             </thead>
             <tbody>
               {MOCK_VENDORS.map((vendor) => {
-                const coveragePct = Math.min(100, Math.round((vendor.images / vendor.gtins) * 100))
+                const coveragePct = Math.round((vendor.productsWithImages / vendor.products) * 100)
                 return (
                   <tr
                     key={vendor.id}
-                    className="border-t border-border hover:bg-muted/50 cursor-pointer"
+                    className="border-t border-border hover:bg-muted/50"
                     onClick={() => handleVendorSelect(vendor)}
                   >
-                    <td className="px-3 py-2 text-tg-link hover:underline">{vendor.name}</td>
+                    <td className="px-3 py-2 text-tg-link hover:underline cursor-pointer">{vendor.name}</td>
                     <td className="px-3 py-2 text-foreground">{vendor.accountNumber}</td>
-                    <td className="px-3 py-2 text-tg-link">{vendor.selectionCodes}</td>
+                    <td className="px-3 py-2 text-tg-link cursor-pointer">{vendor.selectionCodes}</td>
                     <td className="px-3 py-2 text-foreground">{vendor.products}</td>
                     <td className="px-3 py-2 text-tg-link">{vendor.gtins.toLocaleString()}</td>
                     <td className="px-3 py-2">
                       <button
                         className="text-tg-link hover:underline"
-                        onClick={(e) => handleVendorImagesClick(vendor, e)}
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          setSelectedVendor(vendor)
+                          setActiveView("products")
+                        }}
                       >
                         {vendor.images.toLocaleString()}
                       </button>
