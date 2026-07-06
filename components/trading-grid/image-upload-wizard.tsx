@@ -1612,7 +1612,6 @@ export function ImageUploadWizard({
             {/* Auto-populated Info */}
             {selectedSelectionCode && selectedProduct && (
               <div className="rounded border border-border bg-tg-table-header p-3 text-sm">
-                <div className="mb-2 font-medium text-foreground">Auto-populated Information</div>
                 <div className="grid grid-cols-2 gap-x-8 gap-y-2 md:grid-cols-3">
                   <div>
                     <span className="text-muted-foreground">Company:</span>{" "}
@@ -1626,11 +1625,9 @@ export function ImageUploadWizard({
                     <span className="text-muted-foreground">Description:</span>{" "}
                     <span className="text-foreground">{getAutoPopulatedData().productDescription}</span>
                   </div>
-                  <div className="md:col-span-3">
-                    <span className="text-muted-foreground">GTINs ({getAutoPopulatedData().gtins.length}):</span>{" "}
-                    <span className="text-foreground">
-                      {getAutoPopulatedData().gtins.map(g => `${g.gtin} (${g.type})`).join(", ")}
-                    </span>
+                  <div>
+                    <span className="text-muted-foreground">GTINs:</span>{" "}
+                    <span className="text-foreground">{getAutoPopulatedData().gtins.length}</span>
                   </div>
                   {uploadLevel === "gtin" && selectedGtin && (
                     <div className="md:col-span-3">
