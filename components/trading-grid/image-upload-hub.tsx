@@ -12,6 +12,7 @@ import {
 } from "@/components/ui/dialog"
 import { Label } from "@/components/ui/label"
 import { Checkbox } from "@/components/ui/checkbox"
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 import { cn } from "@/lib/utils"
 import { useMediaSelection } from "./use-media-selection"
 import { buildImageMetadataCsv, buildTableCsv, downloadCsv, csvPreview, type ImageMetadataRow } from "./metadata-csv"
@@ -30,9 +31,9 @@ interface ImageUploadLandingProps {
 
 // Mock vendor data for retailer portal
 const MOCK_VENDORS = [
-  { id: "1", name: "APEX ATHLETIC FOOTWEAR", accountNumber: "125103335555", selectionCodes: 5, products: 156 },
-  { id: "2", name: "TRAILBLAZE FOOTWEAR", accountNumber: "127142417199", selectionCodes: 3, products: 89 },
-  { id: "3", name: "STRIDEWORKS INC", accountNumber: "198765432100", selectionCodes: 8, products: 234 },
+  { id: "1", name: "APEX ATHLETIC FOOTWEAR", accountNumber: "125103335555", selectionCodes: 5, products: 156, gtins: 2858, images: 2340 },
+  { id: "2", name: "TRAILBLAZE FOOTWEAR", accountNumber: "127142417199", selectionCodes: 3, products: 89, gtins: 445, images: 89 },
+  { id: "3", name: "STRIDEWORKS INC", accountNumber: "198765432100", selectionCodes: 8, products: 234, gtins: 1102, images: 908 },
 ]
 
 const MOCK_PRODUCTS = [
@@ -416,8 +417,8 @@ export function RetailerImageBrowser() {
               className="p-1.5 hover:bg-muted"
               title="Export vendor list as CSV"
               onClick={() => downloadCsv("vendor_list.csv", buildTableCsv(
-                ["trading_partner_name", "account_number", "selection_codes", "products"],
-                MOCK_VENDORS.map(v => [v.name, v.accountNumber, String(v.selectionCodes), String(v.products)])
+                ["trading_partner_name", "account_number", "selection_codes", "products", "gtins", "images", "image_coverage_pct"],
+                MOCK_VENDORS.map(v => [v.name, v.accountNumber, String(v.selectionCodes), String(v.products), String(v.gtins), String(v.images), `${Math.round((v.images / v.products) * 100)}%`])
               ))}
             >
               <Download className="size-4 text-muted-foreground" />
@@ -434,21 +435,43 @@ export function RetailerImageBrowser() {
                 <th className="px-3 py-2 font-medium text-foreground">Account Number</th>
                 <th className="px-3 py-2 font-medium text-foreground">Selection Codes</th>
                 <th className="px-3 py-2 font-medium text-foreground">Products</th>
+                <th className="px-3 py-2 font-medium text-foreground">GTINs</th>
+                <th className="px-3 py-2 font-medium text-foreground">
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <span className="inline-flex items-center gap-1 cursor-default underline decoration-dotted decoration-muted-foreground underline-offset-2">
+                        Images
+                        <Info className="size-3 text-muted-foreground" />
+                      </span>
+                    </TooltipTrigger>
+                    <TooltipContent side="top">
+                      Total product images available · % of products with images
+                    </TooltipContent>
+                  </Tooltip>
+                </th>
               </tr>
             </thead>
             <tbody>
-              {MOCK_VENDORS.map((vendor) => (
-                <tr 
-                  key={vendor.id} 
-                  className="border-t border-border hover:bg-muted/50 cursor-pointer"
-                  onClick={() => handleVendorSelect(vendor)}
-                >
-                  <td className="px-3 py-2 text-tg-link hover:underline">{vendor.name}</td>
-                  <td className="px-3 py-2 text-foreground">{vendor.accountNumber}</td>
-                  <td className="px-3 py-2 text-tg-link">{vendor.selectionCodes}</td>
-                  <td className="px-3 py-2 text-foreground">{vendor.products}</td>
-                </tr>
-              ))}
+              {MOCK_VENDORS.map((vendor) => {
+                const coveragePct = Math.round((vendor.images / vendor.products) * 100)
+                return (
+                  <tr
+                    key={vendor.id}
+                    className="border-t border-border hover:bg-muted/50 cursor-pointer"
+                    onClick={() => handleVendorSelect(vendor)}
+                  >
+                    <td className="px-3 py-2 text-tg-link hover:underline">{vendor.name}</td>
+                    <td className="px-3 py-2 text-foreground">{vendor.accountNumber}</td>
+                    <td className="px-3 py-2 text-tg-link">{vendor.selectionCodes}</td>
+                    <td className="px-3 py-2 text-foreground">{vendor.products}</td>
+                    <td className="px-3 py-2 text-tg-link">{vendor.gtins.toLocaleString()}</td>
+                    <td className="px-3 py-2">
+                      <span className="text-tg-link hover:underline">{vendor.images.toLocaleString()}</span>
+                      <span className="ml-2 text-xs text-muted-foreground">{coveragePct}%</span>
+                    </td>
+                  </tr>
+                )
+              })}
             </tbody>
           </table>
         </div>
