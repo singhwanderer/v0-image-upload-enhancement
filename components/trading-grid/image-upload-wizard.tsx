@@ -1865,7 +1865,7 @@ export function ImageUploadWizard({
               </p>
             </div>
 
-            {<AiSection ai={ai} uploadedFiles={uploadedFiles} />}
+            {<AiSection ai={ai} uploadedFiles={uploadedFiles} onRequestReupload={handleBack} />}
 
             {/* P0.2a: product-wide fields are entered once; per-shot fields are always per image.
                 With multiple files, the two-column layout with the image selector is the default. */}

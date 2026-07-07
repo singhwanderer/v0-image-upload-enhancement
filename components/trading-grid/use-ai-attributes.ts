@@ -3,14 +3,8 @@
 import { useState } from "react"
 import useSWR from "swr"
 import type { CategoryOptions, AttributeDecision, ExtractedAttribute, UnresolvedAttribute } from "@/lib/gs1/types"
-import { buildMockExtraction } from "@/lib/gs1/mock-scenarios"
 import { getCategoryBricks, getBrick, type Brick } from "@/lib/gs1/generated-bricks"
-import { ORIENTATION_OPTIONS } from "./attribute-options"
 import type { UploadedFile } from "./uploaded-file"
-
-// Extraction mode: "mock" (default, stable demos) or "gemini" (real /api/extract-attributes).
-// Controlled by NEXT_PUBLIC_EXTRACTION_MODE; falls back to mock when unset. No UI toggle.
-export const EXTRACTION_MODE = process.env.NEXT_PUBLIC_EXTRACTION_MODE === "gemini" ? "gemini" : "mock"
 
 // Product categories offered in the AI extraction card. Home is excluded — it has no GPC brick
 // coverage in the brick matrix, so its attributes cannot be scoped to a single brick.
@@ -44,7 +38,6 @@ export type ProductExtractionResult = {
   unresolvedAttributes: UnresolvedAttribute[]
   status: "idle" | "extracting" | "complete" | "error"
   error?: string
-  fallbackUsed?: boolean
 }
 
 // ── Per-shot AI suggestions (P0.2b) ──
@@ -58,42 +51,6 @@ export type ShotSuggestionRow = {
   description: string
   confidence: number
   status: "pending" | "accepted" | "dismissed"
-}
-
-// Mock proposal from filename tokens (deterministic, demo-stable). Mirrors what the
-// Gemini route infers from pixels; falls back to a round-robin viewpoint.
-function mockShotSuggestion(name: string, index: number, productDescription: string) {
-  const n = name.toLowerCase()
-  let orientation = ["PRI", "SDL", "SDR"][index % 3]
-  let facing = ["1", "2", "8"][index % 3]
-  let confidence = 0.6
-  if (/front|hero|main|primary/.test(n)) { orientation = "PRI"; facing = "1"; confidence = 0.92 }
-  else if (/left/.test(n)) { orientation = "SDL"; facing = "2"; confidence = 0.9 }
-  else if (/side/.test(n)) { orientation = "SDL"; facing = "2"; confidence = 0.85 }
-  else if (/right/.test(n)) { orientation = "SDR"; facing = "8"; confidence = 0.9 }
-  else if (/back|rear/.test(n)) { orientation = "VBK"; facing = "7"; confidence = 0.9 }
-  else if (/top/.test(n)) { orientation = "VIT"; facing = "3"; confidence = 0.87 }
-  else if (/bottom|sole/.test(n)) { orientation = "VIB"; facing = "9"; confidence = 0.87 }
-  const label = ORIENTATION_OPTIONS.find(o => o.value === orientation)?.label ?? orientation
-  const view = label.includes("-") ? label.split("-").slice(1).join("-") : label
-  return {
-    orientation,
-    facing,
-    angle: "1",
-    description: productDescription ? `${productDescription} — ${view.toLowerCase()} view` : `${view} view`,
-    confidence,
-  }
-}
-
-// Mock brick classification (P1.1): keyword-matches brick names against the product
-// description/filenames within the given category; falls back to the category's first
-// brick. Deterministic and demo-stable, same style as mockShotSuggestion above.
-function mockClassifyBrick(category: string, productDescription: string, fileNames: string[]): { brick: Brick; confidence: number } | null {
-  const bricks = getCategoryBricks(category)
-  if (bricks.length === 0) return null
-  const hay = `${productDescription} ${fileNames.join(" ")}`.toLowerCase()
-  const matched = bricks.find(b => hay.includes(b.name.toLowerCase()))
-  return matched ? { brick: matched, confidence: 0.88 } : { brick: bricks[0], confidence: 0.62 }
 }
 
 // The product-wide + per-shot attribute record shape (matches StepTwoFormProps["currentAttrs"]
@@ -121,7 +78,7 @@ type UseAiAttributesParams = {
 // level, brick-scoped), and per-shot suggestion (orientation/facing/angle/description, GDSN
 // fields — deliberately independent of classification, see confirmClassification below).
 export function useAiAttributes({ uploadedFiles, attributes, setAttributesByImage, getAutoPopulatedData }: UseAiAttributesParams) {
-  // ── AI Extended-Attribute extraction (Step 2 sub-section, mock-first) ──
+  // ── AI Extended-Attribute extraction (Step 2 sub-section, Gemini-backed) ──
   // Selected product category for extraction
   const [aiCategory, setAiCategory] = useState<string>("")
   // Selected GPC brick (leaf classification) within the category. Extraction is brick-scoped:
@@ -135,17 +92,24 @@ export function useAiAttributes({ uploadedFiles, attributes, setAttributesByImag
   // image. Strictly optional: nothing is applied without an explicit Accept. ──
   const [shotSuggestions, setShotSuggestions] = useState<ShotSuggestionRow[] | null>(null)
   const [shotSuggestLoading, setShotSuggestLoading] = useState(false)
+  const [shotSuggestError, setShotSuggestError] = useState<string | null>(null)
   // ── Brick classification (P1.1) — AI proposes a brick from the images; the human confirms
   // or corrects via the manual pickers. Confirming (either way) auto-runs extraction only —
   // per-shot suggestion is a separate, independent action (see below). ──
-  const [classificationStatus, setClassificationStatus] = useState<"idle" | "loading" | "proposed" | "confirmed">("idle")
+  const [classificationStatus, setClassificationStatus] = useState<"idle" | "loading" | "proposed" | "confirmed" | "error" | "inconsistent">("idle")
   const [classificationConfidence, setClassificationConfidence] = useState<number | null>(null)
+  const [classificationError, setClassificationError] = useState<string | null>(null)
+  // Set when the images look like they show different products (P1.1 follow-up) — the images
+  // Gemini flagged as not matching the majority, and its short explanation. Resolved by picking
+  // one image as the primary reference (see confirmPrimaryImage) or navigating back to re-upload.
+  const [classificationOutliers, setClassificationOutliers] = useState<string[] | null>(null)
+  const [classificationNote, setClassificationNote] = useState<string | null>(null)
   // Manual category/brick correction panel — hidden by default; "Set manually" / "Change" reveal it.
   const [showManualClassify, setShowManualClassify] = useState(false)
 
   // Fetch the FULL CSV-derived allowed options for the selected category from the server.
   // Only one category's options are ever sent to the client (never the whole CSV). SWR caches
-  // per category, so switching back and forth is instant. Used for edit dropdowns + mock grounding.
+  // per category, so switching back and forth is instant. Used for edit dropdowns.
   const { data: optionsData } = useSWR<AttributeOptionsResponse>(
     aiCategory ? `/api/attribute-options?category=${encodeURIComponent(aiCategory)}` : null,
     (url: string) => fetch(url).then(r => r.json()),
@@ -157,91 +121,76 @@ export function useAiAttributes({ uploadedFiles, attributes, setAttributesByImag
   const valuesForCodeList = (codeListName: string) =>
     categoryOptions.find(o => o.codeListName === codeListName)?.values ?? []
 
-  // Direct fetch fallback used by mock mode when SWR hasn't populated yet (e.g. immediate click).
-  const fetchCategoryOptions = async (category: string): Promise<CategoryOptions> => {
-    try {
-      const res = await fetch(`/api/attribute-options?category=${encodeURIComponent(category)}`)
-      if (!res.ok) return []
-      const data = (await res.json()) as AttributeOptionsResponse
-      return Array.isArray(data.options) ? data.options : []
-    } catch {
-      return []
-    }
-  }
-
-  // ── AI extraction handlers (mock-first) ──
-  // Default category heuristic from the current product/selection-code context (item #3).
-  // Not permanent — the user can still change the category manually.
-  const getDefaultCategory = () => {
-    const d = getAutoPopulatedData()
-    const hay = `${d.description} ${d.productDescription}`.toLowerCase()
-    if (/tops|dress|shirt|apparel|clothing/.test(hay)) return "Apparel"
-    return "Shoes"
-  }
-
+  // ── AI extraction handlers (Gemini-backed) ──
   // bricksForCategory derives from aiCategory for the manual-correction Selects. Every path
   // that sets aiCategory (classification, the category Select, product change) already
   // resolves aiBrick explicitly itself — no reactive effect here, since one previously stomped
   // on a just-set classification brick by resetting it back to null on the same category change.
   const bricksForCategory = aiCategory ? getCategoryBricks(aiCategory) : []
 
-  // Dispatcher: routes to Gemini or mock based on EXTRACTION_MODE. Wired to all extract triggers.
-  // Accepts optional overrides so a just-confirmed classification can be passed directly,
-  // rather than read back from aiCategory/aiBrick state in the same synchronous tick they
-  // were set in (a stale-closure trap — React doesn't re-render mid-handler).
+  // Wired to all extract triggers. Accepts optional overrides so a just-confirmed
+  // classification can be passed directly, rather than read back from aiCategory/aiBrick
+  // state in the same synchronous tick they were set in (a stale-closure trap — React
+  // doesn't re-render mid-handler).
   const runExtraction = (overrideCategory?: string, overrideBrick?: Brick | null) => {
-    if (EXTRACTION_MODE === "gemini") {
-      void runGeminiExtraction(overrideCategory, overrideBrick)
-    } else {
-      void runMockExtraction(overrideCategory, overrideBrick)
+    void runGeminiExtraction(overrideCategory, overrideBrick)
+  }
+
+  // Runs brick classification (P1.1): proposes a category+brick from the images (via
+  // /api/suggest-brick) so the human confirms/corrects instead of picking blind from
+  // dropdowns first. Only ever reaches "proposed" on success — nothing is applied until
+  // confirmClassification runs.
+  const runClassification = async (filesOverride?: UploadedFile[]) => {
+    const files = filesOverride ?? uploadedFiles
+    if (files.length === 0) return
+    setClassificationStatus("loading")
+    setClassificationError(null)
+    setClassificationOutliers(null)
+    setClassificationNote(null)
+    const productDescription = getAutoPopulatedData().productDescription
+
+    try {
+      const images = await Promise.all(
+        files.map(async (f) => ({ fileName: f.name, imageBase64: await fileToBase64(f.file), mimeType: f.type }))
+      )
+      const res = await fetch("/api/suggest-brick", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ images, productDescription }),
+      })
+      if (!res.ok) {
+        const errBody = await res.json().catch(() => null)
+        throw new Error(errBody?.error || `Classification failed (${res.status}).`)
+      }
+      const data = await res.json() as {
+        category: string; brickCode: string; brickName: string; confidence: number
+        consistent?: boolean; outlierImages?: string[]; note?: string
+      }
+      if (data.consistent === false) {
+        setClassificationOutliers(Array.isArray(data.outlierImages) ? data.outlierImages : [])
+        setClassificationNote(typeof data.note === "string" ? data.note : null)
+        setClassificationStatus("inconsistent")
+        return
+      }
+      const brick = getBrick(data.category, data.brickCode)
+      if (!brick) throw new Error("Unknown brick returned.")
+      setAiCategory(data.category)
+      setAiBrick(brick)
+      setClassificationConfidence(data.confidence)
+      setClassificationStatus("proposed")
+    } catch (err) {
+      setClassificationStatus("error")
+      setClassificationError(err instanceof Error ? err.message : "Classification failed. You can continue setting attributes manually.")
     }
   }
 
-  // Runs brick classification (P1.1): proposes a category+brick from the images so the
-  // human confirms/corrects instead of picking blind from dropdowns first. Gemini mode calls
-  // /api/suggest-brick; mock mode uses the deterministic keyword heuristic. Either way this
-  // only ever reaches "proposed" — nothing is applied until confirmClassification runs.
-  const runClassification = async () => {
-    if (uploadedFiles.length === 0) return
-    setClassificationStatus("loading")
-    const productDescription = getAutoPopulatedData().productDescription
-    const guessCategory = getDefaultCategory()
-
-    if (EXTRACTION_MODE === "gemini") {
-      try {
-        const images = await Promise.all(
-          uploadedFiles.map(async (f) => ({ fileName: f.name, imageBase64: await fileToBase64(f.file), mimeType: f.type }))
-        )
-        const res = await fetch("/api/suggest-brick", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ images, productDescription }),
-        })
-        if (!res.ok) throw new Error(`Classification failed (${res.status}).`)
-        const data = await res.json() as { category: string; brickCode: string; brickName: string; confidence: number }
-        const brick = getBrick(data.category, data.brickCode)
-        if (!brick) throw new Error("Unknown brick returned.")
-        setAiCategory(data.category)
-        setAiBrick(brick)
-        setClassificationConfidence(data.confidence)
-        setClassificationStatus("proposed")
-        return
-      } catch {
-        // Fall through to the mock heuristic so the demo never dead-ends.
-      }
-    }
-
-    await new Promise(resolve => setTimeout(resolve, 600))
-    const mock = mockClassifyBrick(guessCategory, productDescription, uploadedFiles.map(f => f.name))
-    if (!mock) {
-      // No brick coverage for this category (e.g. Home) — nothing to propose; manual path only.
-      setClassificationStatus("idle")
-      return
-    }
-    setAiCategory(guessCategory)
-    setAiBrick(mock.brick)
-    setClassificationConfidence(mock.confidence)
-    setClassificationStatus("proposed")
+  // Resolves an "inconsistent images" warning by re-running classification scoped to just the
+  // one image the user confirms as the primary product reference. Reuses the same route/prompt
+  // unchanged — a single-image request is already a normal case for it.
+  const confirmPrimaryImage = (fileIndex: number) => {
+    const file = uploadedFiles[fileIndex]
+    if (!file) return
+    void runClassification([file])
   }
 
   // Confirms a category+brick (from the proposal chip, or a manual pick) and auto-runs
@@ -250,6 +199,9 @@ export function useAiAttributes({ uploadedFiles, attributes, setAttributesByImag
   const confirmClassification = (category: string, brick: Brick, confidence: number | null = null) => {
     setClassificationConfidence(confidence)
     setClassificationStatus("confirmed")
+    setClassificationError(null)
+    setClassificationOutliers(null)
+    setClassificationNote(null)
     setShowManualClassify(false)
     runExtraction(category, brick)
     // Per-shot suggestion (orientation/facing/angle/description) is a GDSN-field accelerator
@@ -321,57 +273,19 @@ export function useAiAttributes({ uploadedFiles, attributes, setAttributesByImag
         unresolvedAttributes: Array.isArray(data.unresolvedAttributes) ? data.unresolvedAttributes : [],
         status: "complete",
       })
-    } catch {
-      // Auto-fallback to mock/demo results when Gemini is unavailable
-      const options = categoryOptions.length > 0 ? categoryOptions : await fetchCategoryOptions(category)
-      const mock = buildMockExtraction(category, brick, options)
+    } catch (err) {
       setAiExtraction({
         category,
         brickCode: brick.code,
         brickName: brick.name,
         imageCount: targets.length,
         imageNames: targets.map(f => f.name),
-        attributes: mock.attributes.map(a => ({ ...a, decision: "pending" as const })),
-        unresolvedAttributes: mock.unresolvedAttributes,
-        status: "complete",
-        fallbackUsed: true,
+        attributes: [],
+        unresolvedAttributes: [],
+        status: "error",
+        error: err instanceof Error ? err.message : "Extraction failed. You can continue setting attributes manually.",
       })
     }
-  }
-
-  // Mock extraction: returns one consolidated product-level result (same shape as Gemini mode).
-  // Grounds GS1 codes in the same CSV-derived options used by Gemini + dropdowns.
-  const runMockExtraction = async (overrideCategory?: string, overrideBrick?: Brick | null) => {
-    const category = overrideCategory ?? aiCategory
-    const brick = overrideBrick ?? aiBrick
-    if (!category || !brick || uploadedFiles.length === 0) return
-    const imageNames = uploadedFiles.map(f => f.name)
-    setAiEditing(null)
-    setAiExtraction({
-      category,
-      brickCode: brick.code,
-      brickName: brick.name,
-      imageCount: uploadedFiles.length,
-      imageNames,
-      attributes: [],
-      unresolvedAttributes: [],
-      status: "extracting",
-    })
-    // Ensure options are available (SWR cache, else direct fetch) so mock codes stay grounded.
-    const options = categoryOptions.length > 0 ? categoryOptions : await fetchCategoryOptions(category)
-    // Brief delay to simulate processing latency for a realistic demo feel.
-    await new Promise(resolve => setTimeout(resolve, 900))
-    const mock = buildMockExtraction(category, brick, options)
-    setAiExtraction({
-      category,
-      brickCode: brick.code,
-      brickName: brick.name,
-      imageCount: uploadedFiles.length,
-      imageNames,
-      attributes: mock.attributes.map(a => ({ ...a, decision: "pending" as const })),
-      unresolvedAttributes: mock.unresolvedAttributes,
-      status: "complete",
-    })
   }
 
   // Set the review decision on a single suggested attribute (explicit Accept / Reject).
@@ -433,46 +347,40 @@ export function useAiAttributes({ uploadedFiles, attributes, setAttributesByImag
   }
 
   // Per-shot suggestions are keyed by file index — any deletion/replacement invalidates them.
-  const clearShotSuggestions = () => setShotSuggestions(null)
+  const clearShotSuggestions = () => { setShotSuggestions(null); setShotSuggestError(null) }
 
-  // Runs the per-shot suggestion pass: Gemini route when configured, else the mock
-  // filename heuristic. Optional accelerator only — nothing applies without Accept.
+  // Runs the per-shot suggestion pass via /api/suggest-shot-attributes. Optional
+  // accelerator only — nothing applies without Accept.
   const runShotSuggestions = async () => {
     if (uploadedFiles.length === 0) return
     setShotSuggestLoading(true)
+    setShotSuggestError(null)
     const productDescription = getAutoPopulatedData().productDescription
-    if (EXTRACTION_MODE === "gemini") {
-      try {
-        const images = await Promise.all(
-          uploadedFiles.map(async (f) => ({ fileName: f.name, imageBase64: await fileToBase64(f.file), mimeType: f.type }))
-        )
-        const res = await fetch("/api/suggest-shot-attributes", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ images, productDescription }),
-        })
-        if (!res.ok) throw new Error(`Suggestion failed (${res.status}).`)
-        const data = await res.json() as { suggestions: { fileName: string; orientation: string; facing: string; angle: string; description: string; confidence: number }[] }
-        const rows: ShotSuggestionRow[] = []
-        uploadedFiles.forEach((f, i) => {
-          const s = Array.isArray(data.suggestions) ? data.suggestions.find(x => x.fileName === f.name) : undefined
-          if (s) rows.push({ fileIndex: i, fileName: f.name, orientation: s.orientation, facing: s.facing, angle: s.angle, description: s.description, confidence: s.confidence, status: "pending" })
-        })
-        setShotSuggestions(rows)
-        setShotSuggestLoading(false)
-        return
-      } catch {
-        // Fall through to the mock heuristic so the demo never dead-ends.
+    try {
+      const images = await Promise.all(
+        uploadedFiles.map(async (f) => ({ fileName: f.name, imageBase64: await fileToBase64(f.file), mimeType: f.type }))
+      )
+      const res = await fetch("/api/suggest-shot-attributes", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ images, productDescription }),
+      })
+      if (!res.ok) {
+        const errBody = await res.json().catch(() => null)
+        throw new Error(errBody?.error || `Suggestion failed (${res.status}).`)
       }
+      const data = await res.json() as { suggestions: { fileName: string; orientation: string; facing: string; angle: string; description: string; confidence: number }[] }
+      const rows: ShotSuggestionRow[] = []
+      uploadedFiles.forEach((f, i) => {
+        const s = Array.isArray(data.suggestions) ? data.suggestions.find(x => x.fileName === f.name) : undefined
+        if (s) rows.push({ fileIndex: i, fileName: f.name, orientation: s.orientation, facing: s.facing, angle: s.angle, description: s.description, confidence: s.confidence, status: "pending" })
+      })
+      setShotSuggestions(rows)
+    } catch (err) {
+      setShotSuggestError(err instanceof Error ? err.message : "Suggestion failed. You can enter per-shot details manually.")
+    } finally {
+      setShotSuggestLoading(false)
     }
-    await new Promise(resolve => setTimeout(resolve, 600))
-    setShotSuggestions(uploadedFiles.map((f, i) => ({
-      fileIndex: i,
-      fileName: f.name,
-      ...mockShotSuggestion(f.name, i, productDescription),
-      status: "pending" as const,
-    })))
-    setShotSuggestLoading(false)
   }
 
   // Accept one or many per-shot suggestions: writes into the per-image records.
@@ -518,11 +426,12 @@ export function useAiAttributes({ uploadedFiles, attributes, setAttributesByImag
 
   return {
     aiCategory, setAiCategory, aiBrick, setAiBrick,
-    aiExtraction, aiEditing, setAiEditing, shotSuggestions, shotSuggestLoading,
-    classificationStatus, setClassificationStatus, classificationConfidence, setClassificationConfidence,
+    aiExtraction, aiEditing, setAiEditing, shotSuggestions, shotSuggestLoading, shotSuggestError,
+    classificationStatus, setClassificationStatus, classificationConfidence, setClassificationConfidence, classificationError,
+    classificationOutliers, classificationNote,
     showManualClassify, setShowManualClassify,
     categoryOptions, valuesForCodeList, bricksForCategory,
-    runExtraction, runClassification, confirmClassification,
+    runExtraction, runClassification, confirmClassification, confirmPrimaryImage,
     setAttributeDecision, updateAttributeField, selectAttributeValue, resolveUnresolvedAttribute,
     clearExtraction, clearShotSuggestions, runShotSuggestions, acceptShotSuggestions, dismissShotSuggestion,
     isExtracting, isComplete, isError, hasExtraction, acceptedExtractedAttributes, pendingExtractedCount, acceptAllPending,

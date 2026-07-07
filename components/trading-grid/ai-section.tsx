@@ -22,7 +22,7 @@ import {
 import { cn } from "@/lib/utils"
 import { getCategoryBricks } from "@/lib/gs1/generated-bricks"
 import type { UploadedFile } from "./uploaded-file"
-import { useAiAttributes, EXTRACTION_MODE, PRODUCT_CATEGORIES } from "./use-ai-attributes"
+import { useAiAttributes, PRODUCT_CATEGORIES } from "./use-ai-attributes"
 import { ORIENTATION_OPTIONS, FACING_OPTIONS } from "./attribute-options"
 
 // Consolidated AI section (P1.1): one card, one entry point. Classification proposes a
@@ -34,16 +34,20 @@ import { ORIENTATION_OPTIONS, FACING_OPTIONS } from "./attribute-options"
 type AiSectionProps = {
   ai: ReturnType<typeof useAiAttributes>
   uploadedFiles: UploadedFile[]
+  // Lets the "inconsistent images" warning send the user back to re-upload. Omitted at render
+  // sites with no upload step to return to (e.g. the post-submit view).
+  onRequestReupload?: () => void
 }
 
-export function AiSection({ ai, uploadedFiles }: AiSectionProps) {
+export function AiSection({ ai, uploadedFiles, onRequestReupload }: AiSectionProps) {
   const {
     aiCategory, setAiCategory, aiBrick, setAiBrick,
-    aiExtraction, aiEditing, setAiEditing, shotSuggestions, shotSuggestLoading,
-    classificationStatus, setClassificationStatus, classificationConfidence, setClassificationConfidence,
+    aiExtraction, aiEditing, setAiEditing, shotSuggestions, shotSuggestLoading, shotSuggestError,
+    classificationStatus, setClassificationStatus, classificationConfidence, setClassificationConfidence, classificationError,
+    classificationOutliers, classificationNote,
     showManualClassify, setShowManualClassify,
     valuesForCodeList, bricksForCategory,
-    runExtraction, runClassification, confirmClassification,
+    runExtraction, runClassification, confirmClassification, confirmPrimaryImage,
     setAttributeDecision, updateAttributeField, selectAttributeValue, resolveUnresolvedAttribute,
     clearExtraction, clearShotSuggestions, runShotSuggestions, acceptShotSuggestions, dismissShotSuggestion,
     isExtracting, isComplete, isError, acceptedExtractedAttributes, pendingExtractedCount, acceptAllPending,
@@ -168,16 +172,6 @@ export function AiSection({ ai, uploadedFiles }: AiSectionProps) {
             </Button>
           </div>
         </div>
-        {/* Fallback banner when Gemini was unavailable */}
-        {aiExtraction.fallbackUsed && (
-          <div className="flex items-center justify-between rounded border border-primary/30 bg-primary/5 px-3 py-2">
-            <div className="flex items-center gap-2">
-              <Info className="size-4 text-primary shrink-0" />
-              <p className="text-sm text-foreground">AI service unavailable — showing demo results.</p>
-            </div>
-            <Button variant="outline" size="sm" onClick={() => runExtraction()}>Try again with AI</Button>
-          </div>
-        )}
         <div className="flex items-start gap-2 rounded bg-muted/30 p-2">
           <Info className="size-3.5 text-muted-foreground mt-0.5 shrink-0" />
           <p className="text-xs text-muted-foreground">AI-generated attributes should be reviewed before saving. All images were analyzed together to produce this single product-level attribute set. AI attributes apply to all images of this product.</p>
@@ -372,11 +366,6 @@ export function AiSection({ ai, uploadedFiles }: AiSectionProps) {
           <h3 className="text-sm font-semibold text-foreground">Analyze this product&apos;s images with AI</h3>
           <p className="mt-0.5 text-sm text-muted-foreground">Optional — AI proposes, you confirm.</p>
         </div>
-        {EXTRACTION_MODE === "mock" && (
-          <span className="shrink-0 rounded-full bg-muted px-2 py-0.5 text-xs font-medium text-muted-foreground">
-            Demo mode — simulated results
-          </span>
-        )}
       </div>
 
       <div className="flex flex-col gap-5 p-4">
@@ -420,6 +409,62 @@ export function AiSection({ ai, uploadedFiles }: AiSectionProps) {
                       <Check className="size-3.5" /> Confirm
                     </Button>
                     <Button variant="outline" size="sm" onClick={() => setShowManualClassify(true)}>Change</Button>
+                  </div>
+                </div>
+                {showManualClassify && renderAiIdleControls()}
+              </div>
+            )}
+
+            {classificationStatus === "inconsistent" && (
+              <div className="rounded border border-tg-warning/40 bg-tg-warning/5 p-4 flex flex-col gap-3">
+                <div className="flex items-start gap-3">
+                  <AlertCircle className="size-4 text-tg-warning mt-0.5 shrink-0" />
+                  <div className="flex flex-col gap-1">
+                    <p className="text-sm font-medium text-foreground">
+                      We noticed these images seem to show different products.
+                    </p>
+                    <p className="text-sm text-muted-foreground">
+                      To ensure accurate product classification, please confirm which image represents the primary product you want to catalog, or upload a new set.
+                    </p>
+                    {classificationNote && (
+                      <p className="text-xs text-muted-foreground">{classificationNote}</p>
+                    )}
+                  </div>
+                </div>
+                <div className="flex flex-wrap items-center gap-2 pl-7">
+                  {uploadedFiles.map((f, i) => (
+                    <button
+                      key={f.id}
+                      type="button"
+                      onClick={() => confirmPrimaryImage(i)}
+                      title={f.name}
+                      className={cn(
+                        "size-9 shrink-0 rounded border overflow-hidden bg-muted transition-colors",
+                        classificationOutliers?.includes(f.name) ? "border-tg-warning" : "border-border hover:border-primary"
+                      )}
+                    >
+                      {f.preview && <img src={f.preview} alt="" className="size-full object-cover" />}
+                    </button>
+                  ))}
+                  {onRequestReupload && (
+                    <Button variant="outline" size="sm" onClick={onRequestReupload}>Upload a new set</Button>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {classificationStatus === "error" && (
+              <div className="flex flex-col gap-3">
+                <div className="flex flex-col gap-3 rounded border border-destructive/30 bg-destructive/5 p-4">
+                  <div className="flex items-start gap-2">
+                    <AlertCircle className="size-4 text-destructive mt-0.5 shrink-0" />
+                    <p className="text-sm text-foreground">
+                      {classificationError ?? "Classification failed. You can continue setting attributes manually."}
+                    </p>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <Button variant="outline" size="sm" onClick={() => void runClassification()}>Try again</Button>
+                    <Button variant="ghost" size="sm" onClick={() => setShowManualClassify(true)}>Continue manually</Button>
                   </div>
                 </div>
                 {showManualClassify && renderAiIdleControls()}
@@ -480,7 +525,7 @@ export function AiSection({ ai, uploadedFiles }: AiSectionProps) {
           <div className="flex flex-col gap-3">
             <div className="flex items-center justify-between gap-2">
               <h4 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Per-shot attributes</h4>
-              {shotSuggestions === null && !shotSuggestLoading && (
+              {shotSuggestions === null && !shotSuggestLoading && !shotSuggestError && (
                 <Button variant="outline" size="sm" className="gap-1" onClick={() => void runShotSuggestions()} disabled={uploadedFiles.length === 0}>
                   <Sparkles className="size-3.5" />
                   Suggest per-shot details with AI
@@ -493,7 +538,7 @@ export function AiSection({ ai, uploadedFiles }: AiSectionProps) {
                 </Button>
               )}
             </div>
-            {shotSuggestions === null && !shotSuggestLoading && (
+            {shotSuggestions === null && !shotSuggestLoading && !shotSuggestError && (
               <p className="text-xs text-muted-foreground">
                 Optional — proposes orientation, facing, angle, and a draft description per image. No classification needed.
               </p>
@@ -502,6 +547,15 @@ export function AiSection({ ai, uploadedFiles }: AiSectionProps) {
               <div className="flex items-center gap-3 rounded border border-border bg-muted/20 p-4">
                 <Loader2 className="size-5 animate-spin text-primary" />
                 <p className="text-sm text-foreground">Analyzing {uploadedFiles.length} image{uploadedFiles.length !== 1 ? "s" : ""} for per-shot attributes…</p>
+              </div>
+            )}
+            {shotSuggestError && !shotSuggestLoading && (
+              <div className="flex flex-col gap-3 rounded border border-destructive/30 bg-destructive/5 p-4">
+                <div className="flex items-start gap-2">
+                  <AlertCircle className="size-4 text-destructive mt-0.5 shrink-0" />
+                  <p className="text-sm text-foreground">{shotSuggestError}</p>
+                </div>
+                <Button variant="outline" size="sm" className="w-fit" onClick={() => void runShotSuggestions()}>Try again</Button>
               </div>
             )}
             {shotSuggestions !== null && !shotSuggestLoading && (

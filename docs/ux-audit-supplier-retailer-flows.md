@@ -43,7 +43,7 @@ There is no other path to any image: every sidebar link is `href="#"` (`layout.t
 - Clear step gating with per-step validation; users cannot submit incomplete metadata (`image-upload-wizard.tsx:1408-1417`).
 - Multi-file drag-and-drop with per-file rejection reasons shown inline — observed value plus the rule that failed (`image-upload-wizard.tsx:2640-2658`).
 - Good batch-entry primitives: "Apply same attributes to all N images" toggle, per-image mode with completion checks, and "Copy attributes from image" (`image-upload-wizard.tsx:2903-2920`, `2982-3003`).
-- AI suggestions are individually accept/reject with inline editing against curated GS1 code lists, server-side re-validation of model output, and graceful mock fallback (`app/api/extract-attributes/route.ts:337`).
+- AI suggestions are individually accept/reject with inline editing against curated GS1 code lists, server-side re-validation of model output, and a visible error state with retry if extraction fails (`components/trading-grid/use-ai-attributes.ts`).
 - Post-submit media view has real bulk operations (select-all, bulk edit, bulk delete).
 
 ---

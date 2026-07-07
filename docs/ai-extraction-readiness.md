@@ -117,33 +117,23 @@ forced to pick from an artificially small subset and falling to unresolved.
 
 ---
 
-## 5. Demo modes
+## 5. AI mode
 
-### Mock mode — stable stakeholder demo
+There is a single mode: real Gemini analysis. There is no mock/demo mode — the app always calls
+Gemini, and any failure (network error, bad response, missing `GEMINI_API_KEY`) is surfaced as a
+visible, retryable error rather than a fabricated result.
 
-No API key required. Mock mode is the default.
+Requires `GEMINI_API_KEY` in every environment, including local development. Uses `gemini-2.5-flash`
+with real image analysis.
 
-- Returns pre-seeded, realistic suggestions for all six categories.
-- GS1 codes are resolved at runtime against the same category options the client fetches, so they
-  are always valid and grounded.
-- ~0.9 s simulated delay for a realistic feel.
-- Exercises the full UX: per-image results, Accept / Edit / Reject, unresolved attributes, Review
-  summary.
-- Every image in a batch receives the same suggestions (mock is category-keyed, not image-keyed).
-
-**Recommended for all product and stakeholder demos.**
-
-### Gemini mode — technical feasibility demo
-
-Requires `GEMINI_API_KEY`. Uses `gemini-2.5-flash` with real image analysis.
-
-- Sends one independent request per image.
-- Returns per-image results grounded in the full CSV-derived option set.
-- A single slow or failed image does not block the others.
+- Sends one independent request per image (extraction sends all images together in one request;
+  classification and per-shot suggestion are one request per action).
+- Returns results grounded in the full CSV-derived option set.
+- A single slow or failed image does not block the others in per-image flows.
 - Unresolved attributes reflect genuine model uncertainty (e.g. Material Composition is correctly
   flagged as unresolvable from visual inspection alone).
-
-**Recommended for engineering and technical feasibility reviews.**
+- Missing or invalid `GEMINI_API_KEY`, or any other failure, shows an error card with "Try again" /
+  "Continue manually" — the rest of the wizard stays usable without AI.
 
 ---
 
@@ -158,24 +148,15 @@ generator script changes. The output is committed to the repo.
 pnpm generate:gs1
 ```
 
-### Mock mode (default)
-
-No environment variables needed. Leave `NEXT_PUBLIC_EXTRACTION_MODE` unset, or set it explicitly:
+### Running the AI section
 
 ```env
 # .env.development.local
-NEXT_PUBLIC_EXTRACTION_MODE=mock
-```
-
-### Gemini mode
-
-```env
-# .env.development.local
-NEXT_PUBLIC_EXTRACTION_MODE=gemini
 GEMINI_API_KEY=<your Gemini API key>
 ```
 
-`GEMINI_API_KEY` is a server-side variable only. Do not prefix it with `NEXT_PUBLIC_`.
+`GEMINI_API_KEY` is a server-side variable only. Do not prefix it with `NEXT_PUBLIC_`. It is
+required in every environment — there is no mock fallback.
 
 ---
 
@@ -189,9 +170,6 @@ records with missing fields, zero duplicates within any code list.
 **Category filtering:** verified that Shoes contains no Bedding Size, SPF Rating, Jewelry Type,
 Beauty Treatment Specialty, Rug Type, or Watch Case Shape entries, and that Apparel contains no Shoe
 Type, Heel Type, Bag Type, or Jewelry Type entries.
-
-**Mock — all six categories:** all mock suggestions grounded against the full generated map
-(`allGrounded=true`), no code mismatches.
 
 **Server-side validation — 400 paths:** malformed JSON, empty `imageBase64`, unsupported MIME
 (`image/bmp`), and invalid category (`Furniture`) all return 400 with specific error messages.
@@ -216,15 +194,20 @@ Application). All 7 codes validated — no mismatches.
 1. **Category routing is manual.** Adding a new Code List Name to a category requires editing
    `CATEGORY_ROUTING` in `scripts/generate-gs1-options.mjs` and re-running `pnpm generate:gs1`.
 
-2. **Default category heuristic only covers Apparel and Shoes.** The wizard auto-selects Apparel
-   for keywords like `dress`, `shirt`, `tops`, or `clothing` in the product description, and
-   defaults to Shoes otherwise. Bags, Jewelry, Beauty, and Home are not auto-detected.
-
-3. **No streaming UI.** Results appear per image when that image's request completes. There is no
+2. **No streaming UI.** Results appear per image when that image's request completes. There is no
    token-by-token or partial display.
 
-4. **Mock returns the same suggestions for every image in a batch.** The mock scenario is
-   category-keyed, not image-keyed. In Gemini mode, each image gets its own independent result.
-
-5. **Generated map must be regenerated when the CSV or routing changes.** The output file
+3. **Generated map must be regenerated when the CSV or routing changes.** The output file
    `lib/gs1/generated-options.ts` is committed to the repo. It does not self-update.
+
+---
+
+## 9. Demo mode removal
+
+Mock/demo mode has been removed. Previously the app defaulted to a client-side mock (gated behind
+`NEXT_PUBLIC_EXTRACTION_MODE=gemini`, unset by default) that returned hardcoded, keyword-matched
+suggestions instead of calling Gemini — and even in Gemini mode, any failure silently fell back to
+that same mock data. Both behaviors are gone: the app now always calls Gemini, and a failure (bad
+response, network error, or missing `GEMINI_API_KEY`) surfaces as a visible error card with "Try
+again" / "Continue manually", in every environment including local dev. References above to "mock
+mode" describe removed, historical behavior.
