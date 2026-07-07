@@ -415,7 +415,7 @@ export function AiSection({ ai, uploadedFiles, onRequestReupload }: AiSectionPro
               </div>
             )}
 
-            {classificationStatus === "inconsistent" && (
+            {classificationStatus === "inconsistent" && uploadedFiles.length > 1 && (
               <div className="rounded border border-tg-warning/40 bg-tg-warning/5 p-4 flex flex-col gap-3">
                 <div className="flex items-start gap-3">
                   <AlertCircle className="size-4 text-tg-warning mt-0.5 shrink-0" />
@@ -450,6 +450,35 @@ export function AiSection({ ai, uploadedFiles, onRequestReupload }: AiSectionPro
                     <Button variant="outline" size="sm" onClick={onRequestReupload}>Upload a new set</Button>
                   )}
                 </div>
+              </div>
+            )}
+
+            {/* Single-image case: the mismatch is against the selected Product's description,
+                not against other images — "these images"/"primary image"/"a new set" copy above
+                doesn't apply when there's only one file. */}
+            {classificationStatus === "inconsistent" && uploadedFiles.length <= 1 && (
+              <div className="flex flex-col gap-3">
+                <div className="rounded border border-tg-warning/40 bg-tg-warning/5 p-4 flex flex-col gap-3">
+                  <div className="flex items-start gap-3">
+                    <AlertCircle className="size-4 text-tg-warning mt-0.5 shrink-0" />
+                    <div className="flex flex-col gap-1">
+                      <p className="text-sm font-medium text-foreground">
+                        This image doesn't seem to match the selected product.
+                      </p>
+                      <p className="text-sm text-muted-foreground">
+                        {classificationNote ?? "AI flagged a mismatch between the image and the product description."} Double-check the Product selected in Step 1, or continue with AI's best guess below.
+                      </p>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2 pl-7">
+                    <Button variant="outline" size="sm" onClick={() => void runClassification()}>Try again</Button>
+                    <Button variant="ghost" size="sm" onClick={() => setShowManualClassify(true)}>Continue manually</Button>
+                    {onRequestReupload && (
+                      <Button variant="ghost" size="sm" onClick={onRequestReupload}>Go back to Target &amp; Files</Button>
+                    )}
+                  </div>
+                </div>
+                {showManualClassify && renderAiIdleControls()}
               </div>
             )}
 
