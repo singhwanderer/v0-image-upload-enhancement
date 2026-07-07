@@ -182,8 +182,8 @@ export function ImageUploadWizard({
   portalType = "supplier",
 }: ImageUploadWizardProps) {
   const [currentStep, setCurrentStep] = useState(1)
-  const [selectedSelectionCode, setSelectedSelectionCode] = useState("001")
-  const [selectedProduct, setSelectedProduct] = useState("DRESS001")
+  const [selectedSelectionCode, setSelectedSelectionCode] = useState("")
+  const [selectedProduct, setSelectedProduct] = useState("")
   const [selectedColorCode, setSelectedColorCode] = useState("")
   const [selectedGtin, setSelectedGtin] = useState("")
 
