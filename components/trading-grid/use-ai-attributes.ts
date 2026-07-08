@@ -3,12 +3,11 @@
 import { useState } from "react"
 import useSWR from "swr"
 import type { CategoryOptions, AttributeDecision, ExtractedAttribute, UnresolvedAttribute } from "@/lib/gs1/types"
+import { PRODUCT_CATEGORIES } from "@/lib/gs1/types"
 import { getCategoryBricks, getBrick, type Brick } from "@/lib/gs1/generated-bricks"
 import type { UploadedFile } from "./uploaded-file"
 
-// Product categories offered in the AI extraction card. Mirrors PRODUCT_CATEGORIES in
-// lib/gs1/types.ts — one entry per GPC matrix sheet family (Clothing.csv, Footwear.csv, …).
-export const PRODUCT_CATEGORIES = ["Clothing", "Shoes", "Bags", "Jewelry", "Beauty", "Accessories"] as const
+export { PRODUCT_CATEGORIES }
 
 // Response shape from GET /api/attribute-options (declared locally so this client component
 // never imports server route code). Mirrors AttributeOptionsResponse in that route.
