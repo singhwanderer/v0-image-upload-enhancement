@@ -44,7 +44,6 @@ export function AiAttributesTable({ attributes, category, brickName, brickCode, 
               <th className="px-3 py-2 text-left font-medium text-foreground">Code List Name</th>
               <th className="px-3 py-2 text-left font-medium text-foreground">Attribute Value</th>
               <th className="px-3 py-2 text-left font-medium text-foreground">GS1 Code</th>
-              <th className="px-3 py-2 text-left font-medium text-foreground">Confidence</th>
             </tr>
           </thead>
           <tbody>
@@ -53,7 +52,6 @@ export function AiAttributesTable({ attributes, category, brickName, brickCode, 
                 <td className="px-3 py-2 text-foreground">{attr.codeListName}</td>
                 <td className="px-3 py-2 text-foreground">{attr.attributeValue}</td>
                 <td className="px-3 py-2 font-mono text-foreground">{attr.code}</td>
-                <td className="px-3 py-2 text-muted-foreground">{Math.round(attr.confidence * 100)}%</td>
               </tr>
             ))}
           </tbody>
