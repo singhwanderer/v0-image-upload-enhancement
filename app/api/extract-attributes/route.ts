@@ -7,8 +7,8 @@ import { getBrick } from "@/lib/gs1/generated-bricks"
 export const runtime = "nodejs"
 export const maxDuration = 60
 
-// Home is excluded — it has no GPC brick coverage, so its attributes can't be brick-scoped.
-const ALLOWED_CATEGORIES = ["Shoes", "Apparel", "Bags", "Jewelry", "Beauty"] as const
+// Categories mirror the GPC matrix sheets (see lib/gs1/types.ts + scripts/generate-gs1-data.mjs).
+const ALLOWED_CATEGORIES = ["Clothing", "Shoes", "Bags", "Jewelry", "Beauty", "Accessories"] as const
 const ALLOWED_MIME_TYPES = ["image/jpeg", "image/jpg", "image/png", "image/webp"]
 const GEMINI_MODEL = "gemini-2.5-flash"
 

@@ -2,11 +2,12 @@
 // category list — so it can be imported by both client components and server routes without
 // pulling the full (large) generated option map into the browser bundle.
 
-// Home is intentionally excluded: it has no GPC brick coverage in
-// "Brick to extended attributes.xlsx", so AI extraction cannot scope its attributes to a brick.
-export type ProductCategory = "Shoes" | "Apparel" | "Bags" | "Jewelry" | "Beauty"
+// Categories mirror the GPC matrix sheets in the repo root (Clothing.csv, Footwear.csv, …);
+// sleepwear/swimwear/underwear fold into Clothing per the GPC Clothing family. Only categories
+// with brick coverage in those sheets are listed — AI extraction is scoped to their code lists.
+export type ProductCategory = "Clothing" | "Shoes" | "Bags" | "Jewelry" | "Beauty" | "Accessories"
 
-export const PRODUCT_CATEGORIES: ProductCategory[] = ["Shoes", "Apparel", "Bags", "Jewelry", "Beauty"]
+export const PRODUCT_CATEGORIES: ProductCategory[] = ["Clothing", "Shoes", "Bags", "Jewelry", "Beauty", "Accessories"]
 
 export function isProductCategory(value: string): value is ProductCategory {
   return (PRODUCT_CATEGORIES as string[]).includes(value)

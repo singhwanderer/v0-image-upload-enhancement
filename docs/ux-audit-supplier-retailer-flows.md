@@ -1,5 +1,11 @@
 # UX Audit: Supplier & Retailer Image Upload Flows
 
+> **Historical snapshot.** This audit predates the GS1 data rebuild: the app now derives 6
+> categories (Clothing/Shoes/Bags/Jewelry/Beauty/Accessories) and 142 bricks from the GPC matrix
+> CSVs + `gs1_extended_attribute_master_code_list.csv` via `scripts/generate-gs1-data.mjs`, and
+> mock AI mode (`lib/gs1/mock-scenarios.ts`) has been removed. File/line citations below describe
+> the code as it was at audit time.
+
 **Scope:** End-to-end user flows for suppliers (image upload wizard) and retailers (image browser) in the Trading Grid Catalogue prototype.
 **Goal audited against:** Let users add images and related attributes as easily as possible, at scale.
 **Method:** Code-level walkthrough of both flows (`app/page.tsx`, `components/trading-grid/*`, `app/api/*`), with findings cited as `file:line`. Revised across two stakeholder review rounds; the CSV bulk-upload design follows the authoritative 21-field specification (Appendix A).

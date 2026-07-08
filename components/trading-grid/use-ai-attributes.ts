@@ -6,9 +6,9 @@ import type { CategoryOptions, AttributeDecision, ExtractedAttribute, Unresolved
 import { getCategoryBricks, getBrick, type Brick } from "@/lib/gs1/generated-bricks"
 import type { UploadedFile } from "./uploaded-file"
 
-// Product categories offered in the AI extraction card. Home is excluded — it has no GPC brick
-// coverage in the brick matrix, so its attributes cannot be scoped to a single brick.
-export const PRODUCT_CATEGORIES = ["Shoes", "Apparel", "Bags", "Jewelry", "Beauty"] as const
+// Product categories offered in the AI extraction card. Mirrors PRODUCT_CATEGORIES in
+// lib/gs1/types.ts — one entry per GPC matrix sheet family (Clothing.csv, Footwear.csv, …).
+export const PRODUCT_CATEGORIES = ["Clothing", "Shoes", "Bags", "Jewelry", "Beauty", "Accessories"] as const
 
 // Response shape from GET /api/attribute-options (declared locally so this client component
 // never imports server route code). Mirrors AttributeOptionsResponse in that route.
