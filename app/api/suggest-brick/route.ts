@@ -47,14 +47,14 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "GEMINI_API_KEY is not configured on the server." }, { status: 500 })
   }
 
-  let body: { images?: unknown; productDescription?: unknown }
+  let body: { images?: unknown }
   try {
     body = await request.json()
   } catch {
     return NextResponse.json({ error: "Invalid JSON request body." }, { status: 400 })
   }
 
-  const { images, productDescription } = body
+  const { images } = body
   if (!Array.isArray(images) || images.length === 0) {
     return NextResponse.json({ error: "images must be a non-empty array." }, { status: 400 })
   }
@@ -77,8 +77,6 @@ export async function POST(request: Request) {
     validated.push({ fileName: fileName.trim(), imageBase64, mimeType })
   }
 
-  const product = typeof productDescription === "string" ? productDescription.trim() : ""
-
   // Candidate list: every category and its bricks, so the model proposes brick directly —
   // category is a derived lookup afterward (getBrick), never asked for separately.
   const candidatesText = (Object.keys(CATEGORY_BRICKS) as (keyof typeof CATEGORY_BRICKS)[])
@@ -90,8 +88,12 @@ export async function POST(request: Request) {
 
   const imageListText = validated.map((img, i) => `  Image ${i + 1}: ${img.fileName}`).join("\n")
 
+  // The human already confirms "these are all one product" via the upload UI's same-product
+  // gate before this route is ever called — but that's a one-click self-report, not a verified
+  // check, so this still cross-checks the images against each other as a second, automated
+  // line of defense. Deliberately image-only: no product description is sent (no extra input
+  // tokens, and outlier detection works by comparing the images to each other, not to text).
   const prompt = `You are classifying a product's GS1 GPC brick from its images.
-${product ? `The product is described as: ${product}\n` : ""}
 You have been provided with ${validated.length} image${validated.length !== 1 ? "s" : ""}:
 ${imageListText}
 

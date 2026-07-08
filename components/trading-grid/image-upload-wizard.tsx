@@ -1867,33 +1867,26 @@ export function ImageUploadWizard({
         {/* Step 2: One page, two sections — Product Attributes above, Image Details below (Task 1) */}
         {currentStep === 2 && (
           <div className="flex flex-col gap-6">
-            {/* ── Section 1: Product Attributes — one value for the whole product ── */}
+            {/* ── Section 1: Product Attributes — AI-classified GS1 attributes for the whole product ── */}
             <div>
               <h2 className="text-lg font-medium text-foreground">Product Attributes</h2>
               <p className="mt-1 text-sm text-muted-foreground">
-                Set once for this product — these values apply to {uploadedFiles.length > 0 ? `all ${uploadedFiles.length} image${uploadedFiles.length !== 1 ? "s" : ""}` : "every image"}.
+                Classified once for this product — applies to {uploadedFiles.length > 0 ? `all ${uploadedFiles.length} image${uploadedFiles.length !== 1 ? "s" : ""}` : "every image"}.
               </p>
             </div>
 
             <AiSection ai={ai} uploadedFiles={uploadedFiles} onRequestReupload={handleBack} />
 
-            <StepTwoForm
-              currentAttrs={getCurrentAttributes()}
-              updateAttrs={updateCurrentAttributes}
-              uploadLevel={uploadLevel}
-              autoData={getAutoPopulatedData()}
-              hidePerShot
-            />
-
             {/* Section separator */}
             <div className="border-t-2 border-border" />
 
-            {/* ── Section 2: Image Details — per-image fields, filmstrip navigation (Task 4) ── */}
+            {/* ── Section 2: Image Details — image type/purpose/format (once per product) plus
+                per-image fields with filmstrip navigation (Task 4) ── */}
             <div className="flex flex-wrap items-end justify-between gap-2">
               <div>
                 <h2 className="text-lg font-medium text-foreground">Image Details</h2>
                 <p className="mt-1 text-sm text-muted-foreground">
-                  Orientation, facing, angle, and description for each image.
+                  Image type, purpose, and format apply to every image; orientation, facing, angle, and description are set per image.
                 </p>
               </div>
               {uploadedFiles.length > 1 && (
@@ -1911,6 +1904,17 @@ export function ImageUploadWizard({
                 </Button>
               )}
             </div>
+
+            {/* Image type/purpose/format — one shared value for every image of this product,
+                entered once here rather than repeated per image (Task 5 feedback: these are
+                image-metadata fields, so they belong in Image Details, not Product Attributes). */}
+            <StepTwoForm
+              currentAttrs={getCurrentAttributes()}
+              updateAttrs={updateCurrentAttributes}
+              uploadLevel={uploadLevel}
+              autoData={getAutoPopulatedData()}
+              hidePerShot
+            />
 
             {uploadedFiles.length > 1 && (
               <div className="flex flex-col gap-2">

@@ -102,7 +102,8 @@ export function useAiAttributes({ uploadedFiles, attributes, setAttributesByImag
   const [classificationStatus, setClassificationStatus] = useState<"idle" | "loading" | "proposed" | "confirmed" | "error" | "inconsistent">("idle")
   const [classificationConfidence, setClassificationConfidence] = useState<number | null>(null)
   const [classificationError, setClassificationError] = useState<string | null>(null)
-  // Set when the images look like they show different products (P1.1 follow-up) — the images
+  // Set when the images look like they show different products — an automated second line of
+  // defense behind the same-product gate (which is just a human self-report). The image(s)
   // Gemini flagged as not matching the majority, and its short explanation. Resolved by picking
   // one image as the primary reference (see confirmPrimaryImage) or navigating back to re-upload.
   const [classificationOutliers, setClassificationOutliers] = useState<string[] | null>(null)
@@ -142,7 +143,9 @@ export function useAiAttributes({ uploadedFiles, attributes, setAttributesByImag
   // Runs brick classification (P1.1): proposes a category+brick from the images (via
   // /api/suggest-brick) so the human confirms/corrects instead of picking blind from
   // dropdowns first. Only ever reaches "proposed" on success — nothing is applied until
-  // confirmClassification runs.
+  // confirmClassification runs. No product description is sent (image-only judgment, and the
+  // human already self-reports "same product" via the upload UI's gate); the consistency check
+  // below is a second, automated line of defense that compares the images to each other.
   const runClassification = async (filesOverride?: UploadedFile[]) => {
     const files = filesOverride ?? uploadedFiles
     if (files.length === 0) return
@@ -150,7 +153,6 @@ export function useAiAttributes({ uploadedFiles, attributes, setAttributesByImag
     setClassificationError(null)
     setClassificationOutliers(null)
     setClassificationNote(null)
-    const productDescription = getAutoPopulatedData().productDescription
 
     try {
       const images = await Promise.all(
@@ -159,7 +161,7 @@ export function useAiAttributes({ uploadedFiles, attributes, setAttributesByImag
       const res = await fetch("/api/suggest-brick", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ images, productDescription }),
+        body: JSON.stringify({ images }),
       })
       if (!res.ok) {
         const errBody = await res.json().catch(() => null)
@@ -169,7 +171,8 @@ export function useAiAttributes({ uploadedFiles, attributes, setAttributesByImag
         category: string; brickCode: string; brickName: string; confidence: number
         consistent?: boolean; outlierImages?: string[]; note?: string
       }
-      if (data.consistent === false) {
+      // A single image has nothing to be inconsistent with — only act on the signal for 2+.
+      if (files.length > 1 && data.consistent === false) {
         setClassificationOutliers(Array.isArray(data.outlierImages) ? data.outlierImages : [])
         setClassificationNote(typeof data.note === "string" ? data.note : null)
         setClassificationStatus("inconsistent")
