@@ -473,8 +473,8 @@ export function AiSection({ ai, uploadedFiles, onRequestReupload }: AiSectionPro
           <p className="text-xs text-muted-foreground">AI suggestions apply to all images of this product. Review each before saving.</p>
         </div>
 
-        {/* Product-level attribute cards */}
-        <div className="flex flex-col gap-3 rounded border border-border p-3">
+        {/* Product-level attribute cards — no wrapper box; bands lay flat inside the results card */}
+        <div className="flex flex-col gap-3">
           {aiExtraction.attributes.length === 0 ? (
             <p className="text-sm text-muted-foreground">No extended attributes were suggested for this category.</p>
           ) : (

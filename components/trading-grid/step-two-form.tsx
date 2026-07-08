@@ -1,5 +1,6 @@
 "use client"
 
+import { useState } from "react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
@@ -106,6 +107,9 @@ export function StepTwoForm({ currentAttrs, updateAttrs, uploadLevel, autoData, 
   const sOrientation = shotSuggestion ? optionLabel(ORIENTATION_OPTIONS, shotSuggestion.orientation) : ""
   const sFacing = shotSuggestion ? optionLabel(FACING_OPTIONS, shotSuggestion.facing) : ""
   const sAngle = shotSuggestion ? optionLabel(ANGLE_OPTIONS, shotSuggestion.angle) : ""
+  // Image Description is optional and rarely filled — hide it behind a toggle to reduce form
+  // weight. Pre-expand it if the field already has a value (e.g. populated by AI suggestion).
+  const [showDescription, setShowDescription] = useState(() => !!currentAttrs.imageDescription)
   return (
     <div className="flex flex-col gap-4">
       {!hideProductWide && (
@@ -275,9 +279,32 @@ export function StepTwoForm({ currentAttrs, updateAttrs, uploadLevel, autoData, 
           <Label className="text-sm font-medium">Clipping Path <span className="text-xs font-normal text-muted-foreground">(optional)</span></Label>
           <Input value={currentAttrs.clippingPath} onChange={(e) => updateAttrs({ ...currentAttrs, clippingPath: e.target.value })} placeholder="Path name..." className="bg-background" />
         </div>
-        <div className="flex flex-col gap-2 md:col-span-2">
-          <Label className="text-sm font-medium">Image Description <span className="text-xs font-normal text-muted-foreground">(optional)</span></Label>
-          <Input value={currentAttrs.imageDescription} onChange={(e) => updateAttrs({ ...currentAttrs, imageDescription: e.target.value })} placeholder="Enter description..." className="bg-background" />
+        <div className="flex flex-col gap-1.5 md:col-span-2">
+          {showDescription ? (
+            <>
+              <div className="flex items-center justify-between">
+                <Label className="text-sm font-medium">Image Description <span className="text-xs font-normal text-muted-foreground">(optional)</span></Label>
+                {!currentAttrs.imageDescription && (
+                  <button
+                    type="button"
+                    className="text-xs text-muted-foreground hover:text-foreground"
+                    onClick={() => setShowDescription(false)}
+                  >
+                    Hide
+                  </button>
+                )}
+              </div>
+              <Input value={currentAttrs.imageDescription} onChange={(e) => updateAttrs({ ...currentAttrs, imageDescription: e.target.value })} placeholder="Enter description..." className="bg-background" />
+            </>
+          ) : (
+            <button
+              type="button"
+              className="w-fit text-xs text-muted-foreground underline-offset-2 hover:underline hover:text-foreground"
+              onClick={() => setShowDescription(true)}
+            >
+              + Add image description (optional)
+            </button>
+          )}
         </div>
       </div>
 
