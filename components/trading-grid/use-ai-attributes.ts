@@ -39,18 +39,23 @@ export type ProductExtractionResult = {
   error?: string
 }
 
-// ── Per-shot AI suggestions (P0.2b) ──
-// One proposal per image for the fields a vision model reads directly from the shot.
-export type ShotSuggestionRow = {
-  fileIndex: number
-  fileName: string
-  orientation: string
-  facing: string
-  angle: string
-  description: string
+// ── Per-image AI suggestions (Task 5) ──
+// Suggestion state per image: the values the AI proposed for that image's detail fields plus a
+// per-field review status. Suggested values are written straight into attributesByImage (the
+// field is technically filled) but render in an unconfirmed "suggested" style until the user
+// accepts them (or edits them, which drops the AI provenance).
+// The key union mirrors PER_SHOT_KEYS in step-two-form.tsx (kept structural to avoid a
+// cross-file coupling); clippingPath is never suggested but is in the union so callers can
+// pass any image-detail key through unchanged.
+export type ShotSuggestionField = "orientation" | "facing" | "angle" | "clippingPath" | "imageDescription"
+export type ShotSuggestionEntry = {
+  values: Partial<Record<ShotSuggestionField, string>>
   confidence: number
-  status: "pending" | "accepted" | "dismissed"
+  fieldStatus: Partial<Record<ShotSuggestionField, "suggested" | "accepted">>
+  loading: boolean
+  error: string | null
 }
+export type ShotSuggestionState = { [imageIndex: number]: ShotSuggestionEntry }
 
 // The product-wide + per-shot attribute record shape (matches StepTwoFormProps["currentAttrs"]
 // in step-two-form.tsx). Duplicated here as a plain structural type to avoid a cross-file
@@ -89,11 +94,10 @@ export function useAiAttributes({ uploadedFiles, attributes, setAttributesByImag
   const [aiExtraction, setAiExtraction] = useState<ProductExtractionResult | null>(null)
   // The suggestion row currently being inline-edited (null = none), scoped by index only
   const [aiEditing, setAiEditing] = useState<{ index: number } | null>(null)
-  // ── Per-shot AI suggestions (P0.2b) — proposes orientation/facing/angle/description per
-  // image. Strictly optional: nothing is applied without an explicit Accept. ──
-  const [shotSuggestions, setShotSuggestions] = useState<ShotSuggestionRow[] | null>(null)
-  const [shotSuggestLoading, setShotSuggestLoading] = useState(false)
-  const [shotSuggestError, setShotSuggestError] = useState<string | null>(null)
+  // ── Per-image AI suggestions (Task 5) — orientation/facing/angle/description per image,
+  // keyed by image index. Suggested values pre-fill the image's record but stay flagged
+  // "suggested" until reviewed. ──
+  const [shotSuggestions, setShotSuggestions] = useState<ShotSuggestionState>({})
   // ── Brick classification (P1.1) — AI proposes a brick from the images; the human confirms
   // or corrects via the manual pickers. Confirming (either way) auto-runs extraction only —
   // per-shot suggestion is a separate, independent action (see below). ──
@@ -348,101 +352,118 @@ export function useAiAttributes({ uploadedFiles, attributes, setAttributesByImag
     setAiEditing(null)
   }
 
-  // Per-shot suggestions are keyed by file index — any deletion/replacement invalidates them.
-  const clearShotSuggestions = () => { setShotSuggestions(null); setShotSuggestError(null) }
+  // Suggestions are keyed by file index — any deletion/replacement invalidates them.
+  const clearShotSuggestions = () => setShotSuggestions({})
 
-  // Runs the per-shot suggestion pass via /api/suggest-shot-attributes. Optional
-  // accelerator only — nothing applies without Accept.
-  const runShotSuggestions = async () => {
-    if (uploadedFiles.length === 0) return
-    setShotSuggestLoading(true)
-    setShotSuggestError(null)
-    const productDescription = getAutoPopulatedData().productDescription
+  // Runs the suggestion pass for ONE image via /api/suggest-shot-attributes (the route accepts
+  // any image array, so a single-image payload needs no server change). On success the values
+  // are written into the image's record — filled but flagged "suggested" until reviewed.
+  const runShotSuggestionForImage = async (index: number) => {
+    const file = uploadedFiles[index]
+    if (!file) return
+    const blankEntry: ShotSuggestionEntry = { values: {}, confidence: 0, fieldStatus: {}, loading: false, error: null }
+    setShotSuggestions(prev => ({
+      ...prev,
+      [index]: { ...(prev[index] ?? blankEntry), loading: true, error: null },
+    }))
     try {
-      const images = await Promise.all(
-        uploadedFiles.map(async (f) => ({ fileName: f.name, imageBase64: await fileToBase64(f.file), mimeType: f.type }))
-      )
+      const imageBase64 = await fileToBase64(file.file)
       const res = await fetch("/api/suggest-shot-attributes", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ images, productDescription }),
+        body: JSON.stringify({
+          images: [{ fileName: file.name, imageBase64, mimeType: file.type }],
+          productDescription: getAutoPopulatedData().productDescription,
+        }),
       })
       if (!res.ok) {
         const errBody = await res.json().catch(() => null)
         throw new Error(errBody?.error || `Suggestion failed (${res.status}).`)
       }
       const data = await res.json() as { suggestions: { fileName: string; orientation: string; facing: string; angle: string; description: string; confidence: number }[] }
-      const rows: ShotSuggestionRow[] = []
-      uploadedFiles.forEach((f, i) => {
-        const s = Array.isArray(data.suggestions) ? data.suggestions.find(x => x.fileName === f.name) : undefined
-        if (s) rows.push({ fileIndex: i, fileName: f.name, orientation: s.orientation, facing: s.facing, angle: s.angle, description: s.description, confidence: s.confidence, status: "pending" })
+      const s = Array.isArray(data.suggestions) ? data.suggestions.find(x => x.fileName === file.name) : undefined
+      if (!s) throw new Error("AI could not read this image — set its details manually.")
+      const values: ShotSuggestionEntry["values"] = {}
+      if (s.orientation) values.orientation = s.orientation
+      if (s.facing) values.facing = s.facing
+      if (s.angle) values.angle = s.angle
+      if (s.description) values.imageDescription = s.description
+      const fieldStatus: ShotSuggestionEntry["fieldStatus"] = {}
+      ;(Object.keys(values) as ShotSuggestionField[]).forEach(k => { fieldStatus[k] = "suggested" })
+      setAttributesByImage(prev => {
+        const rec = { ...(prev[index] ?? attributes) }
+        ;(Object.keys(values) as ShotSuggestionField[]).forEach(k => { rec[k] = values[k]! })
+        return { ...prev, [index]: rec }
       })
-      setShotSuggestions(rows)
+      setShotSuggestions(prev => ({ ...prev, [index]: { values, confidence: s.confidence, fieldStatus, loading: false, error: null } }))
     } catch (err) {
-      setShotSuggestError(err instanceof Error ? err.message : "Suggestion failed. You can enter per-shot details manually.")
-    } finally {
-      setShotSuggestLoading(false)
+      setShotSuggestions(prev => ({
+        ...prev,
+        [index]: {
+          values: {}, confidence: 0, fieldStatus: {},
+          loading: false,
+          error: err instanceof Error ? err.message : "Suggestion failed. You can enter image details manually.",
+        },
+      }))
     }
   }
 
-  // Per-image on-demand variant: analyzes a single image and merges its suggestion row into
-  // the list (leaving other images' suggestions untouched). This backs the "Suggest with AI"
-  // action inside each image's editing panel, keeping Task 2 opt-in and per-image.
-  const [shotSuggestLoadingIndex, setShotSuggestLoadingIndex] = useState<number | null>(null)
-  const runShotSuggestionForImage = async (fileIndex: number) => {
-    const f = uploadedFiles[fileIndex]
-    if (!f) return
-    setShotSuggestLoadingIndex(fileIndex)
-    setShotSuggestError(null)
-    const productDescription = getAutoPopulatedData().productDescription
-    try {
-      const images = [{ fileName: f.name, imageBase64: await fileToBase64(f.file), mimeType: f.type }]
-      const res = await fetch("/api/suggest-shot-attributes", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ images, productDescription }),
-      })
-      if (!res.ok) {
-        const errBody = await res.json().catch(() => null)
-        throw new Error(errBody?.error || `Suggestion failed (${res.status}).`)
-      }
-      const data = await res.json() as { suggestions: { fileName: string; orientation: string; facing: string; angle: string; description: string; confidence: number }[] }
-      const s = Array.isArray(data.suggestions) ? data.suggestions.find(x => x.fileName === f.name) ?? data.suggestions[0] : undefined
-      if (s) {
-        const row: ShotSuggestionRow = { fileIndex, fileName: f.name, orientation: s.orientation, facing: s.facing, angle: s.angle, description: s.description, confidence: s.confidence, status: "pending" }
-        setShotSuggestions(prev => {
-          const rest = (prev ?? []).filter(p => p.fileIndex !== fileIndex)
-          return [...rest, row].sort((a, b) => a.fileIndex - b.fileIndex)
-        })
-      }
-    } catch (err) {
-      setShotSuggestError(err instanceof Error ? err.message : "Suggestion failed. You can enter image details manually.")
-    } finally {
-      setShotSuggestLoadingIndex(null)
-    }
+  // Global "Apply all AI suggestions": parallel individual calls, one per image. Per-image
+  // loading/error lands in the same per-index state, so one failed image never blocks the rest.
+  const runAllShotSuggestions = async () => {
+    await Promise.allSettled(uploadedFiles.map((_, i) => runShotSuggestionForImage(i)))
   }
 
-  // Accept one or many per-shot suggestions: writes into the per-image records.
-  const acceptShotSuggestions = (rows: ShotSuggestionRow[]) => {
-    setAttributesByImage(prev => {
+  // Confirm one suggested field (clicking into the field, or an explicit Accept). The value
+  // keeps its "AI" provenance tag.
+  const acceptShotField = (index: number, field: ShotSuggestionField) => {
+    setShotSuggestions(prev => {
+      const entry = prev[index]
+      if (!entry || entry.fieldStatus[field] !== "suggested") return prev
+      return { ...prev, [index]: { ...entry, fieldStatus: { ...entry.fieldStatus, [field]: "accepted" } } }
+    })
+  }
+
+  // Accept every still-suggested field on one image in one click.
+  const acceptShotImage = (index: number) => {
+    setShotSuggestions(prev => {
+      const entry = prev[index]
+      if (!entry) return prev
+      const fieldStatus = { ...entry.fieldStatus }
+      ;(Object.keys(fieldStatus) as ShotSuggestionField[]).forEach(k => {
+        if (fieldStatus[k] === "suggested") fieldStatus[k] = "accepted"
+      })
+      return { ...prev, [index]: { ...entry, fieldStatus } }
+    })
+  }
+
+  // A manual edit replaces the AI's value — drop the field's suggestion status (and its tag).
+  const overrideShotField = (index: number, field: ShotSuggestionField) => {
+    setShotSuggestions(prev => {
+      const entry = prev[index]
+      if (!entry || !(field in entry.fieldStatus)) return prev
+      const fieldStatus = { ...entry.fieldStatus }
+      delete fieldStatus[field]
+      return { ...prev, [index]: { ...entry, fieldStatus } }
+    })
+  }
+
+  // Copying values onto an image (copy-from-image / apply-to-all) makes them manual — drop
+  // that image's suggestion state entirely.
+  const clearShotSuggestionEntry = (index: number) => {
+    setShotSuggestions(prev => {
+      if (!(index in prev)) return prev
       const next = { ...prev }
-      rows.forEach(r => {
-        const rec = { ...(next[r.fileIndex] ?? attributes) }
-        rec.orientation = r.orientation
-        if (r.facing) rec.facing = r.facing
-        if (r.angle) rec.angle = r.angle
-        if (r.description) rec.imageDescription = r.description
-        next[r.fileIndex] = rec
-      })
+      delete next[index]
       return next
     })
-    const accepted = new Set(rows.map(r => r.fileIndex))
-    setShotSuggestions(prev => prev ? prev.map(p => accepted.has(p.fileIndex) ? { ...p, status: "accepted" as const } : p) : prev)
   }
 
-  const dismissShotSuggestion = (fileIndex: number) => {
-    setShotSuggestions(prev => prev ? prev.map(p => p.fileIndex === fileIndex ? { ...p, status: "dismissed" as const } : p) : prev)
-  }
+  // Any field on this image still awaiting review? Drives the filmstrip sparkle dot.
+  const hasUnreviewedSuggestion = (index: number) =>
+    Object.values(shotSuggestions[index]?.fieldStatus ?? {}).some(s => s === "suggested")
+
+  const anyShotSuggestLoading = Object.values(shotSuggestions).some(e => e.loading)
 
   // Derived status flags from the single product-level extraction result
   const isExtracting = aiExtraction?.status === "extracting"
@@ -475,15 +496,16 @@ export function useAiAttributes({ uploadedFiles, attributes, setAttributesByImag
 
   return {
     aiCategory, setAiCategory, aiBrick, setAiBrick,
-    aiExtraction, aiEditing, setAiEditing, shotSuggestions, shotSuggestLoading, shotSuggestError,
+    aiExtraction, aiEditing, setAiEditing, shotSuggestions,
     classificationStatus, setClassificationStatus, classificationConfidence, setClassificationConfidence, classificationError,
     classificationOutliers, classificationNote,
     showManualClassify, setShowManualClassify,
     categoryOptions, valuesForCodeList, bricksForCategory,
     runExtraction, runClassification, confirmClassification, confirmPrimaryImage,
     setAttributeDecision, updateAttributeField, selectAttributeValue, resolveUnresolvedAttribute,
-    clearExtraction, clearShotSuggestions, runShotSuggestions, acceptShotSuggestions, dismissShotSuggestion,
-    runShotSuggestionForImage, shotSuggestLoadingIndex,
+    clearExtraction, clearShotSuggestions,
+    runShotSuggestionForImage, runAllShotSuggestions, acceptShotField, acceptShotImage,
+    overrideShotField, clearShotSuggestionEntry, hasUnreviewedSuggestion, anyShotSuggestLoading,
     isExtracting, isComplete, isError, hasExtraction, acceptedExtractedAttributes, pendingExtractedCount, acceptAllPending, acceptPendingByIndex,
   }
 }
