@@ -1995,7 +1995,7 @@ export function ImageUploadWizard({
             {/* Per-image missing attributes hint (Change 2a) */}
             {missingAttrCount > 0 && (
               <p className="text-xs text-destructive">
-                {missingAttrCount} of {uploadedFiles.length} images missing required attributes.
+                {missingAttrCount} of {uploadedFiles.length} {missingAttrCount === 1 ? "image is" : "images are"} missing Orientation — use &ldquo;Suggest with AI&rdquo; or set it manually above.
               </p>
             )}
 
