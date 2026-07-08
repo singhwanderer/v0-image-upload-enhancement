@@ -172,24 +172,20 @@ function UnresolvedSection({
 type AiSectionProps = {
   ai: ReturnType<typeof useAiAttributes>
   uploadedFiles: UploadedFile[]
-  // Lets the "inconsistent images" warning send the user back to re-upload. Omitted at render
-  // sites with no upload step to return to (e.g. the post-submit view).
-  onRequestReupload?: () => void
 }
 
 // Attributes at or above this confidence collapse into the "looks good" band; below it they
 // surface in "Needs attention" for review-by-exception (Task 3).
 const HIGH_CONFIDENCE = 0.9
 
-export function AiSection({ ai, uploadedFiles, onRequestReupload }: AiSectionProps) {
+export function AiSection({ ai, uploadedFiles }: AiSectionProps) {
   const {
     aiCategory, setAiCategory, aiBrick, setAiBrick,
     aiExtraction, aiEditing, setAiEditing,
     classificationStatus, setClassificationStatus, classificationConfidence, setClassificationConfidence, classificationError,
-    classificationOutliers, classificationNote,
     showManualClassify, setShowManualClassify,
     valuesForCodeList, bricksForCategory,
-    runExtraction, runClassification, confirmClassification, confirmPrimaryImage,
+    runExtraction, runClassification, confirmClassification,
     setAttributeDecision, updateAttributeField, selectAttributeValue, resolveUnresolvedAttribute,
     clearExtraction, clearShotSuggestions,
     isExtracting, isComplete, isError, acceptedExtractedAttributes, pendingExtractedCount, acceptAllPending,
@@ -623,73 +619,6 @@ export function AiSection({ ai, uploadedFiles, onRequestReupload }: AiSectionPro
                     </div>
                   </div>
                 )}
-                {showManualClassify && renderAiIdleControls()}
-              </div>
-            )}
-
-            {classificationStatus === "inconsistent" && uploadedFiles.length > 1 && (
-              <div className="rounded border border-tg-warning/40 bg-tg-warning/5 p-4 flex flex-col gap-3">
-                <div className="flex items-start gap-3">
-                  <AlertCircle className="size-4 text-tg-warning mt-0.5 shrink-0" />
-                  <div className="flex flex-col gap-1">
-                    <p className="text-sm font-medium text-foreground">
-                      We noticed these images seem to show different products.
-                    </p>
-                    <p className="text-sm text-muted-foreground">
-                      To ensure accurate product classification, please confirm which image represents the primary product you want to catalog, or upload a new set.
-                    </p>
-                    {classificationNote && (
-                      <p className="text-xs text-muted-foreground">{classificationNote}</p>
-                    )}
-                  </div>
-                </div>
-                <div className="flex flex-wrap items-center gap-2 pl-7">
-                  {uploadedFiles.map((f, i) => (
-                    <button
-                      key={f.id}
-                      type="button"
-                      onClick={() => confirmPrimaryImage(i)}
-                      title={f.name}
-                      className={cn(
-                        "size-9 shrink-0 rounded border overflow-hidden bg-muted transition-colors",
-                        classificationOutliers?.includes(f.name) ? "border-tg-warning" : "border-border hover:border-primary"
-                      )}
-                    >
-                      {f.preview && <img src={f.preview} alt="" className="size-full object-cover" />}
-                    </button>
-                  ))}
-                  {onRequestReupload && (
-                    <Button variant="outline" size="sm" onClick={onRequestReupload}>Upload a new set</Button>
-                  )}
-                </div>
-              </div>
-            )}
-
-            {/* Single-image case: the mismatch is against the selected Product's description,
-                not against other images — "these images"/"primary image"/"a new set" copy above
-                doesn't apply when there's only one file. */}
-            {classificationStatus === "inconsistent" && uploadedFiles.length <= 1 && (
-              <div className="flex flex-col gap-3">
-                <div className="rounded border border-tg-warning/40 bg-tg-warning/5 p-4 flex flex-col gap-3">
-                  <div className="flex items-start gap-3">
-                    <AlertCircle className="size-4 text-tg-warning mt-0.5 shrink-0" />
-                    <div className="flex flex-col gap-1">
-                      <p className="text-sm font-medium text-foreground">
-                        This image doesn't seem to match the selected product.
-                      </p>
-                      <p className="text-sm text-muted-foreground">
-                        {classificationNote ?? "AI flagged a mismatch between the image and the product description."} Double-check the Product selected in Step 1, or continue with AI's best guess below.
-                      </p>
-                    </div>
-                  </div>
-                  <div className="flex items-center gap-2 pl-7">
-                    <Button variant="outline" size="sm" onClick={() => void runClassification()}>Try again</Button>
-                    <Button variant="ghost" size="sm" onClick={() => setShowManualClassify(true)}>Continue manually</Button>
-                    {onRequestReupload && (
-                      <Button variant="ghost" size="sm" onClick={onRequestReupload}>Go back to Target &amp; Files</Button>
-                    )}
-                  </div>
-                </div>
                 {showManualClassify && renderAiIdleControls()}
               </div>
             )}

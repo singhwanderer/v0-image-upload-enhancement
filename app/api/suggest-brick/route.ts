@@ -18,9 +18,6 @@ export type BrickSuggestionResponse = {
   brickCode: string
   brickName: string
   confidence: number
-  consistent: boolean
-  outlierImages?: string[]
-  note?: string
 }
 
 type ImageInput = { fileName: string; imageBase64: string; mimeType: string }
@@ -47,14 +44,14 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "GEMINI_API_KEY is not configured on the server." }, { status: 500 })
   }
 
-  let body: { images?: unknown; productDescription?: unknown }
+  let body: { images?: unknown }
   try {
     body = await request.json()
   } catch {
     return NextResponse.json({ error: "Invalid JSON request body." }, { status: 400 })
   }
 
-  const { images, productDescription } = body
+  const { images } = body
   if (!Array.isArray(images) || images.length === 0) {
     return NextResponse.json({ error: "images must be a non-empty array." }, { status: 400 })
   }
@@ -77,8 +74,6 @@ export async function POST(request: Request) {
     validated.push({ fileName: fileName.trim(), imageBase64, mimeType })
   }
 
-  const product = typeof productDescription === "string" ? productDescription.trim() : ""
-
   // Candidate list: every category and its bricks, so the model proposes brick directly —
   // category is a derived lookup afterward (getBrick), never asked for separately.
   const candidatesText = (Object.keys(CATEGORY_BRICKS) as (keyof typeof CATEGORY_BRICKS)[])
@@ -90,9 +85,10 @@ export async function POST(request: Request) {
 
   const imageListText = validated.map((img, i) => `  Image ${i + 1}: ${img.fileName}`).join("\n")
 
+  // Same-product consistency is confirmed by the human before this route is ever called (the
+  // upload UI's same-product gate) — this prompt only classifies, it doesn't re-judge that.
   const prompt = `You are classifying a product's GS1 GPC brick from its images.
-${product ? `The product is described as: ${product}\n` : ""}
-You have been provided with ${validated.length} image${validated.length !== 1 ? "s" : ""}:
+You have been provided with ${validated.length} image${validated.length !== 1 ? "s" : ""}, all of the same product:
 ${imageListText}
 
 Choose exactly ONE brick from the candidates below that best matches what the images show.
@@ -100,19 +96,11 @@ Choose exactly ONE brick from the candidates below that best matches what the im
 Candidates (category, then brick name => code):
 ${candidatesText}
 
-Before choosing, check whether all images plausibly show the same product. Different angles,
-colors, or fabrics of one product type are fine. Different garment/item types, or an unrelated
-item mixed in (e.g. a shirt photographed alongside a pair of earrings), are NOT — flag those as
-inconsistent.
-
 Rules:
 - Pick the single best-matching brick code from the list above. Do not invent a code.
 - confidence is a number between 0 and 1 reflecting how certain the match is.
-- consistent is true only if all images plausibly depict the same product. If false, list the
-  filenames of the image(s) that don't match the majority in outlierImages, and give a short
-  reason in note (e.g. "Image 2 (earring.jpg) shows a different item than the rest.").
 - Return JSON only, no markdown fences, in exactly this shape:
-{ "brickCode": string, "confidence": number, "consistent": boolean, "outlierImages": string[], "note": string }`
+{ "brickCode": string, "confidence": number }`
 
   const imageParts = validated.map(img => ({ inlineData: { mimeType: img.mimeType, data: img.imageBase64 } }))
 
@@ -138,7 +126,7 @@ Rules:
     }
   }
 
-  let parsed: { brickCode?: unknown; confidence?: unknown; consistent?: unknown; outlierImages?: unknown; note?: unknown }
+  let parsed: { brickCode?: unknown; confidence?: unknown }
   try {
     parsed = JSON.parse(extractJsonText(rawText))
   } catch {
@@ -162,19 +150,10 @@ Rules:
     return NextResponse.json({ error: "AI proposed a brick outside the known GPC list." }, { status: 500 })
   }
 
-  // Fail open: an unparseable/missing consistency signal shouldn't block a normal classification.
-  const knownFileNames = new Set(validated.map(img => img.fileName))
-  const outlierImages = Array.isArray(parsed.outlierImages)
-    ? parsed.outlierImages.filter((name): name is string => typeof name === "string" && knownFileNames.has(name))
-    : undefined
-
   return NextResponse.json<BrickSuggestionResponse>({
     category: match.category,
     brickCode: match.brickCode,
     brickName: match.brickName,
     confidence: clampConfidence(parsed.confidence),
-    consistent: parsed.consistent !== false,
-    ...(outlierImages && outlierImages.length > 0 ? { outlierImages } : {}),
-    ...(typeof parsed.note === "string" && parsed.note.trim() ? { note: parsed.note.trim() } : {}),
   })
 }
