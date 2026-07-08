@@ -23,15 +23,11 @@ export function AiAttributesTable({ attributes, category, brickName, brickCode, 
   return (
     <div className="flex flex-col gap-3">
       <div className="flex flex-wrap gap-x-4 gap-y-1">
-        {category && (
+        {(brickName || category) && (
           <p className="text-xs text-muted-foreground">
-            Category: <span className="font-medium text-foreground">{category}</span>
-          </p>
-        )}
-        {brickName && (
-          <p className="text-xs text-muted-foreground">
-            Brick: <span className="font-medium text-foreground">{brickName}</span>
-            {brickCode && <span className="font-mono"> ({brickCode})</span>}
+            Product Category:{" "}
+            <span className="font-medium text-foreground">{brickName ?? category}</span>
+            {brickName && brickCode && <span className="font-mono"> ({brickCode})</span>}
           </p>
         )}
         {typeof imageCount === "number" && (

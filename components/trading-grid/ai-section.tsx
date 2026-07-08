@@ -1,5 +1,6 @@
 "use client"
 
+import { useState } from "react"
 import {
   X,
   Check,
@@ -8,6 +9,9 @@ import {
   AlertCircle,
   Sparkles,
   Loader2,
+  ChevronDown,
+  ChevronRight,
+  ChevronsUpDown,
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -19,11 +23,139 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
+import {
+  Command,
+  CommandEmpty,
+  CommandGroup,
+  CommandInput,
+  CommandItem,
+  CommandList,
+} from "@/components/ui/command"
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover"
 import { cn } from "@/lib/utils"
 import { getCategoryBricks } from "@/lib/gs1/generated-bricks"
 import type { UploadedFile } from "./uploaded-file"
 import { useAiAttributes, PRODUCT_CATEGORIES } from "./use-ai-attributes"
 import { ORIENTATION_OPTIONS, FACING_OPTIONS } from "./attribute-options"
+import type { UnresolvedAttribute } from "@/lib/gs1/types"
+
+// ── Searchable combobox for manually resolving an unresolved attribute ──────────
+function UnresolvedCombobox({
+  options,
+  onSelect,
+}: {
+  options: { code: string; value: string }[]
+  onSelect: (value: string) => void
+}) {
+  const [open, setOpen] = useState(false)
+  const [search, setSearch] = useState("")
+
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <Button
+          variant="outline"
+          size="sm"
+          className="h-7 gap-1 px-2 text-xs font-normal text-muted-foreground"
+        >
+          Set value
+          <ChevronsUpDown className="size-3 opacity-50" />
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent className="w-72 p-0" align="end">
+        <Command>
+          <CommandInput
+            placeholder="Search code or value…"
+            value={search}
+            onValueChange={setSearch}
+            className="h-8 text-xs"
+          />
+          <CommandList className="max-h-52">
+            <CommandEmpty>No match found.</CommandEmpty>
+            <CommandGroup>
+              {options.map((o) => (
+                <CommandItem
+                  key={o.code}
+                  value={`${o.code} ${o.value}`}
+                  onSelect={() => {
+                    onSelect(o.value)
+                    setOpen(false)
+                    setSearch("")
+                  }}
+                  className="text-xs"
+                >
+                  <span className="font-mono text-muted-foreground mr-2">{o.code}</span>
+                  {o.value}
+                </CommandItem>
+              ))}
+            </CommandGroup>
+          </CommandList>
+        </Command>
+      </PopoverContent>
+    </Popover>
+  )
+}
+
+// ── Collapsible unresolved attributes section ────────────────────────────────────
+function UnresolvedSection({
+  unresolvedAttributes,
+  valuesForCodeList,
+  resolveUnresolvedAttribute,
+}: {
+  unresolvedAttributes: UnresolvedAttribute[]
+  valuesForCodeList: (name: string) => { code: string; value: string }[]
+  resolveUnresolvedAttribute: (index: number, codeListName: string, value: string) => void
+}) {
+  const [open, setOpen] = useState(false)
+  const count = unresolvedAttributes.length
+
+  return (
+    <div className="flex flex-col rounded border border-border bg-muted/20 mt-1 overflow-hidden">
+      <button
+        type="button"
+        className="flex items-center gap-2 px-3 py-2 text-left hover:bg-muted/30 transition-colors"
+        onClick={() => setOpen((v) => !v)}
+        aria-expanded={open}
+      >
+        {open ? (
+          <ChevronDown className="size-3.5 text-muted-foreground shrink-0" />
+        ) : (
+          <ChevronRight className="size-3.5 text-muted-foreground shrink-0" />
+        )}
+        <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+          Unresolved Attributes ({count})
+        </p>
+      </button>
+
+      {open && (
+        <ul className="flex flex-col gap-2 px-3 pb-3">
+          {unresolvedAttributes.map((u, i) => {
+            const options = valuesForCodeList(u.codeListName)
+            return (
+              <li key={i} className="flex items-start gap-2 text-sm">
+                <AlertCircle className="size-3.5 text-tg-warning mt-0.5 shrink-0" />
+                <div className="flex-1 min-w-0">
+                  <span className="font-medium text-foreground">{u.codeListName}: </span>
+                  <span className="text-muted-foreground">{u.reason}</span>
+                </div>
+                {options.length > 0 && (
+                  <UnresolvedCombobox
+                    options={options}
+                    onSelect={(value) => resolveUnresolvedAttribute(i, u.codeListName, value)}
+                  />
+                )}
+              </li>
+            )
+          })}
+        </ul>
+      )}
+    </div>
+  )
+}
 
 // Consolidated AI section (P1.1): one card, one entry point. Classification proposes a
 // brick from the images; the human confirms (or corrects via the manual panel); confirming
@@ -140,12 +272,13 @@ export function AiSection({ ai, uploadedFiles, onRequestReupload }: AiSectionPro
         <div className="flex items-center justify-between">
           <div className="flex flex-col gap-0.5">
             <p className="text-sm text-foreground">
-              Category: <span className="font-medium">{aiExtraction.category}</span>
-              {aiExtraction.brickName && (
+              {aiExtraction.brickName ? (
                 <>
-                  {" · "}Classification: <span className="font-medium">{aiExtraction.brickName}</span>
+                  Product Category: <span className="font-medium">{aiExtraction.brickName}</span>
                   {aiExtraction.brickCode && <span className="font-mono text-xs text-muted-foreground"> ({aiExtraction.brickCode})</span>}
                 </>
+              ) : (
+                <>Product Category: <span className="font-medium">{aiExtraction.category}</span></>
               )}
               <span className="text-muted-foreground">
                 {" "}· {acceptedExtractedAttributes.length} attribute{acceptedExtractedAttributes.length !== 1 ? "s" : ""} accepted
@@ -164,12 +297,9 @@ export function AiSection({ ai, uploadedFiles, onRequestReupload }: AiSectionPro
             {pendingExtractedCount > 0 && (
               <Button variant="outline" size="sm" className="gap-1" onClick={acceptAllPending}>
                 <Check className="size-3.5" />
-                Accept all pending ({pendingExtractedCount})
+                Accept All
               </Button>
             )}
-            <Button variant="ghost" size="sm" onClick={clearExtraction}>
-              Re-run
-            </Button>
           </div>
         </div>
         <div className="flex items-start gap-2 rounded bg-muted/30 p-2">
@@ -198,19 +328,21 @@ export function AiSection({ ai, uploadedFiles, onRequestReupload }: AiSectionPro
                     <div className="flex items-center justify-between gap-2">
                       <div className="flex items-center gap-2 min-w-0">
                         <span className="text-xs font-medium uppercase tracking-wide text-muted-foreground truncate">{attr.codeListName}</span>
-                        <span
-                          className={cn(
-                            "inline-flex shrink-0 items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium",
-                            attr.decision === "accepted" ? "bg-tg-success/15 text-tg-success"
-                              : attr.decision === "rejected" ? "bg-muted text-muted-foreground"
-                              : "bg-tg-warning/15 text-tg-warning"
-                          )}
-                        >
-                          {attr.decision === "accepted" ? <Check className="size-3" />
-                            : attr.decision === "rejected" ? <X className="size-3" />
-                            : <AlertCircle className="size-3" />}
-                          {attr.decision === "accepted" ? "Accepted" : attr.decision === "rejected" ? "Rejected" : "Pending review"}
-                        </span>
+                        {(attr.decision === "accepted" || attr.decision === "rejected" || attr.confidence < 0.9) && (
+                          <span
+                            className={cn(
+                              "inline-flex shrink-0 items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium",
+                              attr.decision === "accepted" ? "bg-tg-success/15 text-tg-success"
+                                : attr.decision === "rejected" ? "bg-muted text-muted-foreground"
+                                : "bg-tg-warning/15 text-tg-warning"
+                            )}
+                          >
+                            {attr.decision === "accepted" ? <Check className="size-3" />
+                              : attr.decision === "rejected" ? <X className="size-3" />
+                              : <AlertCircle className="size-3" />}
+                            {attr.decision === "accepted" ? "Accepted" : attr.decision === "rejected" ? "Rejected" : "Pending review"}
+                          </span>
+                        )}
                       </div>
                       <span
                         className={cn(
@@ -317,39 +449,13 @@ export function AiSection({ ai, uploadedFiles, onRequestReupload }: AiSectionPro
             </div>
           )}
 
-          {/* Unresolved attributes — product level */}
+          {/* Unresolved attributes — product level, collapsible */}
           {aiExtraction.unresolvedAttributes.length > 0 && (
-            <div className="flex flex-col gap-2 rounded border border-border bg-muted/20 p-3 mt-1">
-              <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Unresolved attributes</p>
-              <ul className="flex flex-col gap-2">
-                {aiExtraction.unresolvedAttributes.map((u, i) => {
-                  const options = valuesForCodeList(u.codeListName)
-                  return (
-                    <li key={i} className="flex items-start gap-2 text-sm">
-                      <AlertCircle className="size-3.5 text-tg-warning mt-0.5 shrink-0" />
-                      <div className="flex-1">
-                        <span className="text-foreground">{u.codeListName}: </span>
-                        <span className="text-muted-foreground">{u.reason}</span>
-                      </div>
-                      {options.length > 0 && (
-                        <select
-                          className="h-7 rounded border border-border bg-background px-2 text-xs text-foreground"
-                          defaultValue=""
-                          onChange={(e) => {
-                            if (e.target.value) resolveUnresolvedAttribute(i, u.codeListName, e.target.value)
-                          }}
-                        >
-                          <option value="" disabled>Add manually…</option>
-                          {options.map(o => (
-                            <option key={o.code} value={o.value}>{o.value}</option>
-                          ))}
-                        </select>
-                      )}
-                    </li>
-                  )
-                })}
-              </ul>
-            </div>
+            <UnresolvedSection
+              unresolvedAttributes={aiExtraction.unresolvedAttributes}
+              valuesForCodeList={valuesForCodeList}
+              resolveUnresolvedAttribute={resolveUnresolvedAttribute}
+            />
           )}
         </div>
       </div>

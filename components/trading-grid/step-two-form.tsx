@@ -159,8 +159,8 @@ export function StepTwoForm({ currentAttrs, updateAttrs, uploadLevel, autoData, 
       {measuredFiles && measuredFiles.length > 0 && (
         <div className="flex flex-col gap-1.5 rounded border border-border bg-muted/20 p-3">
           <div className="flex items-center gap-2">
-            <span className="text-xs font-semibold uppercase tracking-wide text-foreground">Measured from file</span>
-            <span className="rounded bg-primary/10 px-1.5 py-0.5 text-xs font-medium text-primary">Auto-captured</span>
+            <span className="text-xs font-semibold uppercase tracking-wide text-foreground">Technical Specs</span>
+            <span className="rounded bg-primary/10 px-1.5 py-0.5 text-xs font-medium text-primary">Auto-detected</span>
           </div>
           <div className="flex flex-col gap-0.5 max-h-24 overflow-y-auto">
             {measuredFiles.map((f, i) => (
@@ -171,7 +171,7 @@ export function StepTwoForm({ currentAttrs, updateAttrs, uploadLevel, autoData, 
             ))}
           </div>
           <p className="text-xs text-muted-foreground">
-            Dimensions and DPI are read directly from each image file — no manual entry needed.
+            Width, height, and pixel density are automatically read from each uploaded file — no manual entry required.
           </p>
         </div>
       )}

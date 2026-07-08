@@ -81,7 +81,7 @@ function clampConfidence(value: unknown): number {
   const n = typeof value === "number" ? value : Number.parseFloat(String(value))
   if (!Number.isFinite(n)) return 0.5
   if (n < 0) return 0
-  if (n > 1) return 1
+  if (n >= 0.95) return 0.95
   return n
 }
 
@@ -150,8 +150,13 @@ export async function POST(request: Request) {
   }
 
   // 5. Load this category's GS1 options (never the full CSV, never other categories).
-  //    Use all category attributes for extraction, not brick-scoped.
-  const options = getCategoryOptions(category)
+  //    When a confirmed brick is present, scope to its E-marked attributeCodeListNames so
+  //    only applicable attributes are sent to the model (e.g. no Dress Type for a Jacket).
+  //    When no brick is confirmed, fall back to the full category attribute set.
+  const allOptions = getCategoryOptions(category)
+  const options = brick?.attributeCodeListNames?.length
+    ? allOptions.filter(o => brick.attributeCodeListNames.includes(o.codeListName))
+    : allOptions
   if (options.length === 0) {
     return NextResponse.json<ExtractionApiResponse>({
       category,
@@ -209,7 +214,7 @@ Rules:
 - Visual inference is allowed for most attributes — suggest them if the product appearance in any image supports the classification.
 - The following attributes require visible text on packaging, labels, or product markings and must NOT be inferred from appearance alone: Advertised Origin, Care Instructions, Water Repellent, SPF Rating, Scent Type, Material Composition. If not readable in any image, move them to unresolvedAttributes.
 - Reference the image name(s) in the reason field where helpful (e.g. "Visible in Image 1: front-view.jpg").
-- Confidence must be a number between 0 and 1.
+- Confidence must be a number between 0 and 0.95. Critically assess each attribute individually — do not default to 0.95 for everything. Use this scale strictly: 0.95 = the attribute is the unmistakable, defining visual feature of this exact product type and leaves zero ambiguity (e.g. "Fabric: Denim" for a clearly denim jacket with visible texture); 0.8 = clearly visible in the image but requires minor inference or could have an alternative value (e.g. collar style that could be interpreted two ways); 0.65 = visible but style-inferred or partially obscured (e.g. sleeve length visible only in one image); 0.5 = mostly inferred from context or product type rather than direct visual evidence. Most attributes should fall in the 0.65–0.8 range. Reserve 0.95 for only 1–2 attributes per product where you have absolute visual certainty. Never return 1.0.
 - Return JSON only, with no markdown fences and no commentary.
 
 Return JSON in exactly this shape:

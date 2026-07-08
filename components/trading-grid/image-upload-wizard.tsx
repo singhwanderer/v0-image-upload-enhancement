@@ -76,10 +76,10 @@ interface ImageUploadWizardProps {
 // Mock data with multiple GTINs per product and 3-digit color codes
 const MOCK_DATA = {
   selectionCodes: [
-    { code: "001", description: "Apparel / Dresses" },
-    { code: "002", description: "Apparel / Tops" },
-    { code: "003", description: "Apparel / Denim" },
-    { code: "004", description: "Footwear" },
+    { code: "001", description: "Clothing / Dresses" },
+    { code: "002", description: "Clothing / Tops" },
+    { code: "003", description: "Clothing / Denim" },
+    { code: "004", description: "Shoes" },
     { code: "005", description: "Bags" },
     { code: "006", description: "Jewelry" },
     { code: "007", description: "Beauty" },
@@ -1995,7 +1995,7 @@ export function ImageUploadWizard({
             {/* Per-image missing attributes hint (Change 2a) */}
             {missingAttrCount > 0 && (
               <p className="text-xs text-destructive">
-                {missingAttrCount} of {uploadedFiles.length} images missing required attributes.
+                {missingAttrCount} of {uploadedFiles.length} {missingAttrCount === 1 ? "image is" : "images are"} missing Orientation — use &ldquo;Suggest with AI&rdquo; or set it manually above.
               </p>
             )}
 
