@@ -399,18 +399,43 @@ export function AiSection({ ai, uploadedFiles, onRequestReupload }: AiSectionPro
             {/* Proposed: confirm chip — human confirms or corrects before extraction runs */}
             {classificationStatus === "proposed" && aiBrick && (
               <div className="flex flex-col gap-3">
-                <div className="flex flex-wrap items-center gap-3 rounded border border-primary/30 bg-primary/5 p-3">
-                  <p className="text-sm text-foreground">
-                    Looks like <span className="font-medium">{aiBrick.name}</span> · {aiCategory}
-                    {classificationConfidence != null && ` (${Math.round(classificationConfidence * 100)}%)`}
-                  </p>
-                  <div className="ml-auto flex items-center gap-2">
-                    <Button size="sm" className="gap-1" onClick={() => confirmClassification(aiCategory, aiBrick, classificationConfidence)}>
-                      <Check className="size-3.5" /> Confirm
-                    </Button>
-                    <Button variant="outline" size="sm" onClick={() => setShowManualClassify(true)}>Change</Button>
+                {classificationConfidence != null && classificationConfidence < 0.4 ? (
+                  <div className="flex flex-col gap-3 rounded border border-tg-warning/40 bg-tg-warning/5 p-3">
+                    <div className="flex items-start gap-3">
+                      <AlertCircle className="size-4 text-tg-warning mt-0.5 shrink-0" />
+                      <div className="flex flex-col gap-2">
+                        <p className="text-sm font-medium text-foreground">
+                          Low confidence classification ({Math.round(classificationConfidence * 100)}%)
+                        </p>
+                        <p className="text-sm text-muted-foreground">
+                          The AI is uncertain about this product. Review carefully before confirming, or set the classification manually.
+                        </p>
+                        <p className="text-sm text-foreground">
+                          <span className="font-medium">Suggested:</span> {aiBrick.name} · {aiCategory}
+                        </p>
+                      </div>
+                    </div>
+                    <div className="flex flex-wrap items-center gap-2 pl-7">
+                      <Button size="sm" className="gap-1" onClick={() => confirmClassification(aiCategory, aiBrick, classificationConfidence)}>
+                        <Check className="size-3.5" /> Confirm anyway
+                      </Button>
+                      <Button variant="outline" size="sm" onClick={() => setShowManualClassify(true)}>Classify manually</Button>
+                    </div>
                   </div>
-                </div>
+                ) : (
+                  <div className="flex flex-wrap items-center gap-3 rounded border border-primary/30 bg-primary/5 p-3">
+                    <p className="text-sm text-foreground">
+                      Looks like <span className="font-medium">{aiBrick.name}</span> · {aiCategory}
+                      {classificationConfidence != null && ` (${Math.round(classificationConfidence * 100)}%)`}
+                    </p>
+                    <div className="ml-auto flex items-center gap-2">
+                      <Button size="sm" className="gap-1" onClick={() => confirmClassification(aiCategory, aiBrick, classificationConfidence)}>
+                        <Check className="size-3.5" /> Confirm
+                      </Button>
+                      <Button variant="outline" size="sm" onClick={() => setShowManualClassify(true)}>Change</Button>
+                    </div>
+                  </div>
+                )}
                 {showManualClassify && renderAiIdleControls()}
               </div>
             )}
