@@ -1875,7 +1875,7 @@ export function ImageUploadWizard({
               </p>
             </div>
 
-            <AiSection ai={ai} uploadedFiles={uploadedFiles} />
+            <AiSection ai={ai} uploadedFiles={uploadedFiles} onRequestReupload={handleBack} />
 
             {/* Section separator */}
             <div className="border-t-2 border-border" />

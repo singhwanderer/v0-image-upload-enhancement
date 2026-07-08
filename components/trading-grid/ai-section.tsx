@@ -172,20 +172,24 @@ function UnresolvedSection({
 type AiSectionProps = {
   ai: ReturnType<typeof useAiAttributes>
   uploadedFiles: UploadedFile[]
+  // Lets the "inconsistent images" warning send the user back to re-upload. Omitted at render
+  // sites with no upload step to return to (e.g. the post-submit view).
+  onRequestReupload?: () => void
 }
 
 // Attributes at or above this confidence collapse into the "looks good" band; below it they
 // surface in "Needs attention" for review-by-exception (Task 3).
 const HIGH_CONFIDENCE = 0.9
 
-export function AiSection({ ai, uploadedFiles }: AiSectionProps) {
+export function AiSection({ ai, uploadedFiles, onRequestReupload }: AiSectionProps) {
   const {
     aiCategory, setAiCategory, aiBrick, setAiBrick,
     aiExtraction, aiEditing, setAiEditing,
     classificationStatus, setClassificationStatus, classificationConfidence, setClassificationConfidence, classificationError,
+    classificationOutliers, classificationNote,
     showManualClassify, setShowManualClassify,
     valuesForCodeList, bricksForCategory,
-    runExtraction, runClassification, confirmClassification,
+    runExtraction, runClassification, confirmClassification, confirmPrimaryImage,
     setAttributeDecision, updateAttributeField, selectAttributeValue, resolveUnresolvedAttribute,
     clearExtraction, clearShotSuggestions,
     isExtracting, isComplete, isError, acceptedExtractedAttributes, pendingExtractedCount, acceptAllPending,
@@ -620,6 +624,47 @@ export function AiSection({ ai, uploadedFiles }: AiSectionProps) {
                   </div>
                 )}
                 {showManualClassify && renderAiIdleControls()}
+              </div>
+            )}
+
+            {/* Automated second line of defense (in addition to the same-product gate, which is
+                just a human self-report): Gemini flagged one or more images as not matching the
+                rest. Multi-image only — a single image is never "inconsistent" with itself. */}
+            {classificationStatus === "inconsistent" && (
+              <div className="rounded border border-tg-warning/40 bg-tg-warning/5 p-4 flex flex-col gap-3">
+                <div className="flex items-start gap-3">
+                  <AlertCircle className="size-4 text-tg-warning mt-0.5 shrink-0" />
+                  <div className="flex flex-col gap-1">
+                    <p className="text-sm font-medium text-foreground">
+                      We noticed these images seem to show different products.
+                    </p>
+                    <p className="text-sm text-muted-foreground">
+                      To ensure accurate product classification, please confirm which image represents the primary product you want to catalog, or upload a new set.
+                    </p>
+                    {classificationNote && (
+                      <p className="text-xs text-muted-foreground">{classificationNote}</p>
+                    )}
+                  </div>
+                </div>
+                <div className="flex flex-wrap items-center gap-2 pl-7">
+                  {uploadedFiles.map((f, i) => (
+                    <button
+                      key={f.id}
+                      type="button"
+                      onClick={() => confirmPrimaryImage(i)}
+                      title={f.name}
+                      className={cn(
+                        "size-9 shrink-0 rounded border overflow-hidden bg-muted transition-colors",
+                        classificationOutliers?.includes(f.name) ? "border-tg-warning" : "border-border hover:border-primary"
+                      )}
+                    >
+                      {f.preview && <img src={f.preview} alt="" className="size-full object-cover" />}
+                    </button>
+                  ))}
+                  {onRequestReupload && (
+                    <Button variant="outline" size="sm" onClick={onRequestReupload}>Upload a new set</Button>
+                  )}
+                </div>
               </div>
             )}
 
