@@ -383,6 +383,43 @@ export function useAiAttributes({ uploadedFiles, attributes, setAttributesByImag
     }
   }
 
+  // Per-image on-demand variant: analyzes a single image and merges its suggestion row into
+  // the list (leaving other images' suggestions untouched). This backs the "Suggest with AI"
+  // action inside each image's editing panel, keeping Task 2 opt-in and per-image.
+  const [shotSuggestLoadingIndex, setShotSuggestLoadingIndex] = useState<number | null>(null)
+  const runShotSuggestionForImage = async (fileIndex: number) => {
+    const f = uploadedFiles[fileIndex]
+    if (!f) return
+    setShotSuggestLoadingIndex(fileIndex)
+    setShotSuggestError(null)
+    const productDescription = getAutoPopulatedData().productDescription
+    try {
+      const images = [{ fileName: f.name, imageBase64: await fileToBase64(f.file), mimeType: f.type }]
+      const res = await fetch("/api/suggest-shot-attributes", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ images, productDescription }),
+      })
+      if (!res.ok) {
+        const errBody = await res.json().catch(() => null)
+        throw new Error(errBody?.error || `Suggestion failed (${res.status}).`)
+      }
+      const data = await res.json() as { suggestions: { fileName: string; orientation: string; facing: string; angle: string; description: string; confidence: number }[] }
+      const s = Array.isArray(data.suggestions) ? data.suggestions.find(x => x.fileName === f.name) ?? data.suggestions[0] : undefined
+      if (s) {
+        const row: ShotSuggestionRow = { fileIndex, fileName: f.name, orientation: s.orientation, facing: s.facing, angle: s.angle, description: s.description, confidence: s.confidence, status: "pending" }
+        setShotSuggestions(prev => {
+          const rest = (prev ?? []).filter(p => p.fileIndex !== fileIndex)
+          return [...rest, row].sort((a, b) => a.fileIndex - b.fileIndex)
+        })
+      }
+    } catch (err) {
+      setShotSuggestError(err instanceof Error ? err.message : "Suggestion failed. You can enter image details manually.")
+    } finally {
+      setShotSuggestLoadingIndex(null)
+    }
+  }
+
   // Accept one or many per-shot suggestions: writes into the per-image records.
   const acceptShotSuggestions = (rows: ShotSuggestionRow[]) => {
     setAttributesByImage(prev => {
@@ -444,6 +481,7 @@ export function useAiAttributes({ uploadedFiles, attributes, setAttributesByImag
     runExtraction, runClassification, confirmClassification, confirmPrimaryImage,
     setAttributeDecision, updateAttributeField, selectAttributeValue, resolveUnresolvedAttribute,
     clearExtraction, clearShotSuggestions, runShotSuggestions, acceptShotSuggestions, dismissShotSuggestion,
+    runShotSuggestionForImage, shotSuggestLoadingIndex,
     isExtracting, isComplete, isError, hasExtraction, acceptedExtractedAttributes, pendingExtractedCount, acceptAllPending, acceptPendingByIndex,
   }
 }

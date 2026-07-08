@@ -342,6 +342,15 @@ export function AiSection({ ai, uploadedFiles, onRequestReupload }: AiSectionPro
   // review-by-exception keeps the uncertain items front and center.
   const [looksGoodOpen, setLooksGoodOpen] = useState(false)
 
+  // Same-product confirmation gate. AI Task 1 analyzes every uploaded image together as one
+  // product; if a supplier accidentally mixes products the result is blended/garbage. For
+  // multi-image uploads we ask them to confirm the batch is a single product before the call.
+  const [showSameProductGate, setShowSameProductGate] = useState(false)
+  const startClassification = () => {
+    if (uploadedFiles.length > 1) setShowSameProductGate(true)
+    else void runClassification()
+  }
+
   // Manual category+brick correction panel — the fallback path when the AI proposal (or its
   // absence) isn't right. Picking a brick here confirms classification directly (see the
   // Selects' onValueChange below) and auto-runs the extraction pass, same as accepting a proposal.
@@ -578,15 +587,43 @@ export function AiSection({ ai, uploadedFiles, onRequestReupload }: AiSectionPro
 
             {classificationStatus === "idle" && (
               <div className="flex flex-col gap-3">
-                <div className="flex flex-wrap items-center gap-2">
-                  <Button onClick={() => void runClassification()} disabled={uploadedFiles.length === 0} className="gap-2">
-                    <Sparkles className="size-4" />
-                    Classify &amp; extract with AI
-                  </Button>
-                  <Button variant="outline" size="sm" onClick={() => setShowManualClassify(v => !v)}>
-                    {showManualClassify ? "Hide manual entry" : "Set category & classification manually"}
-                  </Button>
-                </div>
+                {showSameProductGate ? (
+                  <div className="flex flex-col gap-3 rounded border border-border bg-muted/20 p-3">
+                    <div className="flex items-start gap-2">
+                      <Info className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
+                      <div className="flex flex-col gap-0.5">
+                        <p className="text-sm font-medium text-foreground">
+                          Are all {uploadedFiles.length} images of the same product?
+                        </p>
+                        <p className="text-xs text-muted-foreground">
+                          AI analyzes them together as one product. Mixing different products produces inaccurate attributes.
+                        </p>
+                      </div>
+                    </div>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <Button
+                        className="gap-2"
+                        onClick={() => { setShowSameProductGate(false); void runClassification() }}
+                      >
+                        <Sparkles className="size-4" />
+                        Yes, analyze together
+                      </Button>
+                      <Button variant="outline" size="sm" onClick={() => setShowSameProductGate(false)}>
+                        Cancel
+                      </Button>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Button onClick={startClassification} disabled={uploadedFiles.length === 0} className="gap-2">
+                      <Sparkles className="size-4" />
+                      Classify &amp; extract with AI
+                    </Button>
+                    <Button variant="outline" size="sm" onClick={() => setShowManualClassify(v => !v)}>
+                      {showManualClassify ? "Hide manual entry" : "Set category & classification manually"}
+                    </Button>
+                  </div>
+                )}
                 {showManualClassify && renderAiIdleControls()}
               </div>
             )}

@@ -3,6 +3,7 @@
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
+import { Sparkles } from "lucide-react"
 import {
   Select,
   SelectContent,
@@ -49,6 +50,46 @@ export type StepTwoFormProps = {
   // so render every field as one flat list (drop the two group headers and the divider). The
   // measured-from-file block still shows.
   flatten?: boolean
+  // AI Task 2 (opt-in, per image): a pending suggestion for THIS image's Image Details. Fields
+  // stay empty; the suggested value renders as a click-to-apply chip beside the field so the
+  // human stays in control. Applying a chip fills the field via updateAttrs.
+  shotSuggestion?: { orientation: string; facing: string; angle: string; description: string; confidence: number } | null
+  // Trigger to request an AI suggestion for this specific image, plus its loading flag.
+  onSuggestShot?: () => void
+  shotSuggestLoading?: boolean
+}
+
+// Maps a raw suggested value to a known option; returns the human label for the chip. Falls
+// back to the raw value so we never render an empty chip.
+function optionLabel(options: { value: string; label: string }[], raw: string): string {
+  if (!raw) return ""
+  return options.find(o => o.value === raw || o.label === raw)?.label ?? raw
+}
+
+// Small "apply this AI suggestion" chip shown beside an empty Image Details field.
+function SuggestionChip({ label, onApply }: { label: string; onApply: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={onApply}
+      className="mt-1 inline-flex w-fit items-center gap-1 rounded-full border border-primary/30 bg-primary/5 px-2 py-0.5 text-xs text-primary transition-colors hover:bg-primary/10"
+    >
+      <Sparkles className="size-3" />
+      <span className="text-muted-foreground">AI:</span>
+      <span className="font-medium">{label}</span>
+      <span className="ml-0.5 underline">Apply</span>
+    </button>
+  )
+}
+
+// Tiny provenance tag shown once an AI-suggested value has been applied to a field.
+function AiAppliedTag() {
+  return (
+    <span className="mt-1 inline-flex w-fit items-center gap-1 text-xs text-muted-foreground">
+      <Sparkles className="size-3 text-primary" />
+      AI suggested
+    </span>
+  )
 }
 
 // Read-only summary of a file's decoded dimensions/DPI. undefined = measurement in flight.
@@ -60,7 +101,11 @@ export function formatMeasured(m?: MeasuredImageMetadata): string {
   return [dims, dpi].filter(Boolean).join(" · ")
 }
 
-export function StepTwoForm({ currentAttrs, updateAttrs, uploadLevel, autoData, measuredFiles, onApplyPerShotToAll, hideProductWide, flatten }: StepTwoFormProps) {
+export function StepTwoForm({ currentAttrs, updateAttrs, uploadLevel, autoData, measuredFiles, onApplyPerShotToAll, hideProductWide, flatten, shotSuggestion, onSuggestShot, shotSuggestLoading }: StepTwoFormProps) {
+  // Suggested labels for the chips (only shown when the field is still empty).
+  const sOrientation = shotSuggestion ? optionLabel(ORIENTATION_OPTIONS, shotSuggestion.orientation) : ""
+  const sFacing = shotSuggestion ? optionLabel(FACING_OPTIONS, shotSuggestion.facing) : ""
+  const sAngle = shotSuggestion ? optionLabel(ANGLE_OPTIONS, shotSuggestion.angle) : ""
   return (
     <div className="flex flex-col gap-4">
       {!hideProductWide && (
@@ -149,9 +194,21 @@ export function StepTwoForm({ currentAttrs, updateAttrs, uploadLevel, autoData, 
 
       {/* Per-shot group: what makes each photo different — never blanket-applied */}
       {!flatten && (
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           <span className="text-xs font-semibold uppercase tracking-wide text-foreground">Image Details</span>
           <span className="text-xs text-muted-foreground">specific to this photo</span>
+          {onSuggestShot && (
+            <Button
+              variant="outline"
+              size="sm"
+              className="ml-auto h-7 gap-1 px-2 text-xs"
+              onClick={onSuggestShot}
+              disabled={shotSuggestLoading}
+            >
+              <Sparkles className="size-3" />
+              {shotSuggestLoading ? "Suggesting…" : "Suggest with AI"}
+            </Button>
+          )}
         </div>
       )}
 
@@ -187,6 +244,10 @@ export function StepTwoForm({ currentAttrs, updateAttrs, uploadLevel, autoData, 
               {ORIENTATION_OPTIONS.map(o => <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>)}
             </SelectContent>
           </Select>
+          {!currentAttrs.orientation && sOrientation && (
+            <SuggestionChip label={sOrientation} onApply={() => updateAttrs({ ...currentAttrs, orientation: shotSuggestion!.orientation })} />
+          )}
+          {currentAttrs.orientation && shotSuggestion && currentAttrs.orientation === shotSuggestion.orientation && <AiAppliedTag />}
         </div>
         <div className="flex flex-col gap-2">
           <Label className="text-sm font-medium">Facing (GDSN) <span className="text-xs font-normal text-muted-foreground">(optional)</span></Label>
@@ -194,6 +255,10 @@ export function StepTwoForm({ currentAttrs, updateAttrs, uploadLevel, autoData, 
             <SelectTrigger className="w-full bg-background"><SelectValue placeholder="Select facing..." /></SelectTrigger>
             <SelectContent>{FACING_OPTIONS.map(o => <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>)}</SelectContent>
           </Select>
+          {!currentAttrs.facing && sFacing && (
+            <SuggestionChip label={sFacing} onApply={() => updateAttrs({ ...currentAttrs, facing: shotSuggestion!.facing })} />
+          )}
+          {currentAttrs.facing && shotSuggestion && currentAttrs.facing === shotSuggestion.facing && <AiAppliedTag />}
         </div>
         <div className="flex flex-col gap-2">
           <Label className="text-sm font-medium">Angle <span className="text-xs font-normal text-muted-foreground">(optional)</span></Label>
@@ -201,6 +266,10 @@ export function StepTwoForm({ currentAttrs, updateAttrs, uploadLevel, autoData, 
             <SelectTrigger className="w-full bg-background"><SelectValue placeholder="Select angle..." /></SelectTrigger>
             <SelectContent>{ANGLE_OPTIONS.map(o => <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>)}</SelectContent>
           </Select>
+          {!currentAttrs.angle && sAngle && (
+            <SuggestionChip label={sAngle} onApply={() => updateAttrs({ ...currentAttrs, angle: shotSuggestion!.angle })} />
+          )}
+          {currentAttrs.angle && shotSuggestion && currentAttrs.angle === shotSuggestion.angle && <AiAppliedTag />}
         </div>
         <div className="flex flex-col gap-2">
           <Label className="text-sm font-medium">Clipping Path <span className="text-xs font-normal text-muted-foreground">(optional)</span></Label>

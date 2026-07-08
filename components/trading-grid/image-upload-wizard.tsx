@@ -2025,6 +2025,12 @@ export function ImageUploadWizard({
                     measuredFiles={uploadedFiles[activeAttributeImageIndex]
                       ? [{ name: uploadedFiles[activeAttributeImageIndex].name, measured: uploadedFiles[activeAttributeImageIndex].measured }]
                       : []}
+                    shotSuggestion={(() => {
+                      const s = ai.shotSuggestions?.find(x => x.fileIndex === activeAttributeImageIndex && x.status === "pending")
+                      return s ? { orientation: s.orientation, facing: s.facing, angle: s.angle, description: s.description, confidence: s.confidence } : null
+                    })()}
+                    onSuggestShot={() => void ai.runShotSuggestionForImage(activeAttributeImageIndex)}
+                    shotSuggestLoading={ai.shotSuggestLoadingIndex === activeAttributeImageIndex}
                   />
                 </div>
               </div>
