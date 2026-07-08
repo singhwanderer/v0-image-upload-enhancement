@@ -4,7 +4,8 @@
 
 The image upload wizard includes an optional AI Extended Attribute Extraction step (Step 2 of the
 3-step wizard). It extracts GS1-style extended product attributes from uploaded product images using
-a full CSV-derived allow-list of Code List Names, Attribute Values, and GS1 codes (generated at build time).
+a full master-code-list-derived allow-list of Code List Names, Attribute Values, and GS1 codes
+(generated at build time from the GPC matrix CSVs + `gs1_extended_attribute_master_code_list.csv`).
 
 There is a single extraction path: the real Gemini API. There is no mock/demo mode — every
 classification, extraction, and per-shot suggestion call goes to Gemini, and any failure (including
@@ -53,16 +54,17 @@ The route:
 
 ## Grounding and validation
 
-**Gemini is grounded by the full CSV-derived values for the selected category only.**
+**Gemini is grounded by the full master-list values for the selected category only.**
 
-- The route calls `getCategoryOptions(category)`, which returns only the Code List Names that have
-  been explicitly routed to that category in `CATEGORY_ROUTING` (see the generator script).
+- The route calls `getCategoryOptions(category)`, which returns only the Code List Names used by
+  that category's GPC bricks — derived from the E/R marks in the category's matrix CSVs
+  (Clothing.csv, Footwear.csv, …), not hand-curated.
 - Unrelated Code List Names are **excluded entirely**. For example, when `category = Shoes`, Gemini
-  receives no mention of Bedding Size, SPF Rating, Jewelry Type, Beauty Treatment Specialty, Rug Type,
-  Watch Case Shape, or any other non-shoe list.
-- The full CSV (all 94 Code List Names, all categories) is **never sent to Gemini**. Only the
-  relevant subset for the selected category is injected into the prompt, reducing token usage and
-  eliminating confusion from irrelevant lists.
+  receives no mention of SPF Rating, Jewelry Type, Beauty Treatment Specialty, Watch Case Shape,
+  or any other non-shoe list.
+- The full master code list (all 128 Code List Names, all categories) is **never sent to Gemini**.
+  Only the relevant subset for the selected category is injected into the prompt, reducing token
+  usage and eliminating confusion from irrelevant lists.
 - **Server-side validation is authoritative.** After the model responds, the route re-validates every
   suggested attribute: unknown Code List Names are dropped to `unresolvedAttributes`; unknown
   Attribute Values are dropped to `unresolvedAttributes`; the GS1 code is always overwritten with the
@@ -99,23 +101,31 @@ These restrictions are enforced both in the Gemini prompt and in the server-side
 
 ---
 
-## Options map (full CSV, build-time generated)
+## Options map (build-time generated from the reference CSVs)
 
-The allowed-options map is **generated at build time from the full CSV** — no hand-curated subset.
+The bricks map and allowed-options map are **generated at build time from exactly two kinds of
+reference files** — no hand-curated routing, no xlsx:
 
-- **Source:** `GS1_Extended_Attribute_Code_Lists_Fixed.csv` (repo root, 1,419 rows, 94 Code List Names).
-- **Generator:** `scripts/generate-gs1-options.mjs` → run `node scripts/generate-gs1-options.mjs`.
-  It parses the CSV, routes each category to its relevant Code List Names, normalizes OCR artifacts,
-  and emits `lib/gs1/generated-options.ts`.
-- **OCR normalization:** Whitespace artifacts (e.g. `"Bea uty Treatment Specialty"`) are collapsed,
-  and mashed-together rows (e.g. `"Flats GM03SE TPFL Slippers"`) are split back into their two real
-  value/code pairs. Original GS1 codes are preserved verbatim.
-- **Full value coverage per category:** Shoes 264, Apparel 309, Bags 258, Jewelry 186, Beauty 79,
-  Home 122 (every value for the category's relevant Code List Names, not a ~6-value sample).
+- **Sources:**
+  - `gs1_extended_attribute_master_code_list.csv` (repo root, 1,987 rows, 128 Code List Names) —
+    every Code List Value and its authoritative GS1 code.
+  - The per-category GPC matrix CSVs (`Clothing.csv`, `Footwear.csv`, `Sleepwear.csv`, …) — one
+    sheet per GPC family; columns are bricks, rows are attributes, and an `E`/`R` cell marks the
+    attribute as expected/required for that brick.
+- **Generator:** `scripts/generate-gs1-data.mjs` → run `node scripts/generate-gs1-data.mjs` (or
+  `npm run generate:gs1`). It parses the matrix sheets into bricks, resolves each E/R-marked
+  attribute row to a master Code List (skipping free-text attributes like Brand Name with a logged
+  warning), and emits both `lib/gs1/generated-bricks.ts` and `lib/gs1/generated-options.ts`.
+- **OCR normalization:** Whitespace artifacts are collapsed, and mashed-together master rows
+  (e.g. `"Flats GM03SE TPFL Slippers"`) are split back into their two real value/code pairs.
+  Original GS1 codes are preserved verbatim.
+- **Full value coverage per category:** Clothing 913, Shoes 441, Bags 385, Jewelry 370, Beauty 163,
+  Accessories 534 (every value for the category's relevant Code List Names).
 - **Module layout:**
   - `lib/gs1/types.ts` — client-safe types + `PRODUCT_CATEGORIES` (no option data).
+  - `lib/gs1/generated-bricks.ts` — category → GPC bricks → Code List Names (names only, client-safe).
   - `lib/gs1/generated-options.ts` — full options, **server-only by convention** (imported by API routes).
-- **Client never receives the whole CSV:** components fetch a single category via
+- **Client never receives the whole master list:** components fetch a single category via
   `GET /api/attribute-options?category=<Category>` (used for edit dropdowns), cached per category
   with SWR. Gemini grounding (`/api/extract-attributes`) uses the full map server-side.
 
@@ -123,9 +133,10 @@ The allowed-options map is **generated at build time from the full CSV** — no 
 
 ## Known limitations
 
-1. **Category scoping, not full CSV per request.** Each category exposes only its routed Code List
-   Names (full values within those lists). Adding a new Code List to a category requires editing
-   `CATEGORY_ROUTING` in `scripts/generate-gs1-options.mjs` and regenerating.
+1. **Category scoping, not full master list per request.** Each category exposes only the Code
+   List Names its bricks use (full values within those lists). Adding a new attribute to a category
+   means marking it `E`/`R` in the category's matrix CSV (and, if it's a new list, adding its values
+   to the master code list), then regenerating.
 
 2. **One consolidated result for all images.** Extraction returns a single product-level attribute
    set — there is no per-image breakdown of which image contributed which attribute. If images
@@ -133,8 +144,9 @@ The allowed-options map is **generated at build time from the full CSV** — no 
 
 3. **No streaming.** Results appear after the full request completes. There is no partial/streaming UI.
 
-4. **Generated module is committed.** Re-run the generator whenever the CSV or routing changes;
-   the output `lib/gs1/generated-options.ts` is checked into the repo.
+4. **Generated modules are committed.** Re-run the generator whenever any matrix CSV or the master
+   code list changes; the outputs `lib/gs1/generated-options.ts` and `lib/gs1/generated-bricks.ts`
+   are checked into the repo.
 
 ---
 
@@ -143,43 +155,46 @@ The allowed-options map is **generated at build time from the full CSV** — no 
 ### Files changed
 | File | Role |
 |---|---|
-| `scripts/generate-gs1-options.mjs` | Build-time CSV parser and code generator |
+| `scripts/generate-gs1-data.mjs` | Build-time parser for the matrix CSVs + master code list; generates both modules below |
+| `lib/gs1/generated-bricks.ts` | Generated category → bricks → Code List Names map (client-safe) |
 | `lib/gs1/generated-options.ts` | Generated full options map (server-only by convention) |
-| `lib/gs1/types.ts` | Client-safe types: `GS1AttributeOption`, `CategoryOptions`, `ProductCategory`, `isProductCategory` |
+| `lib/gs1/types.ts` | Client-safe types: `AttributeOptionValue`, `CategoryOptions`, `ProductCategory`, `isProductCategory` |
 | `app/api/attribute-options/route.ts` | GET: serves single-category options to client (SWR cache) |
 | `app/api/extract-attributes/route.ts` | POST: accepts `{ category, images: [...] }`, sends all images in one Gemini call, returns one product-level result |
 | `components/trading-grid/image-upload-wizard.tsx` | `ProductExtractionResult` (product-level state), `aiExtraction` (singular), updated handlers and UI |
 | `docs/ai-extraction.md` | This file |
 
 ### Generation approach
-`scripts/generate-gs1-options.mjs` reads `GS1_Extended_Attribute_Code_Lists_Fixed.csv`, normalizes
-OCR whitespace artifacts, splits mashed-together rows (e.g. `"Flats GM03SE TPFL Slippers"` →
-`Flats / GM03SETPFL` + `Slippers / GM03SETPSL`), and emits `lib/gs1/generated-options.ts`. Each
-category maps to a curated list of relevant Code List Names via `CATEGORY_ROUTING`; values for those
-lists are taken wholesale from the CSV. Original GS1 codes are preserved verbatim.
+`scripts/generate-gs1-data.mjs` reads the per-category GPC matrix CSVs and
+`gs1_extended_attribute_master_code_list.csv`, normalizes OCR whitespace artifacts, splits
+mashed-together master rows (e.g. `"Flats GM03SE TPFL Slippers"` → `Flats / GM03SETPFL` +
+`Slippers / GM03SETPSL`), resolves each brick's E/R-marked attribute rows to master Code Lists,
+and emits `lib/gs1/generated-bricks.ts` + `lib/gs1/generated-options.ts`. Original GS1 codes are
+preserved verbatim; there is no hand-authored routing.
 
 ### Category counts
-| Category | Code Lists | Attribute Values | Gemini prompt (bytes) | Client JSON (bytes) |
-|---|---|---|---|---|
-| Shoes | 12 | 264 | 7,350 | 11,667 |
-| Apparel | 11 | 309 | 8,553 | 13,520 |
-| Bags | 8 | 258 | 7,156 | 11,274 |
-| Jewelry | 11 | 186 | 5,141 | 8,263 |
-| Beauty | 6 | 79 | 2,055 | 3,436 |
-| Home | 10 | 122 | 3,597 | 5,729 |
+| Category | Bricks | Code Lists | Attribute Values |
+|---|---|---|---|
+| Clothing | 28 | 47 | 913 |
+| Shoes | 10 | 16 | 441 |
+| Bags | 3 | 10 | 385 |
+| Jewelry | 14 | 12 | 370 |
+| Beauty | 82 | 9 | 163 |
+| Accessories | 5 | 14 | 534 |
 
 ### Test results
 
 **`tsc --noEmit`:** exit 0, zero errors (including after product-level refactor).
 
-**`generate:gs1`:** generates cleanly, 1,218 total values across all categories, zero missing
-`codeListName`/`attributeValue`/`code` fields, zero duplicates within any category code list.
+**`generate:gs1`:** generates cleanly; zero missing `codeListName`/`attributeValue`/`code` fields,
+zero duplicates within any category code list; free-text matrix rows (no master Code List) are
+skipped with logged warnings.
 
-**Category filtering (Shoes):** Bedding Size, SPF Rating, Jewelry Type, Beauty Treatment Specialty,
-Rug Type, Watch Case Shape, Code List for Dinnerware Category — all absent. Pass.
+**Category filtering (Shoes):** SPF Rating, Jewelry Type, Beauty Treatment Specialty,
+Watch Case Shape — all absent. Pass.
 
-**Category filtering (Apparel):** Shoe Type, Heel Type, Bag Type, Jewelry Type, SPF Rating,
-Bedding Size — all absent. Pass.
+**Category filtering (Clothing):** Shoe Type, Heel Height Range, Bag Type, Jewelry Type, SPF Rating
+— all absent. Pass.
 
 **Server-side validation — 400 paths:** malformed JSON → 400; empty `imageBase64` → 400;
 unsupported MIME (`image/bmp`) → 400; invalid category (`Furniture`) → 400. All with clean JSON
@@ -188,7 +203,7 @@ error messages. Pass.
 **Gemini live — Shoes (sneaker image):** 10 accepted attributes, 2 unresolved (`Heel Material`,
 `Water Repellent`). All 10 codes validated against full map — no mismatches. Pass.
 
-**Gemini live — Apparel (floral dress image):** 7 accepted attributes, 4 unresolved (`Closure`,
+**Gemini live — Clothing (floral dress image, ran as "Apparel" pre-rename):** 7 accepted attributes, 4 unresolved (`Closure`,
 `Primary Detail Type`, `Primary Detail Placement`, `Primary Detail Application`). All 7 codes
 validated — no mismatches. Pass.
 
