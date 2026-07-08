@@ -224,10 +224,11 @@ export function useAiAttributes({ uploadedFiles, attributes, setAttributesByImag
 
   // Real Gemini extraction: all uploaded images are sent together in one request,
   // producing one consolidated product-level attribute set.
+  // Brick is optional — extraction can suggest from all category attributes.
   const runGeminiExtraction = async (overrideCategory?: string, overrideBrick?: Brick | null) => {
     const category = overrideCategory ?? aiCategory
     const brick = overrideBrick ?? aiBrick
-    if (!category || !brick || uploadedFiles.length === 0) return
+    if (!category || uploadedFiles.length === 0) return
     const targets = uploadedFiles.map(f => ({ name: f.name, file: f.file, type: f.type }))
     setAiEditing(null)
     setAiExtraction({
@@ -254,7 +255,7 @@ export function useAiAttributes({ uploadedFiles, attributes, setAttributesByImag
       const res = await fetch("/api/extract-attributes", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ category, brick: brick.code, images }),
+        body: JSON.stringify({ category, ...(brick && { brick: brick.code }), images }),
       })
 
       if (!res.ok) {
