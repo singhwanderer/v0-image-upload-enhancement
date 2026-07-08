@@ -1876,7 +1876,7 @@ export function ImageUploadWizard({
                 With multiple files, the two-column layout with the image selector is the default. */}
             {uploadedFiles.length > 1 ? (
               <div className="flex flex-col gap-4">
-                {/* Progress summary — turns "fill N forms" into "clear N status dots" */}
+                {/* Progress summary + global AI suggestions trigger */}
                 <div className="flex flex-wrap items-center gap-2">
                   <span className="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium bg-tg-success/15 text-tg-success">
                     {uploadedFiles.length - missingAttrCount} of {uploadedFiles.length} images ready
@@ -1887,6 +1887,18 @@ export function ImageUploadWizard({
                       {missingAttrCount} need attention
                     </span>
                   )}
+                  {/* Global AI Task 2 trigger: analyzes all images in parallel individual calls and
+                      pre-fills each image's Orientation/Facing/Angle in the dashed unconfirmed state. */}
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="ml-auto h-7 gap-1.5 px-2 text-xs"
+                    disabled={ai.shotSuggestLoading}
+                    onClick={() => void ai.runShotSuggestions()}
+                  >
+                    <Sparkles className="size-3" />
+                    {ai.shotSuggestLoading ? "Suggesting all…" : "Apply all AI suggestions"}
+                  </Button>
                 </div>
 
                 {/* Filmstrip — horizontal thumbnails with status dots; click to jump, arrows to step */}

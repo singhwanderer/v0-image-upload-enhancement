@@ -55,11 +55,13 @@ export type ShotSuggestionRow = {
 // The product-wide + per-shot attribute record shape (matches StepTwoFormProps["currentAttrs"]
 // in step-two-form.tsx). Duplicated here as a plain structural type to avoid a cross-file
 // coupling for what is just a flat string record.
-export type AttributesRecord = {
+  export type AttributesRecord = {
   imageType: string; purpose: string; orientation: string; locationType: string;
   externalLocation: string; imageStyle: string; facing: string; angle: string;
   clippingPath: string; imageDescription: string;
-}
+  // Tracks whether the user has explicitly confirmed an AI-suggested value (dashed → solid).
+  orientationConfirmed?: boolean; facingConfirmed?: boolean; angleConfirmed?: boolean;
+  }
 
 type UseAiAttributesParams = {
   uploadedFiles: UploadedFile[]

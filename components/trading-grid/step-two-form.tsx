@@ -60,30 +60,7 @@ export type StepTwoFormProps = {
   shotSuggestLoading?: boolean
 }
 
-// Maps a raw suggested value to a known option; returns the human label for the chip. Falls
-// back to the raw value so we never render an empty chip.
-function optionLabel(options: { value: string; label: string }[], raw: string): string {
-  if (!raw) return ""
-  return options.find(o => o.value === raw || o.label === raw)?.label ?? raw
-}
-
-// Small "apply this AI suggestion" chip shown beside an empty Image Details field.
-function SuggestionChip({ label, onApply }: { label: string; onApply: () => void }) {
-  return (
-    <button
-      type="button"
-      onClick={onApply}
-      className="mt-1 inline-flex w-fit items-center gap-1 rounded-full border border-primary/30 bg-primary/5 px-2 py-0.5 text-xs text-primary transition-colors hover:bg-primary/10"
-    >
-      <Sparkles className="size-3" />
-      <span className="text-muted-foreground">AI:</span>
-      <span className="font-medium">{label}</span>
-      <span className="ml-0.5 underline">Apply</span>
-    </button>
-  )
-}
-
-// Tiny provenance tag shown once an AI-suggested value has been applied to a field.
+// Tiny provenance tag shown once an AI-suggested value has been confirmed by the user.
 function AiAppliedTag() {
   return (
     <span className="mt-1 inline-flex w-fit items-center gap-1 text-xs text-muted-foreground">
@@ -103,10 +80,6 @@ export function formatMeasured(m?: MeasuredImageMetadata): string {
 }
 
 export function StepTwoForm({ currentAttrs, updateAttrs, uploadLevel, autoData, measuredFiles, onApplyPerShotToAll, hideProductWide, flatten, shotSuggestion, onSuggestShot, shotSuggestLoading }: StepTwoFormProps) {
-  // Suggested labels for the chips (only shown when the field is still empty).
-  const sOrientation = shotSuggestion ? optionLabel(ORIENTATION_OPTIONS, shotSuggestion.orientation) : ""
-  const sFacing = shotSuggestion ? optionLabel(FACING_OPTIONS, shotSuggestion.facing) : ""
-  const sAngle = shotSuggestion ? optionLabel(ANGLE_OPTIONS, shotSuggestion.angle) : ""
   // Image Description is optional and rarely filled — hide it behind a toggle to reduce form
   // weight. Pre-expand it if the field already has a value (e.g. populated by AI suggestion).
   const [showDescription, setShowDescription] = useState(() => !!currentAttrs.imageDescription)
@@ -238,43 +211,95 @@ export function StepTwoForm({ currentAttrs, updateAttrs, uploadLevel, autoData, 
       )}
 
       <div className="grid gap-4 md:grid-cols-2">
-        <div className="flex flex-col gap-2">
-          <Label className="text-sm font-medium">
-            Orientation <span className="text-destructive">*</span>
-          </Label>
-          <Select value={currentAttrs.orientation} onValueChange={(v) => updateAttrs({ ...currentAttrs, orientation: v })}>
-            <SelectTrigger className="w-full bg-background"><SelectValue placeholder="Select orientation..." /></SelectTrigger>
-            <SelectContent>
-              {ORIENTATION_OPTIONS.map(o => <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>)}
-            </SelectContent>
-          </Select>
-          {!currentAttrs.orientation && sOrientation && (
-            <SuggestionChip label={sOrientation} onApply={() => updateAttrs({ ...currentAttrs, orientation: shotSuggestion!.orientation })} />
-          )}
-          {currentAttrs.orientation && shotSuggestion && currentAttrs.orientation === shotSuggestion.orientation && <AiAppliedTag />}
-        </div>
-        <div className="flex flex-col gap-2">
-          <Label className="text-sm font-medium">Facing (GDSN) <span className="text-xs font-normal text-muted-foreground">(optional)</span></Label>
-          <Select value={currentAttrs.facing} onValueChange={(v) => updateAttrs({ ...currentAttrs, facing: v })}>
-            <SelectTrigger className="w-full bg-background"><SelectValue placeholder="Select facing..." /></SelectTrigger>
-            <SelectContent>{FACING_OPTIONS.map(o => <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>)}</SelectContent>
-          </Select>
-          {!currentAttrs.facing && sFacing && (
-            <SuggestionChip label={sFacing} onApply={() => updateAttrs({ ...currentAttrs, facing: shotSuggestion!.facing })} />
-          )}
-          {currentAttrs.facing && shotSuggestion && currentAttrs.facing === shotSuggestion.facing && <AiAppliedTag />}
-        </div>
-        <div className="flex flex-col gap-2">
-          <Label className="text-sm font-medium">Angle <span className="text-xs font-normal text-muted-foreground">(optional)</span></Label>
-          <Select value={currentAttrs.angle} onValueChange={(v) => updateAttrs({ ...currentAttrs, angle: v })}>
-            <SelectTrigger className="w-full bg-background"><SelectValue placeholder="Select angle..." /></SelectTrigger>
-            <SelectContent>{ANGLE_OPTIONS.map(o => <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>)}</SelectContent>
-          </Select>
-          {!currentAttrs.angle && sAngle && (
-            <SuggestionChip label={sAngle} onApply={() => updateAttrs({ ...currentAttrs, angle: shotSuggestion!.angle })} />
-          )}
-          {currentAttrs.angle && shotSuggestion && currentAttrs.angle === shotSuggestion.angle && <AiAppliedTag />}
-        </div>
+        {/* Orientation — required. When a pending AI suggestion exists the Select is pre-filled
+            with the suggested value and rendered with a dashed border to signal "unconfirmed".
+            Changing or re-selecting any value locks the field (removes the dashed state and shows
+            the provenance tag). This matches the spec: field is technically filled but shown as
+            unconfirmed until the human acts. */}
+        {(() => {
+          const suggested = shotSuggestion?.orientation ?? ""
+          // Field is in an "unconfirmed suggestion" state when the value comes from AI and the user
+          // hasn't yet touched it (we detect this by checking if it equals the raw suggestion).
+          const isSuggested = !!suggested && currentAttrs.orientation === suggested && !currentAttrs.orientationConfirmed
+          const isConfirmed = !!currentAttrs.orientation && (!suggested || currentAttrs.orientationConfirmed || currentAttrs.orientation !== suggested)
+          return (
+            <div className="flex flex-col gap-2">
+              <Label className="text-sm font-medium">
+                Orientation <span className="text-destructive">*</span>
+              </Label>
+              <Select
+                value={currentAttrs.orientation || (suggested ? suggested : "")}
+                onValueChange={(v) => updateAttrs({ ...currentAttrs, orientation: v, orientationConfirmed: true })}
+              >
+                <SelectTrigger className={cn("w-full bg-background", isSuggested && "border-dashed border-primary/60")}>
+                  <SelectValue placeholder="Select orientation..." />
+                </SelectTrigger>
+                <SelectContent>
+                  {ORIENTATION_OPTIONS.map(o => <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>)}
+                </SelectContent>
+              </Select>
+              {isSuggested && (
+                <div className="flex items-center gap-2">
+                  <Sparkles className="size-3 text-primary" />
+                  <span className="text-xs text-muted-foreground">AI suggested — select to confirm or change</span>
+                </div>
+              )}
+              {isConfirmed && suggested && <AiAppliedTag />}
+            </div>
+          )
+        })()}
+        {(() => {
+          const suggested = shotSuggestion?.facing ?? ""
+          const isSuggested = !!suggested && currentAttrs.facing === suggested && !currentAttrs.facingConfirmed
+          const isConfirmed = !!currentAttrs.facing && (!suggested || currentAttrs.facingConfirmed || currentAttrs.facing !== suggested)
+          return (
+            <div className="flex flex-col gap-2">
+              <Label className="text-sm font-medium">Facing (GDSN) <span className="text-xs font-normal text-muted-foreground">(optional)</span></Label>
+              <Select
+                value={currentAttrs.facing || (suggested ? suggested : "")}
+                onValueChange={(v) => updateAttrs({ ...currentAttrs, facing: v, facingConfirmed: true })}
+              >
+                <SelectTrigger className={cn("w-full bg-background", isSuggested && "border-dashed border-primary/60")}>
+                  <SelectValue placeholder="Select facing..." />
+                </SelectTrigger>
+                <SelectContent>{FACING_OPTIONS.map(o => <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>)}</SelectContent>
+              </Select>
+              {isSuggested && (
+                <div className="flex items-center gap-2">
+                  <Sparkles className="size-3 text-primary" />
+                  <span className="text-xs text-muted-foreground">AI suggested — select to confirm or change</span>
+                </div>
+              )}
+              {isConfirmed && suggested && <AiAppliedTag />}
+            </div>
+          )
+        })()}
+        {(() => {
+          const suggested = shotSuggestion?.angle ?? ""
+          const isSuggested = !!suggested && currentAttrs.angle === suggested && !currentAttrs.angleConfirmed
+          const isConfirmed = !!currentAttrs.angle && (!suggested || currentAttrs.angleConfirmed || currentAttrs.angle !== suggested)
+          return (
+            <div className="flex flex-col gap-2">
+              <Label className="text-sm font-medium">Angle <span className="text-xs font-normal text-muted-foreground">(optional)</span></Label>
+              <Select
+                value={currentAttrs.angle || (suggested ? suggested : "")}
+                onValueChange={(v) => updateAttrs({ ...currentAttrs, angle: v, angleConfirmed: true })}
+              >
+                <SelectTrigger className={cn("w-full bg-background", isSuggested && "border-dashed border-primary/60")}>
+                  <SelectValue placeholder="Select angle..." />
+                </SelectTrigger>
+                <SelectContent>{ANGLE_OPTIONS.map(o => <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>)}</SelectContent>
+              </Select>
+              {isSuggested && (
+                <div className="flex items-center gap-2">
+                  <Sparkles className="size-3 text-primary" />
+                  <span className="text-xs text-muted-foreground">AI suggested — select to confirm or change</span>
+                </div>
+              )}
+              {isConfirmed && suggested && <AiAppliedTag />}
+            </div>
+          )
+        })()}
         <div className="flex flex-col gap-2">
           <Label className="text-sm font-medium">Clipping Path <span className="text-xs font-normal text-muted-foreground">(optional)</span></Label>
           <Input value={currentAttrs.clippingPath} onChange={(e) => updateAttrs({ ...currentAttrs, clippingPath: e.target.value })} placeholder="Path name..." className="bg-background" />
