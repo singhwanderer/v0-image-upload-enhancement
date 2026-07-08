@@ -86,8 +86,8 @@ export function StepTwoForm({ currentAttrs, updateAttrs, uploadLevel, autoData, 
           {/* Product-wide group: one value for every image of this product */}
           {!flatten && (
             <div className="flex items-center gap-2">
-              <span className="text-xs font-semibold uppercase tracking-wide text-foreground">Product-wide attributes</span>
-              <span className="text-xs text-muted-foreground">apply to every image of this product</span>
+              <span className="text-xs font-semibold uppercase tracking-wide text-foreground">Product Attributes</span>
+              <span className="text-xs text-muted-foreground">shared across all images</span>
             </div>
           )}
 
@@ -150,8 +150,8 @@ export function StepTwoForm({ currentAttrs, updateAttrs, uploadLevel, autoData, 
       {/* Per-shot group: what makes each photo different — never blanket-applied */}
       {!flatten && (
         <div className="flex items-center gap-2">
-          <span className="text-xs font-semibold uppercase tracking-wide text-foreground">Per-shot attributes</span>
-          <span className="text-xs text-muted-foreground">describe this specific image</span>
+          <span className="text-xs font-semibold uppercase tracking-wide text-foreground">Image Details</span>
+          <span className="text-xs text-muted-foreground">specific to this photo</span>
         </div>
       )}
 
@@ -214,7 +214,7 @@ export function StepTwoForm({ currentAttrs, updateAttrs, uploadLevel, autoData, 
 
       {onApplyPerShotToAll && (
         <Button variant="outline" size="sm" className="w-fit" onClick={onApplyPerShotToAll}>
-          Apply this image&apos;s per-shot values to all images
+          Apply to all images
         </Button>
       )}
     </div>

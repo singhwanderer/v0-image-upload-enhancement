@@ -43,6 +43,11 @@ import {
   SheetHeader,
   SheetTitle,
 } from "@/components/ui/sheet"
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover"
 import { cn } from "@/lib/utils"
 import { validateImageBatch, type ValidationError } from "./upload-validation"
 import { measureImageFile } from "./image-metadata"
@@ -268,6 +273,9 @@ export function ImageUploadWizard({
   // here; product-wide keys always resolve from `attributes` (P0.2a).
   const [attributesByImage, setAttributesByImage] = useState<{ [key: number]: typeof attributes }>({})
   const [activeAttributeImageIndex, setActiveAttributeImageIndex] = useState(0)
+  // Controls the "Apply to all images" confirmation popover (overwriting every image's
+  // Image Details is destructive, so it's gated behind an explicit confirm).
+  const [applyAllConfirmOpen, setApplyAllConfirmOpen] = useState(false)
 
   const steps = [
     { number: 1, title: "Target & Files", description: "Select target and upload files" },
@@ -1867,89 +1875,148 @@ export function ImageUploadWizard({
             {/* P0.2a: product-wide fields are entered once; per-shot fields are always per image.
                 With multiple files, the two-column layout with the image selector is the default. */}
             {uploadedFiles.length > 1 ? (
-              <div className="flex gap-4">
-                {/* Left column: thumbnail list ~25% */}
-                <div className="w-1/4 flex flex-col gap-1 border border-border rounded overflow-hidden">
-                  {/* Summary count badge — directions: "Summary count badge" */}
-                  <div className="px-2 pt-2 pb-1">
-                    {missingAttrCount > 0 ? (
-                      <span className="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium bg-tg-warning/15 text-tg-warning">
-                        {missingAttrCount} of {uploadedFiles.length} incomplete
-                      </span>
-                    ) : (
-                      <span className="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium bg-tg-success/15 text-tg-success">
-                        All {uploadedFiles.length} images ready
-                      </span>
-                    )}
-                  </div>
-                  {uploadedFiles.map((file, idx) => (
-                    <button
-                      key={file.id}
-                      onClick={() => setActiveAttributeImageIndex(idx)}
-                      className={cn(
-                        "flex items-center gap-2 px-2 py-2 text-left text-xs transition-colors border-l-2",
-                        activeAttributeImageIndex === idx
-                          ? "border-l-primary bg-primary/5 text-foreground"
-                          : "border-l-transparent hover:bg-muted/40 text-muted-foreground"
-                      )}
-                    >
-                      <span className="shrink-0 text-muted-foreground w-4 text-right">{idx + 1}</span>
-                      <div className="size-10 shrink-0 rounded border border-border overflow-hidden bg-muted">
-                        {file.preview ? (
-                          <img src={file.preview} alt="" className="size-full object-cover" />
-                        ) : (
-                          <FileImage className="size-5 text-muted-foreground m-auto mt-2" />
-                        )}
-                      </div>
-                      <span className="truncate">{file.name.slice(0, 18)}</span>
-                      {/* Per-row completion indicator: per-shot orientation is what varies per image */}
-                      {attributesByImage[idx]?.orientation
-                        ? <Check className="size-3.5 shrink-0 ml-auto text-tg-success" />
-                        : <AlertCircle className="size-3.5 shrink-0 ml-auto text-tg-warning" />}
-                    </button>
-                  ))}
+              <div className="flex flex-col gap-4">
+                {/* Progress summary — turns "fill N forms" into "clear N status dots" */}
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium bg-tg-success/15 text-tg-success">
+                    {uploadedFiles.length - missingAttrCount} of {uploadedFiles.length} images ready
+                  </span>
+                  {missingAttrCount > 0 && (
+                    <span className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium bg-tg-warning/15 text-tg-warning">
+                      <AlertCircle className="size-3" />
+                      {missingAttrCount} need attention
+                    </span>
+                  )}
                 </div>
 
-                {/* Right column: attribute form */}
-                <div className="flex-1 flex flex-col gap-4">
-                  {/* Inline preview (Change 3c) */}
-                  <div className="flex items-start gap-3">
+                {/* Filmstrip — horizontal thumbnails with status dots; click to jump, arrows to step */}
+                <div className="flex items-center gap-2">
+                  <Button
+                    variant="outline"
+                    size="icon"
+                    className="size-8 shrink-0"
+                    aria-label="Previous image"
+                    disabled={activeAttributeImageIndex === 0}
+                    onClick={() => setActiveAttributeImageIndex(i => Math.max(0, i - 1))}
+                  >
+                    <ChevronLeft className="size-4" />
+                  </Button>
+                  <div className="flex flex-1 gap-2 overflow-x-auto pb-1">
+                    {uploadedFiles.map((file, idx) => {
+                      const ready = !!attributesByImage[idx]?.orientation
+                      const pendingSuggestion = ai.shotSuggestions?.some(s => s.fileIndex === idx && s.status === "pending")
+                      return (
+                        <button
+                          key={file.id}
+                          onClick={() => setActiveAttributeImageIndex(idx)}
+                          title={file.name}
+                          aria-label={`Image ${idx + 1}: ${ready ? "ready" : "needs attention"}`}
+                          aria-pressed={activeAttributeImageIndex === idx}
+                          className={cn(
+                            "relative size-16 shrink-0 overflow-hidden rounded border-2 bg-muted transition-colors",
+                            activeAttributeImageIndex === idx ? "border-primary" : "border-border hover:border-primary/50"
+                          )}
+                        >
+                          {file.preview ? (
+                            <img src={file.preview || "/placeholder.svg"} alt="" className="size-full object-cover" />
+                          ) : (
+                            <FileImage className="size-6 text-muted-foreground m-auto mt-5" />
+                          )}
+                          {/* index badge */}
+                          <span className="absolute left-0 top-0 rounded-br bg-background/80 px-1 text-[10px] font-medium text-foreground">
+                            {idx + 1}
+                          </span>
+                          {/* unreviewed AI suggestion marker */}
+                          {pendingSuggestion && (
+                            <span className="absolute right-0 top-0 rounded-bl bg-primary/90 p-0.5">
+                              <Sparkles className="size-2.5 text-primary-foreground" />
+                            </span>
+                          )}
+                          {/* status dot */}
+                          <span
+                            className={cn(
+                              "absolute bottom-1 right-1 size-3 rounded-full border-2 border-background",
+                              ready ? "bg-tg-success" : "bg-tg-warning"
+                            )}
+                          />
+                        </button>
+                      )
+                    })}
+                  </div>
+                  <Button
+                    variant="outline"
+                    size="icon"
+                    className="size-8 shrink-0"
+                    aria-label="Next image"
+                    disabled={activeAttributeImageIndex === uploadedFiles.length - 1}
+                    onClick={() => setActiveAttributeImageIndex(i => Math.min(uploadedFiles.length - 1, i + 1))}
+                  >
+                    <ChevronRight className="size-4" />
+                  </Button>
+                </div>
+
+                {/* Editing panel for the selected image */}
+                <div className="flex flex-col gap-4 rounded border border-border p-4">
+                  <div className="flex flex-wrap items-start gap-3">
                     <div className="size-24 shrink-0 rounded border border-border overflow-hidden bg-muted flex items-center justify-center">
                       {uploadedFiles[activeAttributeImageIndex]?.preview ? (
-                        <img src={uploadedFiles[activeAttributeImageIndex].preview} alt="" className="size-full object-cover" />
+                        <img src={uploadedFiles[activeAttributeImageIndex].preview || "/placeholder.svg"} alt="" className="size-full object-cover" />
                       ) : (
                         <FileImage className="size-8 text-muted-foreground" />
                       )}
                     </div>
-                    {/* Copy per-shot values from another image */}
-                    <div className="flex flex-col gap-1">
-                      <p className="text-xs text-muted-foreground">Copy per-shot attributes from image:</p>
-                      <Select
-                        onValueChange={(val) => {
-                          const srcIdx = parseInt(val)
-                          const src = effectiveAttrs(srcIdx)
-                          setAttributesByImage(prev => {
-                            const rec = { ...(prev[activeAttributeImageIndex] ?? attributes) }
-                            PER_SHOT_KEYS.forEach(k => { rec[k] = src[k] })
-                            return { ...prev, [activeAttributeImageIndex]: rec }
-                          })
-                        }}
-                      >
-                        <SelectTrigger className="w-52 h-8 text-xs bg-background">
-                          <SelectValue placeholder="Select image..." />
-                        </SelectTrigger>
-                        <SelectContent>
-                          {uploadedFiles.map((f, i) => i !== activeAttributeImageIndex && (
-                            <SelectItem key={i} value={String(i)}>
-                              Image {i + 1}: {f.name.slice(0, 20)}
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
+                    <div className="flex flex-1 flex-col gap-2">
+                      <p className="text-xs font-medium text-foreground">
+                        Editing Image {activeAttributeImageIndex + 1}: <span className="text-muted-foreground">{uploadedFiles[activeAttributeImageIndex]?.name}</span>
+                      </p>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <Select
+                          value=""
+                          onValueChange={(val) => {
+                            const srcIdx = parseInt(val)
+                            const src = effectiveAttrs(srcIdx)
+                            setAttributesByImage(prev => {
+                              const rec = { ...(prev[activeAttributeImageIndex] ?? attributes) }
+                              PER_SHOT_KEYS.forEach(k => { rec[k] = src[k] })
+                              return { ...prev, [activeAttributeImageIndex]: rec }
+                            })
+                          }}
+                        >
+                          <SelectTrigger className="w-52 h-8 text-xs bg-background">
+                            <SelectValue placeholder="Copy from another image..." />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {uploadedFiles.map((f, i) => i !== activeAttributeImageIndex && (
+                              <SelectItem key={i} value={String(i)}>
+                                Image {i + 1}: {f.name.slice(0, 20)}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                        {/* Apply to all — destructive overwrite, gated by confirmation */}
+                        <Popover open={applyAllConfirmOpen} onOpenChange={setApplyAllConfirmOpen}>
+                          <PopoverTrigger asChild>
+                            <Button variant="outline" size="sm" className="h-8 text-xs">
+                              Apply to all images
+                            </Button>
+                          </PopoverTrigger>
+                          <PopoverContent className="w-64" align="start">
+                            <div className="flex flex-col gap-3">
+                              <p className="text-sm text-foreground">
+                                Copy this image&apos;s details (orientation, facing, angle, clipping path, description) to all {uploadedFiles.length} images?
+                              </p>
+                              <div className="flex justify-end gap-2">
+                                <Button variant="ghost" size="sm" onClick={() => setApplyAllConfirmOpen(false)}>Cancel</Button>
+                                <Button size="sm" onClick={() => { applyPerShotToAll(); setApplyAllConfirmOpen(false) }}>Apply</Button>
+                              </div>
+                            </div>
+                          </PopoverContent>
+                        </Popover>
+                      </div>
                     </div>
                   </div>
 
-                  {/* Product-wide + active image's per-shot form */}
+                  {/* Product Attributes + this image's Image Details */}
                   <StepTwoForm
                     currentAttrs={getCurrentAttributes()}
                     updateAttrs={updateCurrentAttributes}
@@ -1958,7 +2025,6 @@ export function ImageUploadWizard({
                     measuredFiles={uploadedFiles[activeAttributeImageIndex]
                       ? [{ name: uploadedFiles[activeAttributeImageIndex].name, measured: uploadedFiles[activeAttributeImageIndex].measured }]
                       : []}
-                    onApplyPerShotToAll={applyPerShotToAll}
                   />
                 </div>
               </div>

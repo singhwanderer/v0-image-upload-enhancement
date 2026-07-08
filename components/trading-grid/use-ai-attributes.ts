@@ -424,6 +424,16 @@ export function useAiAttributes({ uploadedFiles, attributes, setAttributesByImag
     })
   }
 
+  // Accept every still-pending suggestion whose index is in the given set — used to accept a
+  // single review band ("Looks good") without touching the other band.
+  const acceptPendingByIndex = (indices: number[]) => {
+    const set = new Set(indices)
+    setAiExtraction(prev => {
+      if (!prev) return prev
+      return { ...prev, attributes: prev.attributes.map((a, i) => set.has(i) && a.decision === "pending" ? { ...a, decision: "accepted" as const } : a) }
+    })
+  }
+
   return {
     aiCategory, setAiCategory, aiBrick, setAiBrick,
     aiExtraction, aiEditing, setAiEditing, shotSuggestions, shotSuggestLoading, shotSuggestError,
@@ -434,6 +444,6 @@ export function useAiAttributes({ uploadedFiles, attributes, setAttributesByImag
     runExtraction, runClassification, confirmClassification, confirmPrimaryImage,
     setAttributeDecision, updateAttributeField, selectAttributeValue, resolveUnresolvedAttribute,
     clearExtraction, clearShotSuggestions, runShotSuggestions, acceptShotSuggestions, dismissShotSuggestion,
-    isExtracting, isComplete, isError, hasExtraction, acceptedExtractedAttributes, pendingExtractedCount, acceptAllPending,
+    isExtracting, isComplete, isError, hasExtraction, acceptedExtractedAttributes, pendingExtractedCount, acceptAllPending, acceptPendingByIndex,
   }
 }
