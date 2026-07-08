@@ -81,7 +81,7 @@ function clampConfidence(value: unknown): number {
   const n = typeof value === "number" ? value : Number.parseFloat(String(value))
   if (!Number.isFinite(n)) return 0.5
   if (n < 0) return 0
-  if (n > 1) return 1
+  if (n >= 0.95) return 0.95
   return n
 }
 
@@ -150,8 +150,13 @@ export async function POST(request: Request) {
   }
 
   // 5. Load this category's GS1 options (never the full CSV, never other categories).
-  //    Use all category attributes for extraction, not brick-scoped.
-  const options = getCategoryOptions(category)
+  //    When a confirmed brick is present, scope to its E-marked attributeCodeListNames so
+  //    only applicable attributes are sent to the model (e.g. no Dress Type for a Jacket).
+  //    When no brick is confirmed, fall back to the full category attribute set.
+  const allOptions = getCategoryOptions(category)
+  const options = brick?.attributeCodeListNames?.length
+    ? allOptions.filter(o => brick.attributeCodeListNames.includes(o.codeListName))
+    : allOptions
   if (options.length === 0) {
     return NextResponse.json<ExtractionApiResponse>({
       category,
@@ -209,7 +214,7 @@ Rules:
 - Visual inference is allowed for most attributes — suggest them if the product appearance in any image supports the classification.
 - The following attributes require visible text on packaging, labels, or product markings and must NOT be inferred from appearance alone: Advertised Origin, Care Instructions, Water Repellent, SPF Rating, Scent Type, Material Composition. If not readable in any image, move them to unresolvedAttributes.
 - Reference the image name(s) in the reason field where helpful (e.g. "Visible in Image 1: front-view.jpg").
-- Confidence must be a number between 0 and 1.
+- Confidence must be a number between 0 and 0.95. Ask yourself: how certain am I that this specific attribute value is correct for this product based on what I can see? Use this scale: 0.95 = unmistakably clear and unambiguous in the image; 0.8 = clearly visible but requires minor inference; 0.65 = partially visible or style-inferred; 0.5 = uncertain, based mostly on inference. Never return 1.0 — all AI suggestions require human review.
 - Return JSON only, with no markdown fences and no commentary.
 
 Return JSON in exactly this shape:
