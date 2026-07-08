@@ -60,11 +60,13 @@ export type ShotSuggestionState = { [imageIndex: number]: ShotSuggestionEntry }
 // The product-wide + per-shot attribute record shape (matches StepTwoFormProps["currentAttrs"]
 // in step-two-form.tsx). Duplicated here as a plain structural type to avoid a cross-file
 // coupling for what is just a flat string record.
-export type AttributesRecord = {
+  export type AttributesRecord = {
   imageType: string; purpose: string; orientation: string; locationType: string;
   externalLocation: string; imageStyle: string; facing: string; angle: string;
   clippingPath: string; imageDescription: string;
-}
+  // Tracks whether the user has explicitly confirmed an AI-suggested value (dashed → solid).
+  orientationConfirmed?: boolean; facingConfirmed?: boolean; angleConfirmed?: boolean;
+  }
 
 type UseAiAttributesParams = {
   uploadedFiles: UploadedFile[]
@@ -485,6 +487,16 @@ export function useAiAttributes({ uploadedFiles, attributes, setAttributesByImag
     })
   }
 
+  // Accept every still-pending suggestion whose index is in the given set — used to accept a
+  // single review band ("Looks good") without touching the other band.
+  const acceptPendingByIndex = (indices: number[]) => {
+    const set = new Set(indices)
+    setAiExtraction(prev => {
+      if (!prev) return prev
+      return { ...prev, attributes: prev.attributes.map((a, i) => set.has(i) && a.decision === "pending" ? { ...a, decision: "accepted" as const } : a) }
+    })
+  }
+
   return {
     aiCategory, setAiCategory, aiBrick, setAiBrick,
     aiExtraction, aiEditing, setAiEditing, shotSuggestions,
@@ -497,6 +509,6 @@ export function useAiAttributes({ uploadedFiles, attributes, setAttributesByImag
     clearExtraction, clearShotSuggestions,
     runShotSuggestionForImage, runAllShotSuggestions, acceptShotField, acceptShotImage,
     overrideShotField, clearShotSuggestionEntry, hasUnreviewedSuggestion, anyShotSuggestLoading,
-    isExtracting, isComplete, isError, hasExtraction, acceptedExtractedAttributes, pendingExtractedCount, acceptAllPending,
+    isExtracting, isComplete, isError, hasExtraction, acceptedExtractedAttributes, pendingExtractedCount, acceptAllPending, acceptPendingByIndex,
   }
 }

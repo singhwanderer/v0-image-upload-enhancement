@@ -58,7 +58,7 @@ export function AiAttributesTable({ attributes, category, brickName, brickCode, 
         </table>
       </div>
       <p className="text-xs text-muted-foreground">
-        AI attributes apply to all images of this product — this is a product-level attribute set, stored separately from per-image attributes.
+        These attributes describe the product and apply to all of its images.
       </p>
     </div>
   )

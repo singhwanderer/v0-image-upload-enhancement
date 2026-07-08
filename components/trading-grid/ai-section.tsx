@@ -40,21 +40,36 @@ import { cn } from "@/lib/utils"
 import { getCategoryBricks } from "@/lib/gs1/generated-bricks"
 import type { UploadedFile } from "./uploaded-file"
 import { useAiAttributes, PRODUCT_CATEGORIES } from "./use-ai-attributes"
+import { ORIENTATION_OPTIONS, FACING_OPTIONS } from "./attribute-options"
 import type { ExtractedAttribute, UnresolvedAttribute } from "@/lib/gs1/types"
 
-// ── Searchable combobox (code — value) for resolving an unresolved attribute or editing a
-// suggested one. triggerLabel shows the current value when used as an inline editor. ──────────
-function UnresolvedCombobox({
+// Attributes at or above this confidence are treated as "looks good" and collapsed by default;
+// below it they surface in the "Needs your attention" band. Review-by-exception: the human's
+// eye goes to the uncertain items first, but every attribute stays fully editable.
+const ATTENTION_THRESHOLD = 0.9
+
+// ── Searchable combobox for picking a GS1 code-list value ───────────────────────
+// Used both to resolve an unresolved attribute (no current value → "Set value") and to
+// edit an extracted attribute's value in place (shows the current value in the trigger).
+// Every option renders as `CODE — value` and is searchable by either.
+function ValueCombobox({
   options,
+  value,
   onSelect,
-  triggerLabel,
+  placeholder = "Set value",
+  triggerClassName,
+  fullWidth,
 }: {
   options: { code: string; value: string }[]
+  value?: string
   onSelect: (value: string) => void
-  triggerLabel?: string
+  placeholder?: string
+  triggerClassName?: string
+  fullWidth?: boolean
 }) {
   const [open, setOpen] = useState(false)
   const [search, setSearch] = useState("")
+  const selected = value ? options.find((o) => o.value === value) : undefined
 
   return (
     <Popover open={open} onOpenChange={setOpen}>
@@ -63,15 +78,17 @@ function UnresolvedCombobox({
           variant="outline"
           size="sm"
           className={cn(
-            "h-7 gap-1 px-2 text-xs font-normal",
-            triggerLabel ? "max-w-56 text-foreground" : "text-muted-foreground"
+            "h-8 justify-between gap-1 px-2 text-xs font-normal",
+            !value && "text-muted-foreground",
+            fullWidth && "w-full",
+            triggerClassName,
           )}
         >
-          <span className="truncate">{triggerLabel ?? "Set value"}</span>
-          <ChevronsUpDown className="size-3 opacity-50" />
+          <span className="truncate">{value ? value : placeholder}</span>
+          <ChevronsUpDown className="size-3 shrink-0 opacity-50" />
         </Button>
       </PopoverTrigger>
-      <PopoverContent className="w-72 p-0" align="end">
+      <PopoverContent className="w-72 p-0" align="start">
         <Command>
           <CommandInput
             placeholder="Search code or value…"
@@ -93,6 +110,7 @@ function UnresolvedCombobox({
                   }}
                   className="text-xs"
                 >
+                  <Check className={cn("mr-1 size-3", selected?.code === o.code ? "opacity-100" : "opacity-0")} />
                   <span className="font-mono text-muted-foreground mr-2">{o.code}</span>
                   {o.value}
                 </CommandItem>
@@ -148,7 +166,7 @@ function UnresolvedSection({
                   <span className="text-muted-foreground">{u.reason}</span>
                 </div>
                 {options.length > 0 && (
-                  <UnresolvedCombobox
+                  <ValueCombobox
                     options={options}
                     onSelect={(value) => resolveUnresolvedAttribute(i, u.codeListName, value)}
                   />
@@ -157,6 +175,136 @@ function UnresolvedSection({
             )
           })}
         </ul>
+      )}
+    </div>
+  )
+}
+
+// ── Compact, review-by-exception product attribute card ─────────────────────────
+// One tight row: confidence dot + label + Accept/Reject/Edit. The value sits below; the
+// GS1 code and AI reasoning are hidden behind a "Details" disclosure so the supplier can
+// scan values fast and only dig in when something looks off. Every card — regardless of
+// confidence — keeps Accept / Reject / Edit (human-in-the-loop on all values).
+function ProductAttributeCard({
+  attr,
+  idx,
+  editing,
+  options,
+  onEditToggle,
+  onDecision,
+  onSelectValue,
+  onFieldChange,
+}: {
+  attr: ExtractedAttribute
+  idx: number
+  editing: boolean
+  options: { code: string; value: string }[]
+  onEditToggle: () => void
+  onDecision: (decision: "accepted" | "rejected" | "pending") => void
+  onSelectValue: (value: string) => void
+  onFieldChange: (field: "attributeValue" | "code", value: string) => void
+}) {
+  const [showDetails, setShowDetails] = useState(false)
+  const pct = Math.round(attr.confidence * 100)
+  const dotColor =
+    attr.confidence >= 0.9 ? "bg-tg-success"
+      : attr.confidence >= 0.75 ? "bg-tg-warning"
+      : "bg-destructive"
+
+  return (
+    <div
+      className={cn(
+        "flex flex-col gap-1.5 rounded border p-2.5",
+        attr.decision === "accepted" ? "border-tg-success/40 bg-card"
+          : attr.decision === "rejected" ? "border-border bg-muted/30 opacity-70"
+          : "border-border bg-card",
+      )}
+    >
+      <div className="flex items-center justify-between gap-2">
+        <div className="flex min-w-0 items-center gap-1.5">
+          <span className={cn("size-2 shrink-0 rounded-full", dotColor)} title={`${pct}% confidence`} />
+          <span className="truncate text-xs font-medium uppercase tracking-wide text-muted-foreground">{attr.codeListName}</span>
+          {attr.decision === "accepted" && <Check className="size-3 shrink-0 text-tg-success" />}
+          {attr.decision === "rejected" && <X className="size-3 shrink-0 text-muted-foreground" />}
+        </div>
+        <div className="flex shrink-0 items-center gap-0.5">
+          <Button
+            variant={attr.decision === "accepted" ? "default" : "ghost"}
+            size="icon"
+            className="size-7"
+            aria-label="Accept"
+            aria-pressed={attr.decision === "accepted"}
+            onClick={() => onDecision(attr.decision === "accepted" ? "pending" : "accepted")}
+          >
+            <Check className="size-3.5" />
+          </Button>
+          <Button
+            variant="ghost"
+            size="icon"
+            className={cn("size-7", attr.decision === "rejected" ? "bg-destructive/10 text-destructive" : "text-muted-foreground hover:text-destructive")}
+            aria-label="Reject"
+            aria-pressed={attr.decision === "rejected"}
+            onClick={() => onDecision(attr.decision === "rejected" ? "pending" : "rejected")}
+          >
+            <X className="size-3.5" />
+          </Button>
+          <Button
+            variant={editing ? "secondary" : "ghost"}
+            size="icon"
+            className="size-7 text-muted-foreground"
+            aria-label="Edit"
+            aria-pressed={editing}
+            onClick={onEditToggle}
+          >
+            <Pencil className="size-3.5" />
+          </Button>
+        </div>
+      </div>
+
+      {editing ? (
+        <div className="flex flex-col gap-2 pt-0.5">
+          {options.length > 0 ? (
+            <ValueCombobox
+              fullWidth
+              options={options}
+              value={options.some(v => v.value === attr.attributeValue) ? attr.attributeValue : undefined}
+              onSelect={onSelectValue}
+              placeholder="Select a value…"
+            />
+          ) : (
+            <Input
+              value={attr.attributeValue}
+              onChange={(e) => onFieldChange("attributeValue", e.target.value)}
+              className="h-8 bg-background"
+              autoFocus
+            />
+          )}
+          <Button size="sm" variant="outline" className="h-7 w-fit gap-1 px-2 text-xs" onClick={onEditToggle}>
+            <Check className="size-3" /> Done
+          </Button>
+        </div>
+      ) : (
+        <>
+          <p className="text-sm font-medium text-foreground">{attr.attributeValue}</p>
+          <button
+            type="button"
+            className="flex w-fit items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
+            onClick={() => setShowDetails(v => !v)}
+            aria-expanded={showDetails}
+          >
+            {showDetails ? <ChevronDown className="size-3" /> : <ChevronRight className="size-3" />}
+            Details
+          </button>
+          {showDetails && (
+            <div className="flex flex-col gap-1 pl-4">
+              <p className="text-xs text-muted-foreground">
+                GS1 Code: <span className="font-mono text-foreground">{attr.code}</span>
+                <span className="ml-2">Confidence: {pct}%</span>
+              </p>
+              {attr.reason && <p className="text-xs text-muted-foreground">{attr.reason}</p>}
+            </div>
+          )}
+        </>
       )}
     </div>
   )
@@ -192,7 +340,7 @@ export function AiSection({ ai, uploadedFiles, onRequestReupload }: AiSectionPro
     runExtraction, runClassification, confirmClassification, confirmPrimaryImage,
     setAttributeDecision, updateAttributeField, selectAttributeValue, resolveUnresolvedAttribute,
     clearExtraction, clearShotSuggestions,
-    isExtracting, isComplete, isError, acceptedExtractedAttributes, pendingExtractedCount, acceptAllPending,
+    isExtracting, isComplete, isError, acceptedExtractedAttributes, pendingExtractedCount, acceptAllPending, acceptPendingByIndex,
   } = ai
 
   // Same-product gate (Task 2): with 2+ images, "Classify & extract" first asks the user to
@@ -442,62 +590,88 @@ export function AiSection({ ai, uploadedFiles, onRequestReupload }: AiSectionPro
         </div>
         <div className="flex items-start gap-2 rounded bg-muted/30 p-2">
           <Info className="size-3.5 text-muted-foreground mt-0.5 shrink-0" />
-          <p className="text-xs text-muted-foreground">All images were analyzed together as one product — review AI suggestions before saving.</p>
+          <p className="text-xs text-muted-foreground">AI suggestions apply to all images of this product. Review each before saving.</p>
         </div>
 
-        {/* Product-level attribute bands: review-by-exception */}
-        <div className="flex flex-col gap-3 rounded border border-border p-3">
+        {/* Product-level attribute cards — no wrapper box; bands lay flat inside the results card */}
+        <div className="flex flex-col gap-3">
           {aiExtraction.attributes.length === 0 ? (
             <p className="text-sm text-muted-foreground">No extended attributes were suggested for this category.</p>
           ) : (
-            <>
-              {needsAttention.length > 0 && (
-                <div className="flex flex-col gap-2">
-                  <p className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-tg-warning">
-                    <AlertCircle className="size-3.5" />
-                    Needs attention ({needsAttention.length})
-                  </p>
-                  <div className="flex flex-col gap-2">
-                    {needsAttention.map(({ attr, idx }) => renderCompactAttrCard(attr, idx))}
-                  </div>
-                </div>
-              )}
-              {looksGood.length > 0 && (
-                <div className="flex flex-col gap-2">
-                  <div className="flex items-center gap-2">
-                    <button
-                      type="button"
-                      onClick={() => setLooksGoodOpen(v => !v)}
-                      aria-expanded={looksGoodOpen}
-                      className="flex items-center gap-1.5"
-                    >
-                      {looksGoodOpen
-                        ? <ChevronDown className="size-3.5 text-muted-foreground" />
-                        : <ChevronRight className="size-3.5 text-muted-foreground" />}
-                      <span className="inline-flex items-center gap-1 rounded-full bg-tg-success/15 px-2 py-0.5 text-xs font-medium text-tg-success">
-                        <Check className="size-3" />
-                        {looksGood.length} attribute{looksGood.length !== 1 ? "s" : ""} look{looksGood.length === 1 ? "s" : ""} good
-                      </span>
-                    </button>
-                    {looksGoodPending.length > 0 && (
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        className="h-6 gap-1 px-2 text-xs"
-                        onClick={() => looksGoodPending.forEach(({ idx }) => setAttributeDecision(idx, "accepted"))}
-                      >
-                        <Check className="size-3" /> Accept all
-                      </Button>
-                    )}
-                  </div>
-                  {looksGoodOpen && (
+            (() => {
+              const withIdx = aiExtraction.attributes.map((attr, idx) => ({ attr, idx }))
+              const needsAttention = withIdx.filter(({ attr }) => attr.confidence < ATTENTION_THRESHOLD)
+              const looksGood = withIdx.filter(({ attr }) => attr.confidence >= ATTENTION_THRESHOLD)
+              const looksGoodPending = looksGood.filter(({ attr }) => attr.decision === "pending").map(({ idx }) => idx)
+              const renderCard = ({ attr, idx }: { attr: ExtractedAttribute; idx: number }) => (
+                <ProductAttributeCard
+                  key={`${attr.code}-${idx}`}
+                  attr={attr}
+                  idx={idx}
+                  editing={aiEditing?.index === idx}
+                  options={valuesForCodeList(attr.codeListName)}
+                  onEditToggle={() => setAiEditing(aiEditing?.index === idx ? null : { index: idx })}
+                  onDecision={(d) => setAttributeDecision(idx, d)}
+                  onSelectValue={(v) => selectAttributeValue(idx, v)}
+                  onFieldChange={(f, v) => updateAttributeField(idx, f, v)}
+                />
+              )
+              return (
+                <div className="flex flex-col gap-3">
+                  {/* Needs attention band — low confidence, always expanded */}
+                  {needsAttention.length > 0 && (
                     <div className="flex flex-col gap-2">
-                      {looksGood.map(({ attr, idx }) => renderCompactAttrCard(attr, idx))}
+                      <div className="flex items-center gap-1.5">
+                        <AlertCircle className="size-3.5 text-tg-warning" />
+                        <p className="text-xs font-semibold uppercase tracking-wide text-tg-warning">
+                          Needs your attention ({needsAttention.length})
+                        </p>
+                      </div>
+                      <div className="grid grid-cols-1 gap-2 md:grid-cols-2">
+                        {needsAttention.map(renderCard)}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Looks good band — high confidence, collapsed by default */}
+                  {looksGood.length > 0 && (
+                    <div className="flex flex-col overflow-hidden rounded border border-border bg-muted/20">
+                      <div className="flex items-center gap-2 px-3 py-2">
+                        <button
+                          type="button"
+                          className="flex flex-1 items-center gap-2 text-left"
+                          onClick={() => setLooksGoodOpen(v => !v)}
+                          aria-expanded={looksGoodOpen}
+                        >
+                          {looksGoodOpen
+                            ? <ChevronDown className="size-3.5 shrink-0 text-muted-foreground" />
+                            : <ChevronRight className="size-3.5 shrink-0 text-muted-foreground" />}
+                          <Check className="size-3.5 shrink-0 text-tg-success" />
+                          <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                            {looksGood.length} attribute{looksGood.length !== 1 ? "s" : ""} look good
+                          </p>
+                        </button>
+                        {looksGoodPending.length > 0 && (
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            className="h-7 shrink-0 gap-1 px-2 text-xs"
+                            onClick={() => acceptPendingByIndex(looksGoodPending)}
+                          >
+                            <Check className="size-3" /> Accept all
+                          </Button>
+                        )}
+                      </div>
+                      {looksGoodOpen && (
+                        <div className="grid grid-cols-1 gap-2 px-3 pb-3 md:grid-cols-2">
+                          {looksGood.map(renderCard)}
+                        </div>
+                      )}
                     </div>
                   )}
                 </div>
-              )}
-            </>
+              )
+            })()
           )}
 
           {/* Unresolved attributes — product level, collapsible */}
@@ -688,7 +862,7 @@ export function AiSection({ ai, uploadedFiles, onRequestReupload }: AiSectionPro
 
             {classificationStatus === "confirmed" && (
               <div className="flex flex-col gap-3">
-                {/* No "Classified as …" chip here (Task 3) — the results card's Product Category
+                {/* No "Classified as …" chip here — the results card's Product Category
                     line is the single source; while extracting, the confirmed classification
                     shows as an inline loading line instead of a separate box. */}
                 <div className="flex items-center justify-between gap-2">

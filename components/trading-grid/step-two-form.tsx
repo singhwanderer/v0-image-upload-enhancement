@@ -1,8 +1,8 @@
 "use client"
 
-import { Sparkles } from "lucide-react"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
+import { Sparkles } from "lucide-react"
 import {
   Select,
   SelectContent,
@@ -96,6 +96,7 @@ export function StepTwoForm({ currentAttrs, updateAttrs, uploadLevel, autoData, 
       </span>
     )
   }
+
 
   return (
     <div className="flex flex-col gap-4">
