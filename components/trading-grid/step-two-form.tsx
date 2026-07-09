@@ -179,9 +179,20 @@ export function StepTwoForm({ currentAttrs, updateAttrs, uploadLevel, autoData, 
           )}
 
           <div className="grid gap-4 md:grid-cols-2">
-            {/* Dimension fields — auto-populated from EXIF, editable as override */}
+            {/* Dimension fields — auto-populated from EXIF, user-editable as override.
+                `measured` is undefined while in-flight, null-field means file has no metadata. */}
             {measuredFiles && measuredFiles.length > 0 && (() => {
               const f = measuredFiles[0]
+              const inFlight = f.measured === undefined
+              // Width
+              const widthVal = inFlight ? "" : (f.measured?.width != null ? String(f.measured.width) : "")
+              const widthPlaceholder = inFlight ? "Measuring…" : "Not available"
+              // Height
+              const heightVal = inFlight ? "" : (f.measured?.height != null ? String(f.measured.height) : "")
+              const heightPlaceholder = inFlight ? "Measuring…" : "Not available"
+              // DPI — null means file carries no density metadata, which is very common
+              const dpiVal = inFlight ? "" : (f.measured?.dpi != null ? String(f.measured.dpi) : "")
+              const dpiPlaceholder = inFlight ? "Measuring…" : "Not in file"
               return (
                 <>
                   <div className="flex flex-col gap-2">
@@ -190,10 +201,9 @@ export function StepTwoForm({ currentAttrs, updateAttrs, uploadLevel, autoData, 
                       <span className="rounded bg-primary/10 px-1.5 py-0.5 text-[10px] font-medium text-primary">Auto-detected</span>
                     </Label>
                     <Input
-                      value={f.measured?.width ?? ""}
-                      readOnly
-                      placeholder="Measuring…"
-                      className="bg-muted/30 text-foreground cursor-default"
+                      defaultValue={widthVal}
+                      placeholder={widthPlaceholder}
+                      className="bg-background"
                     />
                   </div>
                   <div className="flex flex-col gap-2">
@@ -202,10 +212,9 @@ export function StepTwoForm({ currentAttrs, updateAttrs, uploadLevel, autoData, 
                       <span className="rounded bg-primary/10 px-1.5 py-0.5 text-[10px] font-medium text-primary">Auto-detected</span>
                     </Label>
                     <Input
-                      value={f.measured?.height ?? ""}
-                      readOnly
-                      placeholder="Measuring…"
-                      className="bg-muted/30 text-foreground cursor-default"
+                      defaultValue={heightVal}
+                      placeholder={heightPlaceholder}
+                      className="bg-background"
                     />
                   </div>
                   <div className="flex flex-col gap-2">
@@ -214,10 +223,9 @@ export function StepTwoForm({ currentAttrs, updateAttrs, uploadLevel, autoData, 
                       <span className="rounded bg-primary/10 px-1.5 py-0.5 text-[10px] font-medium text-primary">Auto-detected</span>
                     </Label>
                     <Input
-                      value={f.measured?.dpi ?? ""}
-                      readOnly
-                      placeholder="Measuring…"
-                      className="bg-muted/30 text-foreground cursor-default"
+                      defaultValue={dpiVal}
+                      placeholder={dpiPlaceholder}
+                      className="bg-background"
                     />
                   </div>
                   {/* Spacer to keep grid balanced when DPI is the third field */}

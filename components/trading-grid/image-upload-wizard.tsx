@@ -357,6 +357,10 @@ export function ImageUploadWizard({
       preview: URL.createObjectURL(file),
       status: "complete" as const,
     }))
+    // Clear per-image attributes from previous upload sessions to avoid stale data.
+    if (uploadedFiles.length === 0) {
+      setAttributesByImage({})
+    }
     setUploadedFiles(prev => [...prev, ...newFiles])
     // Auto-capture dimensions/DPI by decoding each staged file (deterministic, no AI).
     // Patched by id so a file deleted mid-measurement is a no-op, never resurrected.
@@ -1861,14 +1865,47 @@ export function ImageUploadWizard({
 
             {/* ── Section 2: Image Details — image type/purpose/format (once per product) plus
                 per-image fields with filmstrip navigation (Task 4) ── */}
-            <div className="flex flex-wrap items-end justify-between gap-2">
-              <div>
-                <h2 className="text-lg font-medium text-foreground">Image Details</h2>
-                <p className="mt-1 text-sm text-muted-foreground">
-                  Image type, purpose, and format apply to every image; orientation, facing, angle, style, and description are set per image.
-                </p>
-              </div>
-            </div>
+            {(() => {
+              const totalUnreviewed = uploadedFiles.reduce(
+                (acc, _, i) => acc + (ai.hasUnreviewedSuggestion(i) ? 1 : 0), 0
+              )
+              const hasPending = totalUnreviewed > 0
+              const isLoading = ai.anyShotSuggestLoading
+              return (
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div>
+                    <h2 className="text-lg font-medium text-foreground">Image Details</h2>
+                    <p className="mt-1 text-sm text-muted-foreground">
+                      Image type, purpose, and format apply to every image; orientation, facing, angle, style, and description are set per image.
+                    </p>
+                  </div>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="gap-1.5 shrink-0 mt-0.5"
+                    disabled={isLoading}
+                    onClick={() => {
+                      if (hasPending) {
+                        acceptAllShotSuggestions()
+                      } else {
+                        void ai.runAllShotSuggestions()
+                      }
+                    }}
+                  >
+                    {isLoading ? (
+                      <Loader2 className="size-3.5 animate-spin" />
+                    ) : hasPending ? (
+                      <Check className="size-3.5" />
+                    ) : (
+                      <Sparkles className="size-3.5" />
+                    )}
+                    {hasPending
+                      ? `Apply AI Suggestions (${totalUnreviewed})`
+                      : "Suggest with AI"}
+                  </Button>
+                </div>
+              )
+            })()}
 
             {/* Image type/purpose/format — one shared value for every image of this product,
                 entered once here rather than repeated per image (Task 5 feedback: these are
@@ -1966,59 +2003,23 @@ export function ImageUploadWizard({
 
             {/* Editing panel for the selected image */}
             <div className="flex flex-col gap-4 rounded border border-border p-4">
-              {uploadedFiles.length > 0 && (() => {
-                // Two-stage button logic:
-                // Stage 1 — "Suggest with AI": no suggestions exist yet (or all applied). Runs all images.
-                // Stage 2 — "Apply AI Suggestions (N)": suggestions exist. Accepts all pending ones.
-                const totalUnreviewed = uploadedFiles.reduce(
-                  (acc, _, i) => acc + (ai.hasUnreviewedSuggestion(i) ? 1 : 0), 0
-                )
-                const hasPending = totalUnreviewed > 0
-                const isLoading = ai.anyShotSuggestLoading
-                return (
-                  <div className="flex flex-wrap items-start justify-between gap-3">
-                    <div className="flex items-center gap-3">
-                      <div className="flex size-16 shrink-0 items-center justify-center overflow-hidden rounded border border-border bg-muted">
-                        {uploadedFiles[activeAttributeImageIndex]?.preview ? (
-                          <img src={uploadedFiles[activeAttributeImageIndex].preview} alt="" className="size-full object-cover" />
-                        ) : (
-                          <FileImage className="size-6 text-muted-foreground" />
-                        )}
-                      </div>
-                      <div className="min-w-0">
-                        <p className="truncate text-sm font-medium text-foreground">{uploadedFiles[activeAttributeImageIndex]?.name}</p>
-                        {uploadedFiles.length > 1 && (
-                          <p className="text-xs text-muted-foreground">Image {activeAttributeImageIndex + 1} of {uploadedFiles.length}</p>
-                        )}
-                      </div>
-                    </div>
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      className="gap-1 shrink-0"
-                      disabled={isLoading}
-                      onClick={() => {
-                        if (hasPending) {
-                          acceptAllShotSuggestions()
-                        } else {
-                          void ai.runAllShotSuggestions()
-                        }
-                      }}
-                    >
-                      {isLoading ? (
-                        <Loader2 className="size-3.5 animate-spin" />
-                      ) : hasPending ? (
-                        <Check className="size-3.5" />
-                      ) : (
-                        <Sparkles className="size-3.5" />
-                      )}
-                      {hasPending
-                        ? `Apply AI Suggestions (${totalUnreviewed})`
-                        : "Suggest with AI"}
-                    </Button>
+              {uploadedFiles.length > 0 && (
+                <div className="flex items-center gap-3">
+                  <div className="flex size-16 shrink-0 items-center justify-center overflow-hidden rounded border border-border bg-muted">
+                    {uploadedFiles[activeAttributeImageIndex]?.preview ? (
+                      <img src={uploadedFiles[activeAttributeImageIndex].preview} alt="" className="size-full object-cover" />
+                    ) : (
+                      <FileImage className="size-6 text-muted-foreground" />
+                    )}
                   </div>
-                )
-              })()}
+                  <div className="min-w-0">
+                    <p className="truncate text-sm font-medium text-foreground">{uploadedFiles[activeAttributeImageIndex]?.name}</p>
+                    {uploadedFiles.length > 1 && (
+                      <p className="text-xs text-muted-foreground">Image {activeAttributeImageIndex + 1} of {uploadedFiles.length}</p>
+                    )}
+                  </div>
+                </div>
+              )}
 
               {ai.shotSuggestions[activeAttributeImageIndex]?.error && (
                 <p className="flex items-center gap-2 text-xs text-destructive">
