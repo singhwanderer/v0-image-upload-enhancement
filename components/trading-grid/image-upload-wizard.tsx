@@ -44,11 +44,6 @@ import {
   SheetHeader,
   SheetTitle,
 } from "@/components/ui/sheet"
-import {
-  Popover,
-  PopoverContent,
-  PopoverTrigger,
-} from "@/components/ui/popover"
 import { cn } from "@/lib/utils"
 import { validateImageBatch, type ValidationError } from "./upload-validation"
 import { measureImageFile } from "./image-metadata"
@@ -274,8 +269,6 @@ export function ImageUploadWizard({
   // here; product-wide keys always resolve from `attributes` (P0.2a).
   const [attributesByImage, setAttributesByImage] = useState<{ [key: number]: typeof attributes }>({})
   const [activeAttributeImageIndex, setActiveAttributeImageIndex] = useState(0)
-  // Confirmation popover for "Apply to all images" — it overwrites every image's details (Task 5).
-  const [applyAllConfirmOpen, setApplyAllConfirmOpen] = useState(false)
 
   const steps = [
     { number: 1, title: "Target & Files", description: "Select target and upload files" },
@@ -320,20 +313,6 @@ export function ImageUploadWizard({
     }
   }
 
-  // Explicit copy of the active image's per-shot values onto every image — a labeled,
-  // deliberate action, unlike the old silent apply-to-all default.
-  const applyPerShotToAll = () => {
-    const source = effectiveAttrs(activeAttributeImageIndex)
-    setAttributesByImage(prev => {
-      const next = { ...prev }
-      uploadedFiles.forEach((_, i) => {
-        const rec = { ...(next[i] ?? attributes) }
-        PER_SHOT_KEYS.forEach(k => { rec[k] = source[k] })
-        next[i] = rec
-      })
-      return next
-    })
-  }
 
   // All AI/classification state and handlers (extraction, per-shot suggestion, brick
   // classification) live in this shared hook. The whole return value is handed to <AiSection>
@@ -345,7 +324,7 @@ export function ImageUploadWizard({
     setClassificationStatus, setClassificationConfidence,
     clearExtraction, clearShotSuggestions,
     isComplete, hasExtraction, acceptedExtractedAttributes,
-    pendingExtractedCount, acceptAllPending,
+    pendingExtractedCount, acceptAllPending, acceptAllShotSuggestions,
   } = ai
 
   const handleDragOver = useCallback((e: React.DragEvent) => {
@@ -1886,23 +1865,9 @@ export function ImageUploadWizard({
               <div>
                 <h2 className="text-lg font-medium text-foreground">Image Details</h2>
                 <p className="mt-1 text-sm text-muted-foreground">
-                  Image type, purpose, and format apply to every image; orientation, facing, angle, and description are set per image.
+                  Image type, purpose, and format apply to every image; orientation, facing, angle, style, and description are set per image.
                 </p>
               </div>
-              {uploadedFiles.length > 1 && (
-                <Button
-                  variant="outline"
-                  size="sm"
-                  className="gap-1 shrink-0"
-                  disabled={ai.anyShotSuggestLoading}
-                  onClick={() => void ai.runAllShotSuggestions()}
-                >
-                  {ai.anyShotSuggestLoading
-                    ? <Loader2 className="size-3.5 animate-spin" />
-                    : <Sparkles className="size-3.5" />}
-                  Apply all AI suggestions
-                </Button>
-              )}
             </div>
 
             {/* Image type/purpose/format — one shared value for every image of this product,
@@ -2001,121 +1966,65 @@ export function ImageUploadWizard({
 
             {/* Editing panel for the selected image */}
             <div className="flex flex-col gap-4 rounded border border-border p-4">
-              {uploadedFiles.length > 0 && (
-                <div className="flex flex-wrap items-start justify-between gap-3">
-                  <div className="flex items-center gap-3">
-                    <div className="flex size-16 shrink-0 items-center justify-center overflow-hidden rounded border border-border bg-muted">
-                      {uploadedFiles[activeAttributeImageIndex]?.preview ? (
-                        <img src={uploadedFiles[activeAttributeImageIndex].preview} alt="" className="size-full object-cover" />
-                      ) : (
-                        <FileImage className="size-6 text-muted-foreground" />
-                      )}
+              {uploadedFiles.length > 0 && (() => {
+                // Two-stage button logic:
+                // Stage 1 — "Suggest with AI": no suggestions exist yet (or all applied). Runs all images.
+                // Stage 2 — "Apply AI Suggestions (N)": suggestions exist. Accepts all pending ones.
+                const totalUnreviewed = uploadedFiles.reduce(
+                  (acc, _, i) => acc + (ai.hasUnreviewedSuggestion(i) ? 1 : 0), 0
+                )
+                const hasPending = totalUnreviewed > 0
+                const isLoading = ai.anyShotSuggestLoading
+                return (
+                  <div className="flex flex-wrap items-start justify-between gap-3">
+                    <div className="flex items-center gap-3">
+                      <div className="flex size-16 shrink-0 items-center justify-center overflow-hidden rounded border border-border bg-muted">
+                        {uploadedFiles[activeAttributeImageIndex]?.preview ? (
+                          <img src={uploadedFiles[activeAttributeImageIndex].preview} alt="" className="size-full object-cover" />
+                        ) : (
+                          <FileImage className="size-6 text-muted-foreground" />
+                        )}
+                      </div>
+                      <div className="min-w-0">
+                        <p className="truncate text-sm font-medium text-foreground">{uploadedFiles[activeAttributeImageIndex]?.name}</p>
+                        {uploadedFiles.length > 1 && (
+                          <p className="text-xs text-muted-foreground">Image {activeAttributeImageIndex + 1} of {uploadedFiles.length}</p>
+                        )}
+                      </div>
                     </div>
-                    <div className="min-w-0">
-                      <p className="truncate text-sm font-medium text-foreground">{uploadedFiles[activeAttributeImageIndex]?.name}</p>
-                      {uploadedFiles.length > 1 && (
-                        <p className="text-xs text-muted-foreground">Image {activeAttributeImageIndex + 1} of {uploadedFiles.length}</p>
-                      )}
-                    </div>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    {ai.hasUnreviewedSuggestion(activeAttributeImageIndex) && (
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        className="gap-1"
-                        onClick={() => ai.acceptShotImage(activeAttributeImageIndex)}
-                      >
-                        <Check className="size-3.5" />
-                        Accept AI suggestions
-                      </Button>
-                    )}
                     <Button
                       variant="outline"
                       size="sm"
-                      className="gap-1"
-                      disabled={ai.shotSuggestions[activeAttributeImageIndex]?.loading}
-                      onClick={() => void ai.runShotSuggestionForImage(activeAttributeImageIndex)}
+                      className="gap-1 shrink-0"
+                      disabled={isLoading}
+                      onClick={() => {
+                        if (hasPending) {
+                          acceptAllShotSuggestions()
+                        } else {
+                          void ai.runAllShotSuggestions()
+                        }
+                      }}
                     >
-                      {ai.shotSuggestions[activeAttributeImageIndex]?.loading
-                        ? <Loader2 className="size-3.5 animate-spin" />
-                        : <Sparkles className="size-3.5" />}
-                      Suggest with AI
+                      {isLoading ? (
+                        <Loader2 className="size-3.5 animate-spin" />
+                      ) : hasPending ? (
+                        <Check className="size-3.5" />
+                      ) : (
+                        <Sparkles className="size-3.5" />
+                      )}
+                      {hasPending
+                        ? `Apply AI Suggestions (${totalUnreviewed})`
+                        : "Suggest with AI"}
                     </Button>
                   </div>
-                </div>
-              )}
+                )
+              })()}
 
               {ai.shotSuggestions[activeAttributeImageIndex]?.error && (
                 <p className="flex items-center gap-2 text-xs text-destructive">
                   <AlertCircle className="size-3.5 shrink-0" />
                   {ai.shotSuggestions[activeAttributeImageIndex].error}
                 </p>
-              )}
-
-              {uploadedFiles.length > 1 && (
-                <div className="flex flex-wrap items-end gap-3">
-                  <div className="flex flex-col gap-1">
-                    <p className="text-xs text-muted-foreground">Copy from another image:</p>
-                    <Select
-                      onValueChange={(val) => {
-                        const srcIdx = parseInt(val)
-                        const src = effectiveAttrs(srcIdx)
-                        setAttributesByImage(prev => {
-                          const rec = { ...(prev[activeAttributeImageIndex] ?? attributes) }
-                          PER_SHOT_KEYS.forEach(k => { rec[k] = src[k] })
-                          return { ...prev, [activeAttributeImageIndex]: rec }
-                        })
-                        // Copied values are a manual choice — drop this image's AI suggestion state.
-                        ai.clearShotSuggestionEntry(activeAttributeImageIndex)
-                      }}
-                    >
-                      <SelectTrigger className="w-52 h-8 text-xs bg-background">
-                        <SelectValue placeholder="Select image..." />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {uploadedFiles.map((f, i) => i !== activeAttributeImageIndex && (
-                          <SelectItem key={i} value={String(i)}>
-                            Image {i + 1}: {f.name.slice(0, 20)}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </div>
-                  {/* Overwrites every image's details — confirm before applying (Task 5) */}
-                  <Popover open={applyAllConfirmOpen} onOpenChange={setApplyAllConfirmOpen}>
-                    <PopoverTrigger asChild>
-                      <Button variant="outline" size="sm" className="h-8">
-                        Apply to all images
-                      </Button>
-                    </PopoverTrigger>
-                    <PopoverContent className="w-72" align="start">
-                      <div className="flex flex-col gap-3">
-                        <p className="text-sm text-foreground">
-                          Overwrite the image details on all {uploadedFiles.length} images with this image&apos;s values?
-                        </p>
-                        <div className="flex items-center justify-end gap-2">
-                          <Button variant="outline" size="sm" onClick={() => setApplyAllConfirmOpen(false)}>
-                            Cancel
-                          </Button>
-                          <Button
-                            size="sm"
-                            onClick={() => {
-                              applyPerShotToAll()
-                              // The copies are manual values on the target images — drop their AI state.
-                              uploadedFiles.forEach((_, i) => {
-                                if (i !== activeAttributeImageIndex) ai.clearShotSuggestionEntry(i)
-                              })
-                              setApplyAllConfirmOpen(false)
-                            }}
-                          >
-                            Apply to all
-                          </Button>
-                        </div>
-                      </div>
-                    </PopoverContent>
-                  </Popover>
-                </div>
               )}
 
               <StepTwoForm
@@ -2238,12 +2147,6 @@ export function ImageUploadWizard({
                     {attributes.locationType || "ACL"}
                   </span>
                 </div>
-                <div className="flex justify-between">
-                  <span className="text-muted-foreground">Image Style:</span>
-                  <span className="font-medium text-foreground">
-                    {IMAGE_STYLE_OPTIONS.find(o => o.value === attributes.imageStyle)?.label || attributes.imageStyle || "—"}
-                  </span>
-                </div>
               </div>
 
               <h3 className="text-sm font-semibold text-foreground mb-3">Image Details</h3>
@@ -2255,6 +2158,7 @@ export function ImageUploadWizard({
                       <th className="px-3 py-2 text-left font-medium text-foreground">Orientation</th>
                       <th className="px-3 py-2 text-left font-medium text-foreground">Facing</th>
                       <th className="px-3 py-2 text-left font-medium text-foreground">Angle</th>
+                      <th className="px-3 py-2 text-left font-medium text-foreground">Style</th>
                       <th className="px-3 py-2 text-left font-medium text-foreground">Description</th>
                     </tr>
                   </thead>
@@ -2272,6 +2176,9 @@ export function ImageUploadWizard({
                           </td>
                           <td className="px-3 py-2 text-foreground">
                             {ANGLE_OPTIONS.find(o => o.value === imgAttrs.angle)?.label || imgAttrs.angle || "—"}
+                          </td>
+                          <td className="px-3 py-2 text-foreground">
+                            {IMAGE_STYLE_OPTIONS.find(o => o.value === imgAttrs.imageStyle)?.label || imgAttrs.imageStyle || "—"}
                           </td>
                           <td className="px-3 py-2 text-foreground truncate max-w-[180px]" title={imgAttrs.imageDescription}>
                             {imgAttrs.imageDescription || "—"}
