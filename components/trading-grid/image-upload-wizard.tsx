@@ -357,6 +357,10 @@ export function ImageUploadWizard({
       preview: URL.createObjectURL(file),
       status: "complete" as const,
     }))
+    // Clear per-image attributes from previous upload sessions to avoid stale data.
+    if (uploadedFiles.length === 0) {
+      setAttributesByImage({})
+    }
     setUploadedFiles(prev => [...prev, ...newFiles])
     // Auto-capture dimensions/DPI by decoding each staged file (deterministic, no AI).
     // Patched by id so a file deleted mid-measurement is a no-op, never resurrected.
