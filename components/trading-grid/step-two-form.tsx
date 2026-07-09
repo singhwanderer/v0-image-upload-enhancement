@@ -25,7 +25,7 @@ import {
 // P0.2a: the attribute record splits into two groups. PRODUCT attributes hold one honest
 // value for every image of a product; IMAGE DETAIL fields describe what makes each photo
 // different (which is exactly why they must never be blanket-applied).
-export const PER_SHOT_KEYS = ["orientation", "facing", "angle", "clippingPath", "imageDescription"] as const
+export const PER_SHOT_KEYS = ["orientation", "facing", "angle", "clippingPath", "imageDescription", "imageStyle"] as const
 export type PerShotKey = (typeof PER_SHOT_KEYS)[number]
 export const isPerShotKey = (k: string): k is PerShotKey => (PER_SHOT_KEYS as readonly string[]).includes(k)
 
@@ -59,14 +59,6 @@ export type StepTwoFormProps = {
   onAcceptField?: (field: PerShotKey) => void
 }
 
-// Read-only summary of a file's decoded dimensions/DPI. undefined = measurement in flight.
-export function formatMeasured(m?: MeasuredImageMetadata): string {
-  if (!m) return "Measuring…"
-  const dims = m.width && m.height ? `${m.width} × ${m.height} px` : null
-  const dpi = m.dpi ? `${m.dpi} DPI` : null
-  if (!dims && !dpi) return "Not readable from file"
-  return [dims, dpi].filter(Boolean).join(" · ")
-}
 
 export function StepTwoForm({ currentAttrs, updateAttrs, uploadLevel, autoData, measuredFiles, hideProductWide, hidePerShot, flatten, suggestionStatus, onAcceptField }: StepTwoFormProps) {
   // Group headers only make sense when both halves render in one form (Edit dialog); the
@@ -158,14 +150,6 @@ export function StepTwoForm({ currentAttrs, updateAttrs, uploadLevel, autoData, 
               <Label className="text-sm font-medium">Location Type</Label>
               <Input value={LOCATION_TYPE_OPTIONS.find(o => o.value === currentAttrs.locationType)?.label || ""} readOnly className="bg-muted/30 text-foreground cursor-default" />
             </div>
-
-            <div className="flex flex-col gap-2">
-              <Label className="text-sm font-medium">Image Style <span className="text-xs font-normal text-muted-foreground">(optional)</span></Label>
-              <Select value={currentAttrs.imageStyle} onValueChange={(v) => updateAttrs({ ...currentAttrs, imageStyle: v })}>
-                <SelectTrigger className="w-full bg-background"><SelectValue placeholder="Select style..." /></SelectTrigger>
-                <SelectContent>{IMAGE_STYLE_OPTIONS.map(o => <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>)}</SelectContent>
-              </Select>
-            </div>
           </div>
 
           {(currentAttrs.locationType === "FTP" || currentAttrs.locationType === "URL") && (
@@ -194,28 +178,54 @@ export function StepTwoForm({ currentAttrs, updateAttrs, uploadLevel, autoData, 
             </div>
           )}
 
-          {/* Measured from file — auto-captured by decoding each staged binary (no AI, no typing). */}
-          {measuredFiles && measuredFiles.length > 0 && (
-            <div className="flex flex-col gap-1.5 rounded border border-border bg-muted/20 p-3">
-              <div className="flex items-center gap-2">
-                <span className="text-xs font-semibold uppercase tracking-wide text-foreground">Technical Specs</span>
-                <span className="rounded bg-primary/10 px-1.5 py-0.5 text-xs font-medium text-primary">Auto-detected</span>
-              </div>
-              <div className="flex flex-col gap-0.5 max-h-24 overflow-y-auto">
-                {measuredFiles.map((f, i) => (
-                  <div key={i} className="flex items-center gap-2 text-xs">
-                    <span className="truncate max-w-[220px] text-muted-foreground" title={f.name}>{f.name}</span>
-                    <span className="font-medium text-foreground">{formatMeasured(f.measured)}</span>
-                  </div>
-                ))}
-              </div>
-              <p className="text-xs text-muted-foreground">
-                Width, height, and pixel density are automatically read from each uploaded file — no manual entry required.
-              </p>
-            </div>
-          )}
-
           <div className="grid gap-4 md:grid-cols-2">
+            {/* Dimension fields — auto-populated from EXIF, editable as override */}
+            {measuredFiles && measuredFiles.length > 0 && (() => {
+              const f = measuredFiles[0]
+              return (
+                <>
+                  <div className="flex flex-col gap-2">
+                    <Label className="flex items-center gap-1.5 text-sm font-medium">
+                      Width (px)
+                      <span className="rounded bg-primary/10 px-1.5 py-0.5 text-[10px] font-medium text-primary">Auto-detected</span>
+                    </Label>
+                    <Input
+                      value={f.measured?.width ?? ""}
+                      readOnly
+                      placeholder="Measuring…"
+                      className="bg-muted/30 text-foreground cursor-default"
+                    />
+                  </div>
+                  <div className="flex flex-col gap-2">
+                    <Label className="flex items-center gap-1.5 text-sm font-medium">
+                      Height (px)
+                      <span className="rounded bg-primary/10 px-1.5 py-0.5 text-[10px] font-medium text-primary">Auto-detected</span>
+                    </Label>
+                    <Input
+                      value={f.measured?.height ?? ""}
+                      readOnly
+                      placeholder="Measuring…"
+                      className="bg-muted/30 text-foreground cursor-default"
+                    />
+                  </div>
+                  <div className="flex flex-col gap-2">
+                    <Label className="flex items-center gap-1.5 text-sm font-medium">
+                      Pixel Density (DPI)
+                      <span className="rounded bg-primary/10 px-1.5 py-0.5 text-[10px] font-medium text-primary">Auto-detected</span>
+                    </Label>
+                    <Input
+                      value={f.measured?.dpi ?? ""}
+                      readOnly
+                      placeholder="Measuring…"
+                      className="bg-muted/30 text-foreground cursor-default"
+                    />
+                  </div>
+                  {/* Spacer to keep grid balanced when DPI is the third field */}
+                  <div className="hidden md:block" />
+                </>
+              )
+            })()}
+
             <div className="flex flex-col gap-2">
               <Label className="flex items-center gap-1.5 text-sm font-medium">
                 Orientation <span className="text-destructive">*</span> {aiTag("orientation")}
@@ -251,6 +261,19 @@ export function StepTwoForm({ currentAttrs, updateAttrs, uploadLevel, autoData, 
               >
                 <SelectTrigger className={cn("w-full bg-background", suggestedCls("angle"))}><SelectValue placeholder="Select angle..." /></SelectTrigger>
                 <SelectContent>{ANGLE_OPTIONS.map(o => <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>)}</SelectContent>
+              </Select>
+            </div>
+            <div className="flex flex-col gap-2">
+              <Label className="flex items-center gap-1.5 text-sm font-medium">
+                Image Style <span className="text-xs font-normal text-muted-foreground">(optional)</span> {aiTag("imageStyle")}
+              </Label>
+              <Select
+                value={currentAttrs.imageStyle}
+                onValueChange={(v) => updateAttrs({ ...currentAttrs, imageStyle: v })}
+                onOpenChange={(o) => { if (o) acceptIfSuggested("imageStyle") }}
+              >
+                <SelectTrigger className={cn("w-full bg-background", suggestedCls("imageStyle"))}><SelectValue placeholder="Select style..." /></SelectTrigger>
+                <SelectContent>{IMAGE_STYLE_OPTIONS.map(o => <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>)}</SelectContent>
               </Select>
             </div>
             <div className="flex flex-col gap-2">

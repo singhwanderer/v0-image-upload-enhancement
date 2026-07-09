@@ -47,7 +47,7 @@ export type ProductExtractionResult = {
 // The key union mirrors PER_SHOT_KEYS in step-two-form.tsx (kept structural to avoid a
 // cross-file coupling); clippingPath is never suggested but is in the union so callers can
 // pass any image-detail key through unchanged.
-export type ShotSuggestionField = "orientation" | "facing" | "angle" | "clippingPath" | "imageDescription"
+export type ShotSuggestionField = "orientation" | "facing" | "angle" | "clippingPath" | "imageDescription" | "imageStyle"
 export type ShotSuggestionEntry = {
   values: Partial<Record<ShotSuggestionField, string>>
   confidence: number
@@ -383,13 +383,14 @@ export function useAiAttributes({ uploadedFiles, attributes, setAttributesByImag
         const errBody = await res.json().catch(() => null)
         throw new Error(errBody?.error || `Suggestion failed (${res.status}).`)
       }
-      const data = await res.json() as { suggestions: { fileName: string; orientation: string; facing: string; angle: string; description: string; confidence: number }[] }
+      const data = await res.json() as { suggestions: { fileName: string; orientation: string; facing: string; angle: string; imageStyle: string; description: string; confidence: number }[] }
       const s = Array.isArray(data.suggestions) ? data.suggestions.find(x => x.fileName === file.name) : undefined
       if (!s) throw new Error("AI could not read this image — set its details manually.")
       const values: ShotSuggestionEntry["values"] = {}
       if (s.orientation) values.orientation = s.orientation
       if (s.facing) values.facing = s.facing
       if (s.angle) values.angle = s.angle
+      if (s.imageStyle) values.imageStyle = s.imageStyle
       if (s.description) values.imageDescription = s.description
       const fieldStatus: ShotSuggestionEntry["fieldStatus"] = {}
       ;(Object.keys(values) as ShotSuggestionField[]).forEach(k => { fieldStatus[k] = "suggested" })
@@ -424,6 +425,23 @@ export function useAiAttributes({ uploadedFiles, attributes, setAttributesByImag
       const entry = prev[index]
       if (!entry || entry.fieldStatus[field] !== "suggested") return prev
       return { ...prev, [index]: { ...entry, fieldStatus: { ...entry.fieldStatus, [field]: "accepted" } } }
+    })
+  }
+
+  // Accept every still-suggested field across ALL images in one click (Stage 2 button).
+  const acceptAllShotSuggestions = () => {
+    setShotSuggestions(prev => {
+      const next = { ...prev }
+      ;(Object.keys(next) as unknown as number[]).forEach(idx => {
+        const entry = next[idx]
+        if (!entry) return
+        const fieldStatus = { ...entry.fieldStatus }
+        ;(Object.keys(fieldStatus) as ShotSuggestionField[]).forEach(k => {
+          if (fieldStatus[k] === "suggested") fieldStatus[k] = "accepted"
+        })
+        next[idx] = { ...entry, fieldStatus }
+      })
+      return next
     })
   }
 
@@ -507,7 +525,7 @@ export function useAiAttributes({ uploadedFiles, attributes, setAttributesByImag
     runExtraction, runClassification, confirmClassification, confirmPrimaryImage,
     setAttributeDecision, updateAttributeField, selectAttributeValue, resolveUnresolvedAttribute,
     clearExtraction, clearShotSuggestions,
-    runShotSuggestionForImage, runAllShotSuggestions, acceptShotField, acceptShotImage,
+    runShotSuggestionForImage, runAllShotSuggestions, acceptShotField, acceptShotImage, acceptAllShotSuggestions,
     overrideShotField, clearShotSuggestionEntry, hasUnreviewedSuggestion, anyShotSuggestLoading,
     isExtracting, isComplete, isError, hasExtraction, acceptedExtractedAttributes, pendingExtractedCount, acceptAllPending, acceptPendingByIndex,
   }
