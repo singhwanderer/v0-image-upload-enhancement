@@ -125,24 +125,14 @@ export function StepTwoForm({ currentAttrs, updateAttrs, uploadLevel, autoData, 
               <Label className="text-sm font-medium">
                 Image Type <span className="text-destructive">*</span>
               </Label>
-              <Select value={currentAttrs.imageType} onValueChange={(v) => updateAttrs({ ...currentAttrs, imageType: v })}>
-                <SelectTrigger className="w-full bg-background"><SelectValue /></SelectTrigger>
-                <SelectContent>
-                  {IMAGE_TYPE_OPTIONS.map(o => <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>)}
-                </SelectContent>
-              </Select>
+              <Input value="SI-Still Shot" readOnly className="bg-muted/30 text-foreground cursor-default" />
             </div>
 
             <div className="flex flex-col gap-2">
               <Label className="text-sm font-medium">
                 Purpose <span className="text-destructive">*</span>
               </Label>
-              <Select value={currentAttrs.purpose} onValueChange={(v) => updateAttrs({ ...currentAttrs, purpose: v })}>
-                <SelectTrigger className="w-full bg-background"><SelectValue /></SelectTrigger>
-                <SelectContent>
-                  {PURPOSE_OPTIONS.map(o => <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>)}
-                </SelectContent>
-              </Select>
+              <Input value="INT-Internet" readOnly className="bg-muted/30 text-foreground cursor-default" />
             </div>
 
             {/* Location Type read-only */}
