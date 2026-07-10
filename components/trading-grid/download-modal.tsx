@@ -14,16 +14,26 @@ import {
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { cn } from "@/lib/utils"
-import type { UploadedFile } from "./uploaded-file"
+import type { MeasuredImageMetadata } from "./image-metadata"
 
-// Three-phase download modal (Select → Preparing → Complete). Reachable from both the
-// post-confirm Product Media view and the pre-confirm Step 1 file grid — two separate `return`
-// statements in the wizard — so it lives as its own component taking the download state and
-// selection predicate as props.
+// Minimal file shape the modal needs — the supplier's UploadedFile satisfies it structurally,
+// and the retailer browser maps its mock images into it (no File binary required here; the
+// caller's onDownload owns fetching/producing the actual bytes).
+export type DownloadModalFile = {
+  id: string
+  name: string
+  size: number
+  preview?: string
+  measured?: MeasuredImageMetadata
+}
+
+// Three-phase download modal (Select → Preparing → Complete). Shared by the supplier wizard
+// (post-confirm Product Media view and pre-confirm Step 1 grid) and the retailer browser's
+// read-only Product Media view.
 type DownloadModalProps = {
   open: boolean
   phase: "select" | "preparing" | "complete"
-  uploadedFiles: UploadedFile[]
+  uploadedFiles: DownloadModalFile[]
   // Selection is owned by the Product Media grid/toolbar; the modal only reads it.
   isChecked: (id: string) => boolean
   uploadLevel: "product" | "product-color" | "gtin"

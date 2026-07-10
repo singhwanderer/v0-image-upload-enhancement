@@ -1,7 +1,7 @@
 "use client"
 
 import { useState } from "react"
-import { Upload, FileImage, ArrowRight, Info, Download, Package, Palette, Barcode, CheckCircle2, X, BookOpen, FileText, Check } from "lucide-react"
+import { Upload, FileImage, ArrowRight, Info, Download, Package, Palette, Barcode, CheckCircle2, X, BookOpen } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
 import {
@@ -17,6 +17,9 @@ import { cn } from "@/lib/utils"
 import { useMediaSelection } from "./use-media-selection"
 import { buildImageMetadataCsv, buildTableCsv, downloadCsv, csvPreview, type ImageMetadataRow } from "./metadata-csv"
 import { toast } from "@/hooks/use-toast"
+import { DownloadModal } from "./download-modal"
+import { ImageDetailCard } from "./image-detail-card"
+import { downscaleImage, saveBlob } from "./image-resize"
 
 // "SI-Still Shot" → "SI": the mock fixtures store display labels; the CSV carries codes.
 const codeOf = (label: string): string => label.split("-")[0] ?? label
@@ -58,14 +61,39 @@ const SELECTION_CODES = [
 const selectionCodeDescription = (code: string | null): string =>
   SELECTION_CODES.find(c => c.code === code)?.description ?? "Product Selection"
 
+// Full image-detail records — same field coverage the supplier's Product Media cards show,
+// so the retailer view can mirror them (read-only). Sizes/dimensions match the real files in
+// /public/mock; dpi is null because these JPEGs carry no density metadata (matches supplier
+// behavior for such files).
 const MOCK_IMAGES = [
-  { fileName: "sneaker-front.jpg", fileType: "JPG-JPEG", imageType: "SI-Still Shot", purpose: "INT-Internet", orientation: "PRI-Primary", locationType: "ACL", createDate: "Apr 7, 2026", previewSrc: "/mock/sneaker-front.jpg" },
-  { fileName: "sneaker-side.jpg", fileType: "JPG-JPEG", imageType: "SI-Still Shot", purpose: "INT-Internet", orientation: "SDL-Side Left", locationType: "ACL", createDate: "Apr 13, 2026", lastUpdate: "Apr 23, 2026", previewSrc: "/mock/sneaker-side.jpg" },
+  {
+    fileName: "sneaker-front.jpg", fileType: "JPG-JPEG", imageType: "SI-Still Shot", purpose: "INT-Internet",
+    orientation: "PRI-Primary", locationType: "ACL", externalLocation: "",
+    fileSizeBytes: 169841, dpi: null as number | null, width: 1600, height: 872,
+    imageStyle: "PRO-Product", facing: "1-Front", angle: "1-Center, No plunge angle",
+    clippingPath: "", imageDescription: "Grey running sneaker, front three-quarter view on white background",
+    createDate: "Apr 7, 2026", lastUpdate: "", previewSrc: "/mock/sneaker-front.jpg",
+  },
+  {
+    fileName: "sneaker-side.jpg", fileType: "JPG-JPEG", imageType: "SI-Still Shot", purpose: "INT-Internet",
+    orientation: "SDL-Side Left", locationType: "ACL", externalLocation: "",
+    fileSizeBytes: 185105, dpi: null as number | null, width: 1600, height: 872,
+    imageStyle: "PRO-Product", facing: "2-Left", angle: "1-Center, No plunge angle",
+    clippingPath: "", imageDescription: "Grey running sneaker, left side profile on white background",
+    createDate: "Apr 13, 2026", lastUpdate: "Apr 23, 2026", previewSrc: "/mock/sneaker-side.jpg",
+  },
 ]
 
 // Non-GDSN product attributes (the extended/GS1 set) are intentionally absent from the
 // retailer image view: they reach retailers through a separate data channel. This view is
 // images plus image details only.
+
+// Bytes → human-readable, mirroring the supplier card's formatter.
+const formatFileSize = (bytes: number): string => {
+  if (bytes < 1024) return bytes + " B"
+  if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + " KB"
+  return (bytes / (1024 * 1024)).toFixed(1) + " MB"
+}
 
 export function ImageUploadLanding({ onUploadClick }: ImageUploadLandingProps) {
   return (
@@ -316,6 +344,8 @@ export function RetailerImageBrowser() {
   // activeImageIndex removed — retailer product-media uses stacked list (no active selection)
   const [showDownloadModal, setShowDownloadModal] = useState(false)
   const [downloadPhase, setDownloadPhase] = useState<"select" | "preparing" | "complete">("select")
+  // Long-edge cap for downloaded images; null = original size (shared DownloadModal contract).
+  const [downloadSize, setDownloadSize] = useState<number | null>(null)
   // First lines of the most recently generated metadata CSV, shown in the Complete phase.
   const [lastCsvPreview, setLastCsvPreview] = useState("")
   // Lightbox: full-size view of a single product-media image
@@ -327,6 +357,65 @@ export function RetailerImageBrowser() {
     if (presetIds && presetIds.length > 0) media.selectOnly(presetIds[0])
     setDownloadPhase("select")
     setShowDownloadModal(true)
+  }
+
+  // Really downloads the selected image binaries (fetched from the mock assets, downscaled to
+  // the chosen long-edge cap when one is set) plus the spec-shaped metadata CSV whose
+  // width/height reflect the downloaded files. Mirrors the supplier's handleBulkDownload.
+  const handleRetailerDownload = async () => {
+    const selected = MOCK_IMAGES.filter(img => media.isChecked(img.fileName))
+    setDownloadPhase("preparing")
+    try {
+      const outputDims = new Map<string, { width: number; height: number }>()
+      for (const img of selected) {
+        const res = await fetch(img.previewSrc)
+        if (!res.ok) throw new Error(`Failed to fetch ${img.fileName}`)
+        const blob = await res.blob()
+        if (downloadSize != null) {
+          const out = await downscaleImage(blob, downloadSize)
+          saveBlob(img.fileName, out.blob)
+          if (out.resized) outputDims.set(img.fileName, { width: out.width, height: out.height })
+        } else {
+          saveBlob(img.fileName, blob)
+        }
+        // Brief pause between saves so the browser accepts each download trigger.
+        await new Promise(r => setTimeout(r, 250))
+      }
+      const rows: ImageMetadataRow[] = selected.map(img => {
+        const dims = outputDims.get(img.fileName)
+        return {
+          action: "insert",
+          image_level: "product",
+          product: selectedProduct?.id ?? "",
+          item_number: "",
+          file_name: img.fileName,
+          file_type: "JPG",
+          image_type: codeOf(img.imageType),
+          purpose: codeOf(img.purpose),
+          orientation: codeOf(img.orientation),
+          location_type: img.locationType,
+          external_location: img.externalLocation,
+          color_code: "",
+          image_style: codeOf(img.imageStyle),
+          facing: codeOf(img.facing),
+          angle: codeOf(img.angle),
+          file_size: String(img.fileSizeBytes),
+          pixel_density: img.dpi != null ? String(img.dpi) : "",
+          height: String(dims?.height ?? img.height),
+          width: String(dims?.width ?? img.width),
+          clipping_path: img.clippingPath,
+          image_description: img.imageDescription,
+        }
+      })
+      const csv = buildImageMetadataCsv(rows)
+      downloadCsv(`${selectedProduct?.id ?? "product"}_image_metadata.csv`, csv)
+      setLastCsvPreview(csvPreview(csv))
+      setDownloadPhase("complete")
+      toast({ title: "Download complete", description: `${selected.length} image${selected.length !== 1 ? "s" : ""} + metadata CSV downloaded.` })
+    } catch {
+      setDownloadPhase("select")
+      toast({ title: "Download failed", description: "One or more images could not be prepared. Try again or download at original size." })
+    }
   }
 
 
@@ -475,11 +564,7 @@ export function RetailerImageBrowser() {
                     <td className="px-3 py-2">
                       <button
                         className="text-tg-link hover:underline"
-                        onClick={(e) => {
-                          e.stopPropagation()
-                          setSelectedVendor(vendor)
-                          setActiveView("products")
-                        }}
+                        onClick={(e) => handleVendorImagesClick(vendor, e)}
                       >
                         {vendor.images.toLocaleString()}
                       </button>
@@ -675,7 +760,6 @@ export function RetailerImageBrowser() {
 
   // Product Media View (read-only for retailer)
   if (currentView === "product-media") {
-    const selectedImages = MOCK_IMAGES.filter(img => media.isChecked(img.fileName))
     return (
       <div className="flex flex-col gap-6">
         {renderBreadcrumb()}
@@ -737,27 +821,48 @@ export function RetailerImageBrowser() {
                 onClick={() => {
                   document.getElementById(`retailer-card-${idx}`)?.scrollIntoView({ behavior: "smooth", block: "start" })
                 }}
-                className="flex-shrink-0 rounded border-2 border-border hover:border-primary/60 overflow-hidden transition-all p-2 bg-muted/20"
+                className="flex-shrink-0 rounded border-2 border-border hover:border-primary/60 overflow-hidden transition-all"
               >
-                <FileImage className="size-10 text-muted-foreground" />
+                <img src={img.previewSrc} alt={img.fileName} className="size-14 object-cover" />
               </button>
             ))}
           </div>
         )}
 
-        {/* Stacked image cards — read-only, no per-card actions (Acceptance #2) */}
+        {/* Stacked image cards — the shared supplier card, read-only: selection + download only,
+            no edit/delete affordances. Full field parity with the supplier's Product Media view. */}
         <div className="flex flex-col gap-3">
           {MOCK_IMAGES.map((img, idx) => (
-            <div key={idx} id={`retailer-card-${idx}`} className="border border-border bg-card">
-              {/* Card header — read-only (no edit/delete), but selection + download are available per image */}
-              <div className="flex items-center justify-between border-b border-border bg-muted/30 px-3 py-2">
-                <div className="flex items-center gap-2">
-                  <Checkbox
-                    checked={media.isChecked(img.fileName)}
-                    onCheckedChange={() => media.toggle(img.fileName, MOCK_IMAGES.map(i => i.fileName))}
-                  />
-                  <span className="text-sm font-medium text-tg-link">Product Level Image</span>
-                </div>
+            <ImageDetailCard
+              key={img.fileName}
+              id={`retailer-card-${idx}`}
+              levelLabel="Product Level Image"
+              rows={[
+                { label: "Image Level:", value: "Product Level" },
+                { label: "File Name:", value: img.fileName },
+                { label: "File Type:", value: img.fileType },
+                { label: "Image Type:", value: img.imageType, link: true },
+                { label: "Purpose:", value: img.purpose, link: true },
+                { label: "Orientation:", value: img.orientation },
+                { label: "Location Type:", value: img.locationType },
+                { label: "External Location:", value: img.externalLocation },
+                { label: "File Size:", value: formatFileSize(img.fileSizeBytes) },
+                { label: "Pixel Density (DPI):", value: img.dpi != null ? String(img.dpi) : "" },
+                { label: "Height:", value: `${img.height} px` },
+                { label: "Width:", value: `${img.width} px` },
+                { label: "Image Style:", value: img.imageStyle },
+                { label: "Facing (GDSN):", value: img.facing },
+                { label: "Angle:", value: img.angle },
+                { label: "Clipping Path:", value: img.clippingPath },
+                { label: "Image Description:", value: img.imageDescription },
+                { label: "Create Date:", value: img.createDate },
+                { label: "Last Update Date:", value: img.lastUpdate || "" },
+              ]}
+              previewSrc={img.previewSrc}
+              previewAlt={img.fileName}
+              checked={media.isChecked(img.fileName)}
+              onCheckedChange={() => media.toggle(img.fileName, MOCK_IMAGES.map(i => i.fileName))}
+              headerActions={
                 <button
                   className="p-1.5 hover:bg-muted rounded"
                   title="Download this image"
@@ -765,275 +870,33 @@ export function RetailerImageBrowser() {
                 >
                   <Download className="size-3.5 text-muted-foreground" />
                 </button>
-              </div>
-              {/* Card body: attributes 60% left, preview placeholder 40% right */}
-              <div className="flex">
-                {/* Left: image details — buyer language, populated fields only. The record is
-                    described by what it contains; nothing counts or comments on other fields. */}
-                <div className="w-3/5 border-r border-border text-sm">
-                  {(() => {
-                    const rows = [
-                      { label: "File Name:", value: img.fileName, link: false },
-                      { label: "File Type:", value: humanize(img.fileType), link: false },
-                      { label: "Image Type:", value: humanize(img.imageType), link: true },
-                      { label: "Purpose:", value: humanize(img.purpose), link: true },
-                      { label: "View:", value: humanize(img.orientation), link: true },
-                      { label: "Added:", value: img.createDate, link: false },
-                      { label: "Updated:", value: img.lastUpdate || "", link: false },
-                    ].filter(r => r.value !== "")
-                    return (
-                      <>
-                        {rows.map((row, rowIdx) => (
-                          <div key={rowIdx} className="flex border-b border-border">
-                            <div className="w-44 bg-muted/20 px-3 py-2 font-medium text-foreground shrink-0">{row.label}</div>
-                            <div className={cn("flex-1 px-3 py-2", row.link ? "text-tg-link" : "text-foreground")}>
-                              {row.value}
-                            </div>
-                          </div>
-                        ))}
-                        <div className="px-3 py-2 text-xs text-muted-foreground">
-                          From {selectedVendor?.name ?? "vendor"}
-                        </div>
-                      </>
-                    )
-                  })()}
-                </div>
-                {/* Right: image preview — click to zoom */}
-                <button
-                  type="button"
-                  className="w-2/5 flex items-center justify-center bg-white p-4 min-h-[280px] cursor-zoom-in hover:opacity-90 transition-opacity"
-                  title="Click to view full size"
-                  onClick={() => setLightboxImage({ src: img.previewSrc, fileName: img.fileName })}
-                >
-                  <img
-                    src={img.previewSrc}
-                    alt={img.fileName}
-                    className="max-w-full max-h-64 object-contain"
-                  />
-                </button>
-              </div>
-            </div>
+              }
+              onPreviewClick={() => setLightboxImage({ src: img.previewSrc, fileName: img.fileName })}
+              footer={<>From {selectedVendor?.name ?? "vendor"}</>}
+            />
           ))}
         </div>
 
-        {/* Download Modal — Three-phase: Select → Preparing → Complete (Step 3A parity with supplier) */}
-        {showDownloadModal && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
-            <div className="w-full max-w-lg rounded border border-border bg-card shadow-xl">
-              {/* Modal Header */}
-              <div className="flex items-center justify-between border-b border-border bg-gradient-to-r from-tg-header-start to-tg-header-end px-4 py-3">
-                <h2 className="text-base font-semibold text-white">
-                  {downloadPhase === "select" && "Download Images with Metadata"}
-                  {downloadPhase === "preparing" && "Preparing Download"}
-                  {downloadPhase === "complete" && "Download Complete"}
-                </h2>
-                <button 
-                  onClick={() => setShowDownloadModal(false)}
-                  className="text-white/80 hover:text-white"
-                >
-                  <X className="size-5" />
-                </button>
-              </div>
-
-              {/* Modal Content */}
-              <div className="p-6">
-                {/* Phase 1: Select (Step 3A — full parity with supplier modal) */}
-                {downloadPhase === "select" && (
-                  <>
-                    {/* Download Summary */}
-                    <div className="mb-6">
-                      <div className="flex items-center gap-3 mb-4">
-                        <div className="flex size-10 items-center justify-center rounded-full bg-primary/10">
-                          <Package className="size-5 text-primary" />
-                        </div>
-                        <div>
-                          <h3 className="font-medium text-foreground">Download Package</h3>
-                          <p className="text-sm text-muted-foreground">Product Level images</p>
-                        </div>
-                      </div>
-
-                      <div className="rounded border border-border bg-muted/20 p-4">
-                        <div className="text-sm space-y-1 mb-4">
-                          <div className="flex justify-between">
-                            <span className="text-muted-foreground">Product:</span>
-                            <span className="font-medium text-foreground">{selectedProduct?.id}</span>
-                          </div>
-                          <div className="flex justify-between">
-                            <span className="text-muted-foreground">Total Images:</span>
-                            <span className="font-medium text-foreground">{selectedImages.length} of {MOCK_IMAGES.length}</span>
-                          </div>
-                        </div>
-                      </div>
-                    </div>
-
-                    {/* Files to Download — reflects the selection already made on the Product
-                        Media grid/toolbar; no in-modal checkboxes, to keep selection to a single control. */}
-                    <div className="mb-6">
-                      <h4 className="text-sm font-medium text-foreground mb-3">Package Contents:</h4>
-                      <div className="space-y-2 max-h-48 overflow-y-auto">
-                        {selectedImages.map((img, idx) => (
-                          <div key={idx} className="flex items-center gap-3 rounded border border-border bg-card p-3">
-                            <div className="flex size-10 items-center justify-center rounded bg-muted">
-                              <FileImage className="size-5 text-muted-foreground" />
-                            </div>
-                            <div className="flex-1 min-w-0">
-                              <div className="flex items-center gap-2">
-                                <FileImage className="size-4 text-primary shrink-0" />
-                                <span className="text-sm font-medium text-foreground truncate">{img.fileName}</span>
-                              </div>
-                            </div>
-                            <div className="text-right text-xs text-muted-foreground shrink-0">
-                              <div>~450 KB</div>
-                            </div>
-                          </div>
-                        ))}
-                        {/* Single machine-readable metadata artifact for the whole selection */}
-                        <div className="flex items-center gap-3 rounded border border-border bg-card p-3">
-                          <div className="flex size-10 items-center justify-center rounded bg-muted">
-                            <FileText className="size-5 text-tg-success" />
-                          </div>
-                          <div className="flex-1 min-w-0">
-                            <span className="text-sm font-medium text-foreground truncate block">
-                              {selectedProduct?.id ?? "product"}_image_metadata.csv
-                            </span>
-                            <span className="text-xs text-muted-foreground">
-                              {selectedImages.length} row{selectedImages.length !== 1 ? "s" : ""} — one per image
-                            </span>
-                          </div>
-                        </div>
-                      </div>
-                    </div>
-
-                    {/* Info Note */}
-                    <div className="mb-6 flex items-start gap-2 rounded bg-primary/5 p-3 text-sm">
-                      <FileText className="size-4 text-primary mt-0.5 shrink-0" />
-                      <div>
-                        <span className="font-medium text-foreground">Metadata file (.csv)</span>
-                        <span className="text-muted-foreground"> contains one row per image with all image details in the standard field layout, ready for import.</span>
-                      </div>
-                    </div>
-
-                    {/* Actions */}
-                    <div className="flex items-center justify-end gap-3">
-                      <Button variant="outline" onClick={() => setShowDownloadModal(false)}>
-                        Cancel
-                      </Button>
-                      <Button
-                        disabled={selectedImages.length === 0}
-                        onClick={() => {
-                          // Really generate + download the spec-shaped metadata CSV (standard
-                          // 21-column image layout); image binaries stay simulated in this
-                          // prototype. Non-GDSN attributes travel via their own channel, so
-                          // they are not part of this file.
-                          const rows: ImageMetadataRow[] = selectedImages.map(img => ({
-                            action: "insert",
-                            image_level: "product",
-                            product: selectedProduct?.id ?? "",
-                            item_number: "",
-                            file_name: img.fileName,
-                            file_type: "JPG",
-                            image_type: codeOf(img.imageType),
-                            purpose: codeOf(img.purpose),
-                            orientation: codeOf(img.orientation),
-                            location_type: img.locationType,
-                            external_location: "",
-                            color_code: "",
-                            image_style: "",
-                            facing: "",
-                            angle: "",
-                            file_size: "",
-                            pixel_density: "",
-                            height: "",
-                            width: "",
-                            clipping_path: "",
-                            image_description: "",
-                          }))
-                          const csv = buildImageMetadataCsv(rows)
-                          downloadCsv(`${selectedProduct?.id ?? "product"}_image_metadata.csv`, csv)
-                          setLastCsvPreview(csvPreview(csv))
-                          setDownloadPhase("preparing")
-                          // Simulate preparation delay
-                          setTimeout(() => {
-                            setDownloadPhase("complete")
-                            toast({ title: "Download complete", description: `${selectedImages.length} image${selectedImages.length !== 1 ? "s" : ""} + metadata CSV downloaded.` })
-                          }, 1500)
-                        }}
-                      >
-                        <Download className="size-4 mr-2" />
-                        Download {selectedImages.length} image{selectedImages.length !== 1 ? "s" : ""} + metadata CSV
-                      </Button>
-                    </div>
-                  </>
-                )}
-
-                {/* Phase 2: Preparing */}
-                {downloadPhase === "preparing" && (
-                  <div className="py-8 flex flex-col items-center justify-center gap-4">
-                    <div className="flex size-16 items-center justify-center rounded-full bg-primary/10">
-                      <Download className="size-8 text-primary animate-pulse" />
-                    </div>
-                    <div className="text-center">
-                      <h3 className="text-lg font-medium text-foreground">Preparing your download</h3>
-                      <p className="text-sm text-muted-foreground mt-1">
-                        Packaging {selectedImages.length} images with metadata...
-                      </p>
-                    </div>
-                    <div className="w-48 h-1.5 rounded-full bg-muted overflow-hidden">
-                      <div className="h-full bg-primary rounded-full animate-[progress_1.5s_ease-in-out_infinite]" style={{ width: "60%" }} />
-                    </div>
-                  </div>
-                )}
-
-                {/* Phase 3: Complete */}
-                {downloadPhase === "complete" && (
-                  <div className="text-center py-4">
-                    <div className="flex size-16 items-center justify-center rounded-full bg-tg-success/10 mx-auto mb-4">
-                      <CheckCircle2 className="size-8 text-tg-success" />
-                    </div>
-                    <h3 className="text-lg font-medium text-foreground mb-2">Download Complete</h3>
-                    <p className="text-sm text-muted-foreground mb-6">
-                      Your images and metadata files have been downloaded successfully.
-                    </p>
-
-                    {/* Downloaded Files Summary */}
-                    <div className="rounded border border-border bg-muted/20 p-4 mb-6 text-left">
-                      <div className="text-sm font-medium text-foreground mb-3">Downloaded Files:</div>
-                      <div className="space-y-2 max-h-32 overflow-y-auto">
-                        {selectedImages.map((img, idx) => (
-                          <div key={idx} className="flex items-center gap-2 text-sm text-foreground">
-                            <Check className="size-4 text-tg-success" />
-                            <span>{img.fileName}</span>
-                          </div>
-                        ))}
-                        <div className="flex items-center gap-2 text-sm text-foreground">
-                          <Check className="size-4 text-tg-success" />
-                          <span>{selectedProduct?.id ?? "product"}_image_metadata.csv</span>
-                        </div>
-                      </div>
-                    </div>
-
-                    {/* Metadata CSV Preview — first rows of the actually-downloaded file */}
-                    <div className="rounded border border-border bg-card p-4 mb-6 text-left">
-                      <div className="flex items-center justify-between mb-2">
-                        <span className="text-sm font-medium text-foreground">Metadata Preview</span>
-                        <span className="text-xs text-muted-foreground">
-                          {selectedProduct?.id ?? "product"}_image_metadata.csv
-                        </span>
-                      </div>
-                      <pre className="text-xs text-muted-foreground bg-muted/30 p-3 rounded overflow-x-auto max-h-40 overflow-y-auto font-mono">
-{lastCsvPreview || "No metadata available"}
-                      </pre>
-                    </div>
-
-                    <Button onClick={() => setShowDownloadModal(false)}>
-                      Close
-                    </Button>
-                  </div>
-                )}
-              </div>
-            </div>
-          </div>
-        )}
+        {/* Download Modal — shared with the supplier (three-phase, dimension picker, real files) */}
+        <DownloadModal
+          open={showDownloadModal}
+          phase={downloadPhase}
+          uploadedFiles={MOCK_IMAGES.map(img => ({
+            id: img.fileName,
+            name: img.fileName,
+            size: img.fileSizeBytes,
+            preview: img.previewSrc,
+            measured: { width: img.width, height: img.height, dpi: img.dpi },
+          }))}
+          isChecked={media.isChecked}
+          uploadLevel="product"
+          autoData={{ productId: selectedProduct?.id ?? "", selectedGtin: "", colorCode: "" }}
+          lastCsvPreview={lastCsvPreview}
+          downloadSize={downloadSize}
+          onDownloadSizeChange={setDownloadSize}
+          onClose={() => setShowDownloadModal(false)}
+          onDownload={() => { void handleRetailerDownload() }}
+        />
 
         {/* Lightbox — full-size view of a single product-media image */}
         {lightboxImage && (

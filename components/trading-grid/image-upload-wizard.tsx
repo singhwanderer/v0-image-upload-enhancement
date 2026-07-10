@@ -50,6 +50,7 @@ import { AiAttributesTable } from "./ai-attributes-table"
 import { AiSection } from "./ai-section"
 import { CataloguePushCard } from "./catalogue-push-card"
 import { DownloadModal } from "./download-modal"
+import { ImageDetailCard, type ImageDetailRow } from "./image-detail-card"
 import { StepTwoForm, PER_SHOT_KEYS, isPerShotKey } from "./step-two-form"
 import { useAiAttributes, type ShotSuggestionField } from "./use-ai-attributes"
 import { SuggestionReviewTable, type SuggestionRow } from "./suggestion-review-table"
@@ -772,19 +773,40 @@ export function ImageUploadWizard({
                 : uploadLevel === "gtin"
                 ? "Item Level Image"
                 : "Product + Color Code Level Image"
+              const rows: ImageDetailRow[] = [
+                { label: "Image Level:", value: imageLevelLabel },
+                ...(uploadLevel === "product-color" ? [{ label: "Color Code:", value: data.colorCode }] : []),
+                { label: "File Name:", value: file.name },
+                { label: "File Type:", value: file.type || "JPG-JPEG" },
+                { label: "Image Type:", value: IMAGE_TYPE_OPTIONS.find(o => o.value === cardAttrs.imageType)?.label || "", link: true },
+                { label: "Purpose:", value: PURPOSE_OPTIONS.find(o => o.value === cardAttrs.purpose)?.label || "", link: true },
+                { label: "Orientation:", value: ORIENTATION_OPTIONS.find(o => o.value === cardAttrs.orientation)?.label || "" },
+                { label: "Location Type:", value: LOCATION_TYPE_OPTIONS.find(o => o.value === cardAttrs.locationType)?.label || "" },
+                { label: "External Location:", value: cardAttrs.externalLocation || "" },
+                { label: "File Size:", value: formatFileSize(file.size) },
+                { label: "Pixel Density (DPI):", value: file.measured?.dpi != null ? String(file.measured.dpi) : "" },
+                { label: "Height:", value: file.measured?.height != null ? `${file.measured.height} px` : "" },
+                { label: "Width:", value: file.measured?.width != null ? `${file.measured.width} px` : "" },
+                { label: "Image Style:", value: IMAGE_STYLE_OPTIONS.find(o => o.value === cardAttrs.imageStyle)?.label || "" },
+                { label: "Facing (GDSN):", value: FACING_OPTIONS.find(o => o.value === cardAttrs.facing)?.label || "" },
+                { label: "Angle:", value: ANGLE_OPTIONS.find(o => o.value === cardAttrs.angle)?.label || "" },
+                { label: "Clipping Path:", value: cardAttrs.clippingPath || "" },
+                { label: "Image Description:", value: cardAttrs.imageDescription || "" },
+                { label: "Create Date:", value: currentDate },
+                { label: "Last Update Date:", value: currentDate },
+              ]
               return (
-                <div key={file.id} id={`supplier-card-${idx}`} className="border border-border bg-card">
-                  {/* Card header */}
-                  <div className="flex items-center justify-between border-b border-border bg-muted/30 px-3 py-2">
-                    <div className="flex items-center gap-2">
-                      <Checkbox
-                        checked={media.isChecked(file.id)}
-                        onCheckedChange={() => media.toggle(file.id, uploadedFiles.map(f => f.id))}
-                      />
-                      <span className="text-sm font-medium text-tg-link">{levelLabel}</span>
-                    </div>
-                    {/* Per-card action toolbar: Edit pencil + per-card Download (Acceptance #1, #3) */}
-                    <div className="flex items-center gap-1">
+                <ImageDetailCard
+                  key={file.id}
+                  id={`supplier-card-${idx}`}
+                  levelLabel={levelLabel}
+                  rows={rows}
+                  previewSrc={file.preview || undefined}
+                  previewAlt={file.name}
+                  checked={media.isChecked(file.id)}
+                  onCheckedChange={() => media.toggle(file.id, uploadedFiles.map(f => f.id))}
+                  headerActions={
+                    <>
                       <button
                         className="p-1.5 hover:bg-muted rounded"
                         title="Download this image"
@@ -807,112 +829,9 @@ export function ImageUploadWizard({
                       >
                         <Pencil className="size-3.5 text-muted-foreground" />
                       </button>
-                    </div>
-                  </div>
-                  {/* Card body: attributes 60% left, preview 40% right */}
-                  <div className="flex">
-                    {/* Left: attribute table */}
-                    <div className="w-3/5 border-r border-border text-sm">
-                      <div className="flex border-b border-border">
-                        <div className="w-44 bg-muted/20 px-3 py-2 font-medium text-foreground shrink-0">Image Level:</div>
-                        <div className="flex-1 px-3 py-2 text-foreground">{imageLevelLabel}</div>
-                      </div>
-                      {uploadLevel === "product-color" && (
-                        <div className="flex border-b border-border">
-                          <div className="w-44 bg-muted/20 px-3 py-2 font-medium text-foreground shrink-0">Color Code:</div>
-                          <div className="flex-1 px-3 py-2 text-foreground">{data.colorCode}</div>
-                        </div>
-                      )}
-                      <div className="flex border-b border-border">
-                        <div className="w-44 bg-muted/20 px-3 py-2 font-medium text-foreground shrink-0">File Name:</div>
-                        <div className="flex-1 px-3 py-2 text-foreground truncate">{file.name}</div>
-                      </div>
-                      <div className="flex border-b border-border">
-                        <div className="w-44 bg-muted/20 px-3 py-2 font-medium text-foreground shrink-0">File Type:</div>
-                        <div className="flex-1 px-3 py-2 text-foreground">{file.type || "JPG-JPEG"}</div>
-                      </div>
-                      <div className="flex border-b border-border">
-                        <div className="w-44 bg-muted/20 px-3 py-2 font-medium text-tg-link shrink-0">Image Type:</div>
-                        <div className="flex-1 px-3 py-2 text-tg-link">{IMAGE_TYPE_OPTIONS.find(o => o.value === cardAttrs.imageType)?.label || ""}</div>
-                      </div>
-                      <div className="flex border-b border-border">
-                        <div className="w-44 bg-muted/20 px-3 py-2 font-medium text-foreground shrink-0">Purpose:</div>
-                        <div className="flex-1 px-3 py-2 text-tg-link">{PURPOSE_OPTIONS.find(o => o.value === cardAttrs.purpose)?.label || ""}</div>
-                      </div>
-                      <div className="flex border-b border-border">
-                        <div className="w-44 bg-muted/20 px-3 py-2 font-medium text-foreground shrink-0">Orientation:</div>
-                        <div className="flex-1 px-3 py-2 text-foreground">{ORIENTATION_OPTIONS.find(o => o.value === cardAttrs.orientation)?.label || ""}</div>
-                      </div>
-                      <div className="flex border-b border-border">
-                        <div className="w-44 bg-muted/20 px-3 py-2 font-medium text-foreground shrink-0">Location Type:</div>
-                        <div className="flex-1 px-3 py-2 text-foreground">{LOCATION_TYPE_OPTIONS.find(o => o.value === cardAttrs.locationType)?.label || ""}</div>
-                      </div>
-                      <div className="flex border-b border-border">
-                        <div className="w-44 bg-muted/20 px-3 py-2 font-medium text-foreground shrink-0">External Location:</div>
-                        <div className="flex-1 px-3 py-2 text-foreground break-all">{cardAttrs.externalLocation || ""}</div>
-                      </div>
-                      <div className="flex border-b border-border">
-                        <div className="w-44 bg-muted/20 px-3 py-2 font-medium text-foreground shrink-0">File Size:</div>
-                        <div className="flex-1 px-3 py-2 text-foreground">{formatFileSize(file.size)}</div>
-                      </div>
-                      <div className="flex border-b border-border">
-                        <div className="w-44 bg-muted/20 px-3 py-2 font-medium text-foreground shrink-0">Pixel Density (DPI):</div>
-                        <div className="flex-1 px-3 py-2 text-foreground">{file.measured?.dpi ?? ""}</div>
-                      </div>
-                      <div className="flex border-b border-border">
-                        <div className="w-44 bg-muted/20 px-3 py-2 font-medium text-foreground shrink-0">Height:</div>
-                        <div className="flex-1 px-3 py-2 text-foreground">{file.measured?.height != null ? `${file.measured.height} px` : ""}</div>
-                      </div>
-                      <div className="flex border-b border-border">
-                        <div className="w-44 bg-muted/20 px-3 py-2 font-medium text-foreground shrink-0">Width:</div>
-                        <div className="flex-1 px-3 py-2 text-foreground">{file.measured?.width != null ? `${file.measured.width} px` : ""}</div>
-                      </div>
-                      <div className="flex border-b border-border">
-                        <div className="w-44 bg-muted/20 px-3 py-2 font-medium text-foreground shrink-0">Image Style:</div>
-                        <div className="flex-1 px-3 py-2 text-foreground">{IMAGE_STYLE_OPTIONS.find(o => o.value === cardAttrs.imageStyle)?.label || ""}</div>
-                      </div>
-                      <div className="flex border-b border-border">
-                        <div className="w-44 bg-muted/20 px-3 py-2 font-medium text-foreground shrink-0">Facing (GDSN):</div>
-                        <div className="flex-1 px-3 py-2 text-foreground">{FACING_OPTIONS.find(o => o.value === cardAttrs.facing)?.label || ""}</div>
-                      </div>
-                      <div className="flex border-b border-border">
-                        <div className="w-44 bg-muted/20 px-3 py-2 font-medium text-foreground shrink-0">Angle:</div>
-                        <div className="flex-1 px-3 py-2 text-foreground">{ANGLE_OPTIONS.find(o => o.value === cardAttrs.angle)?.label || ""}</div>
-                      </div>
-                      <div className="flex border-b border-border">
-                        <div className="w-44 bg-muted/20 px-3 py-2 font-medium text-foreground shrink-0">Clipping Path:</div>
-                        <div className="flex-1 px-3 py-2 text-foreground">{cardAttrs.clippingPath || ""}</div>
-                      </div>
-                      <div className="flex border-b border-border">
-                        <div className="w-44 bg-muted/20 px-3 py-2 font-medium text-foreground shrink-0">Image Description:</div>
-                        <div className="flex-1 px-3 py-2 text-foreground">{cardAttrs.imageDescription || ""}</div>
-                      </div>
-                      <div className="flex border-b border-border">
-                        <div className="w-44 bg-muted/20 px-3 py-2 font-medium text-foreground shrink-0">Create Date:</div>
-                        <div className="flex-1 px-3 py-2 text-foreground">{currentDate}</div>
-                      </div>
-                      <div className="flex">
-                        <div className="w-44 bg-muted/20 px-3 py-2 font-medium text-foreground shrink-0">Last Update Date:</div>
-                        <div className="flex-1 px-3 py-2 text-foreground">{currentDate}</div>
-                      </div>
-                    </div>
-                    {/* Right: image preview */}
-                    <div className="w-2/5 flex items-center justify-center bg-white p-4 min-h-[280px]">
-                      {file.preview ? (
-                        <img
-                          src={file.preview}
-                          alt={file.name}
-                          className="max-w-full max-h-64 object-contain"
-                        />
-                      ) : (
-                        <div className="flex flex-col items-center gap-2 text-center">
-                          <FileImage className="size-16 text-muted-foreground/40" />
-                          <p className="text-xs text-muted-foreground">No preview</p>
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                </div>
+                    </>
+                  }
+                />
               )
             })}
           </div>

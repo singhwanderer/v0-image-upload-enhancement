@@ -13,7 +13,7 @@ export type ResizedImage = {
 // Formats canvas.toBlob can re-encode; anything else falls back to JPEG.
 const ENCODABLE_TYPES = ["image/jpeg", "image/png", "image/webp"]
 
-export async function downscaleImage(file: File, targetLongEdge: number): Promise<ResizedImage> {
+export async function downscaleImage(file: Blob, targetLongEdge: number): Promise<ResizedImage> {
   const bitmap = await createImageBitmap(file)
   try {
     const longEdge = Math.max(bitmap.width, bitmap.height)
