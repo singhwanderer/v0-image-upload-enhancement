@@ -43,7 +43,7 @@ import { validateImageBatch, type ValidationError } from "./upload-validation"
 import { measureImageFile } from "./image-metadata"
 import type { UploadedFile } from "./uploaded-file"
 import { buildImageMetadataCsv, downloadCsv, csvPreview, type ImageMetadataRow } from "./metadata-csv"
-import { downscaleImage, saveBlob } from "./image-resize"
+import { buildZip, downscaleImage, saveBlob } from "./image-resize"
 import { toast } from "@/hooks/use-toast"
 import { useMediaSelection } from "./use-media-selection"
 import { AiAttributesTable } from "./ai-attributes-table"
@@ -216,6 +216,8 @@ export function ImageUploadWizard({
   // Requested long-edge cap for downloaded images; null = original dimensions. Downscale only —
   // images already within the cap download untouched.
   const [downloadSize, setDownloadSize] = useState<number | null>(null)
+  // "zip" = one archive with image binaries + CSV; "csv" = metadata file only.
+  const [downloadPackageType, setDownloadPackageType] = useState<"zip" | "csv">("zip")
   // First lines of the most recently generated metadata CSV, shown in the Complete phase.
   const [lastCsvPreview, setLastCsvPreview] = useState("")
   // Selection state for Product Media cards — drives selective download and (Supplier-only)
@@ -469,30 +471,43 @@ export function ImageUploadWizard({
     })
   }
 
-  // Handle bulk download: really downloads the selected image binaries (downscaled to the
-  // chosen long-edge cap when one is set — never upscaled) plus the metadata CSV (incl.
-  // accepted GS1 extended attributes), whose width/height reflect the downloaded files.
+  // Handle bulk download. ZIP mode packages the selected image binaries (downscaled to the
+  // chosen long-edge cap when one is set — never upscaled) together with the metadata CSV
+  // (incl. accepted GS1 extended attributes, width/height reflecting the packaged files) into
+  // one archive. CSV mode downloads just the metadata file.
   const handleBulkDownload = async () => {
     const selectedFiles = uploadedFiles.filter(f => media.isChecked(f.id))
+    const productId = getAutoPopulatedData().productId || "product"
     setDownloadPhase("preparing")
     try {
       const outputDims = new Map<string, { width: number; height: number }>()
-      for (const file of selectedFiles) {
-        if (downloadSize != null) {
-          const out = await downscaleImage(file.file, downloadSize)
-          saveBlob(file.name, out.blob)
-          if (out.resized) outputDims.set(file.id, { width: out.width, height: out.height })
-        } else {
-          saveBlob(file.name, file.file)
+      const zipEntries: Record<string, Uint8Array> = {}
+      if (downloadPackageType === "zip") {
+        for (const file of selectedFiles) {
+          let blob: Blob = file.file
+          if (downloadSize != null) {
+            const out = await downscaleImage(file.file, downloadSize)
+            blob = out.blob
+            if (out.resized) outputDims.set(file.id, { width: out.width, height: out.height })
+          }
+          zipEntries[file.name] = new Uint8Array(await blob.arrayBuffer())
         }
-        // Brief pause between saves so the browser accepts each download trigger.
-        await new Promise(r => setTimeout(r, 250))
       }
       const csv = buildImageMetadataCsv(buildMetadataCsvRows(selectedFiles, outputDims), acceptedExtractedAttributes)
-      downloadCsv(`${getAutoPopulatedData().productId || "product"}_image_metadata.csv`, csv)
+      if (downloadPackageType === "zip") {
+        zipEntries[`${productId}_image_metadata.csv`] = new TextEncoder().encode(csv)
+        saveBlob(`${productId}_images.zip`, buildZip(zipEntries))
+      } else {
+        downloadCsv(`${productId}_image_metadata.csv`, csv)
+      }
       setLastCsvPreview(csvPreview(csv))
       setDownloadPhase("complete")
-      toast({ title: "Download complete", description: `${selectedFiles.length} image${selectedFiles.length !== 1 ? "s" : ""} + metadata CSV downloaded.` })
+      toast({
+        title: "Download complete",
+        description: downloadPackageType === "zip"
+          ? `${productId}_images.zip — ${selectedFiles.length} image${selectedFiles.length !== 1 ? "s" : ""} + metadata CSV.`
+          : "Metadata CSV downloaded.",
+      })
     } catch {
       setDownloadPhase("select")
       toast({ title: "Download failed", description: "One or more images could not be prepared. Try again or download at original size." })
@@ -1236,6 +1251,8 @@ export function ImageUploadWizard({
           lastCsvPreview={lastCsvPreview}
           downloadSize={downloadSize}
           onDownloadSizeChange={setDownloadSize}
+          packageType={downloadPackageType}
+          onPackageTypeChange={setDownloadPackageType}
           onClose={() => setShowDownloadModal(false)}
           onDownload={() => { void handleBulkDownload() }}
         />
@@ -2336,6 +2353,8 @@ export function ImageUploadWizard({
         lastCsvPreview={lastCsvPreview}
         downloadSize={downloadSize}
         onDownloadSizeChange={setDownloadSize}
+        packageType={downloadPackageType}
+        onPackageTypeChange={setDownloadPackageType}
         onClose={() => setShowDownloadModal(false)}
         onDownload={() => { void handleBulkDownload() }}
       />

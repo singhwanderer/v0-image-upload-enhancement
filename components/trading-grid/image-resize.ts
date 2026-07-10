@@ -1,3 +1,5 @@
+import { zipSync } from "fflate"
+
 // Client-side downscale for real image downloads. Decodes the staged File, scales it so its
 // long edge fits the requested cap (never upscales), and re-encodes in the source format.
 // Aspect ratio is always preserved; PNG keeps its alpha channel through the canvas re-encode.
@@ -37,6 +39,17 @@ export async function downscaleImage(file: Blob, targetLongEdge: number): Promis
   } finally {
     bitmap.close()
   }
+}
+
+// Packages download entries into a single ZIP blob. Image formats are already compressed,
+// so their entries are stored (level 0); everything else (the CSV) gets deflated.
+export function buildZip(entries: Record<string, Uint8Array>): Blob {
+  const files: Parameters<typeof zipSync>[0] = {}
+  for (const [name, data] of Object.entries(entries)) {
+    const stored = /\.(jpe?g|png|webp)$/i.test(name)
+    files[name] = [data, { level: stored ? 0 : 6 }]
+  }
+  return new Blob([zipSync(files) as BlobPart], { type: "application/zip" })
 }
 
 // Triggers a real browser download for a blob (same anchor-click pattern as downloadCsv).

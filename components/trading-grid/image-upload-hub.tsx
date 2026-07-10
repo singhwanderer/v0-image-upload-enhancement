@@ -19,7 +19,7 @@ import { buildImageMetadataCsv, buildTableCsv, downloadCsv, csvPreview, type Ima
 import { toast } from "@/hooks/use-toast"
 import { DownloadModal } from "./download-modal"
 import { ImageDetailCard } from "./image-detail-card"
-import { downscaleImage, saveBlob } from "./image-resize"
+import { buildZip, downscaleImage, saveBlob } from "./image-resize"
 
 // "SI-Still Shot" → "SI": the mock fixtures store display labels; the CSV carries codes.
 const codeOf = (label: string): string => label.split("-")[0] ?? label
@@ -87,6 +87,16 @@ const MOCK_IMAGES = [
 // Non-GDSN product attributes (the extended/GS1 set) are intentionally absent from the
 // retailer image view: they reach retailers through a separate data channel. This view is
 // images plus image details only.
+
+// Per-product media (audit R5): only products whose row actually claims images carry any —
+// the rest get an honest empty state instead of impossible sneakers. The three image-bearing
+// products share the same two mock photos deliberately (stakeholder call: no stylized renders).
+const PRODUCT_MEDIA: Record<string, typeof MOCK_IMAGES> = {
+  "RUNCOOL-GRY-M": MOCK_IMAGES,
+  "COURT-WHT-M": MOCK_IMAGES,
+  "TRLRUN-BLK-M": MOCK_IMAGES,
+}
+const mediaFor = (productId?: string) => (productId && PRODUCT_MEDIA[productId]) || []
 
 // Bytes → human-readable, mirroring the supplier card's formatter.
 const formatFileSize = (bytes: number): string => {
@@ -346,6 +356,8 @@ export function RetailerImageBrowser() {
   const [downloadPhase, setDownloadPhase] = useState<"select" | "preparing" | "complete">("select")
   // Long-edge cap for downloaded images; null = original size (shared DownloadModal contract).
   const [downloadSize, setDownloadSize] = useState<number | null>(null)
+  // "zip" = one archive with image binaries + CSV; "csv" = metadata file only.
+  const [downloadPackageType, setDownloadPackageType] = useState<"zip" | "csv">("zip")
   // First lines of the most recently generated metadata CSV, shown in the Complete phase.
   const [lastCsvPreview, setLastCsvPreview] = useState("")
   // Lightbox: full-size view of a single product-media image
@@ -359,27 +371,30 @@ export function RetailerImageBrowser() {
     setShowDownloadModal(true)
   }
 
-  // Really downloads the selected image binaries (fetched from the mock assets, downscaled to
-  // the chosen long-edge cap when one is set) plus the spec-shaped metadata CSV whose
-  // width/height reflect the downloaded files. Mirrors the supplier's handleBulkDownload.
+  // Retailer download. ZIP mode fetches the selected image binaries from the mock assets
+  // (downscaled to the chosen long-edge cap when one is set) and packages them with the
+  // spec-shaped metadata CSV into one archive; CSV mode downloads just the metadata file.
+  // Mirrors the supplier's handleBulkDownload.
   const handleRetailerDownload = async () => {
-    const selected = MOCK_IMAGES.filter(img => media.isChecked(img.fileName))
+    const productMedia = mediaFor(selectedProduct?.id)
+    const selected = productMedia.filter(img => media.isChecked(img.fileName))
+    const productId = selectedProduct?.id ?? "product"
     setDownloadPhase("preparing")
     try {
       const outputDims = new Map<string, { width: number; height: number }>()
-      for (const img of selected) {
-        const res = await fetch(img.previewSrc)
-        if (!res.ok) throw new Error(`Failed to fetch ${img.fileName}`)
-        const blob = await res.blob()
-        if (downloadSize != null) {
-          const out = await downscaleImage(blob, downloadSize)
-          saveBlob(img.fileName, out.blob)
-          if (out.resized) outputDims.set(img.fileName, { width: out.width, height: out.height })
-        } else {
-          saveBlob(img.fileName, blob)
+      const zipEntries: Record<string, Uint8Array> = {}
+      if (downloadPackageType === "zip") {
+        for (const img of selected) {
+          const res = await fetch(img.previewSrc)
+          if (!res.ok) throw new Error(`Failed to fetch ${img.fileName}`)
+          let blob = await res.blob()
+          if (downloadSize != null) {
+            const out = await downscaleImage(blob, downloadSize)
+            blob = out.blob
+            if (out.resized) outputDims.set(img.fileName, { width: out.width, height: out.height })
+          }
+          zipEntries[img.fileName] = new Uint8Array(await blob.arrayBuffer())
         }
-        // Brief pause between saves so the browser accepts each download trigger.
-        await new Promise(r => setTimeout(r, 250))
       }
       const rows: ImageMetadataRow[] = selected.map(img => {
         const dims = outputDims.get(img.fileName)
@@ -408,10 +423,20 @@ export function RetailerImageBrowser() {
         }
       })
       const csv = buildImageMetadataCsv(rows)
-      downloadCsv(`${selectedProduct?.id ?? "product"}_image_metadata.csv`, csv)
+      if (downloadPackageType === "zip") {
+        zipEntries[`${productId}_image_metadata.csv`] = new TextEncoder().encode(csv)
+        saveBlob(`${productId}_images.zip`, buildZip(zipEntries))
+      } else {
+        downloadCsv(`${productId}_image_metadata.csv`, csv)
+      }
       setLastCsvPreview(csvPreview(csv))
       setDownloadPhase("complete")
-      toast({ title: "Download complete", description: `${selected.length} image${selected.length !== 1 ? "s" : ""} + metadata CSV downloaded.` })
+      toast({
+        title: "Download complete",
+        description: downloadPackageType === "zip"
+          ? `${productId}_images.zip — ${selected.length} image${selected.length !== 1 ? "s" : ""} + metadata CSV.`
+          : "Metadata CSV downloaded.",
+      })
     } catch {
       setDownloadPhase("select")
       toast({ title: "Download failed", description: "One or more images could not be prepared. Try again or download at original size." })
@@ -716,9 +741,9 @@ export function RetailerImageBrowser() {
                   className="border-t border-border hover:bg-muted/50"
                 >
                   <td className="px-3 py-2">
-                    {product.images > 0 ? (
+                    {mediaFor(product.id)[0] ? (
                       <img
-                        src={MOCK_IMAGES[0].previewSrc}
+                        src={mediaFor(product.id)[0].previewSrc}
                         alt={product.description}
                         className="size-10 rounded border border-border object-cover cursor-pointer"
                         onClick={() => handleProductSelect(product)}
@@ -760,27 +785,35 @@ export function RetailerImageBrowser() {
 
   // Product Media View (read-only for retailer)
   if (currentView === "product-media") {
+    const productMedia = mediaFor(selectedProduct?.id)
     return (
       <div className="flex flex-col gap-6">
         {renderBreadcrumb()}
-        
-        {/* Toolbar — selection + download + AI attributes; read-only (no edit/delete) */}
+
+        {/* Toolbar — selection + download; read-only (no edit/delete) */}
         <div className="flex items-center gap-2 border border-border bg-card p-1 w-fit">
-          <label className="flex items-center gap-2 px-2 cursor-pointer select-none">
-            <Checkbox
-              checked={media.isAllSelected(MOCK_IMAGES.map(i => i.fileName))}
-              onCheckedChange={(checked) =>
-                checked ? media.selectAll(MOCK_IMAGES.map(i => i.fileName)) : media.clear()
-              }
-            />
-            <span className="text-xs text-muted-foreground">
-              {media.selectedIds.size === 0
-                ? `All ${MOCK_IMAGES.length} selected`
-                : `${media.selectedIds.size} selected`}
-            </span>
-          </label>
+          {productMedia.length > 0 && (
+            <label className="flex items-center gap-2 px-2 cursor-pointer select-none">
+              <Checkbox
+                checked={media.isAllSelected(productMedia.map(i => i.fileName))}
+                onCheckedChange={(checked) =>
+                  checked ? media.selectAll(productMedia.map(i => i.fileName)) : media.clear()
+                }
+              />
+              <span className="text-xs text-muted-foreground">
+                {media.selectedIds.size === 0
+                  ? `All ${productMedia.length} selected`
+                  : `${media.selectedIds.size} selected`}
+              </span>
+            </label>
+          )}
           <div className="flex items-center gap-1">
-            <button className="p-1.5 hover:bg-muted" title="Download" onClick={() => openDownloadModal()}>
+            <button
+              className="p-1.5 hover:bg-muted disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-transparent"
+              title="Download"
+              disabled={productMedia.length === 0}
+              onClick={() => openDownloadModal()}
+            >
               <Download className="size-4 text-muted-foreground" />
             </button>
           </div>
@@ -796,15 +829,15 @@ export function RetailerImageBrowser() {
           <div><span className="font-medium text-muted-foreground">Product Description:</span> <span className="text-foreground">{selectedProduct?.description}</span></div>
           <div><span className="font-medium text-muted-foreground">Images:</span> <span className="text-foreground">{selectedProduct?.images}</span></div>
           {/* Buyer-value summary: coverage + freshness, derived from the image data itself */}
-          {(() => {
-            const views = [...new Set(MOCK_IMAGES.map(i => humanize(i.orientation)))]
-            const latest = MOCK_IMAGES
+          {productMedia.length > 0 && (() => {
+            const views = [...new Set(productMedia.map(i => humanize(i.orientation)))]
+            const latest = productMedia
               .flatMap(i => [i.lastUpdate, i.createDate].filter((d): d is string => !!d))
               .map(d => new Date(d))
               .sort((a, b) => b.getTime() - a.getTime())[0]
             return (
               <div className="pt-1 text-sm font-medium text-foreground">
-                {MOCK_IMAGES.length} image{MOCK_IMAGES.length !== 1 ? "s" : ""} · {views.join(" & ")} views
+                {productMedia.length} image{productMedia.length !== 1 ? "s" : ""} · {views.join(" & ")} views
                 {latest ? ` · Updated ${latest.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}` : ""}
               </div>
             )
@@ -812,9 +845,9 @@ export function RetailerImageBrowser() {
         </div>
 
         {/* Sticky jump-to thumbnail strip — hidden when only 1 image (Acceptance #9) */}
-        {MOCK_IMAGES.length > 1 && (
+        {productMedia.length > 1 && (
           <div className="sticky top-0 z-10 bg-card border border-border p-2 flex gap-2 overflow-x-auto shadow-sm">
-            {MOCK_IMAGES.map((img, idx) => (
+            {productMedia.map((img, idx) => (
               <button
                 key={idx}
                 title={img.fileName}
@@ -830,9 +863,19 @@ export function RetailerImageBrowser() {
         )}
 
         {/* Stacked image cards — the shared supplier card, read-only: selection + download only,
-            no edit/delete affordances. Full field parity with the supplier's Product Media view. */}
+            no edit/delete affordances. Full field parity with the supplier's Product Media view.
+            Products without synced images get an honest empty state (audit R5). */}
+        {productMedia.length === 0 ? (
+          <div className="flex flex-col items-center justify-center py-16 text-center border-2 border-dashed border-border rounded">
+            <FileImage className="size-16 text-muted-foreground/40 mb-4" />
+            <h3 className="text-base font-semibold text-foreground mb-1">No images on this product</h3>
+            <p className="text-sm text-muted-foreground">
+              {selectedVendor?.name ?? "The vendor"} hasn&apos;t synced any images for {selectedProduct?.id ?? "this product"} yet.
+            </p>
+          </div>
+        ) : (
         <div className="flex flex-col gap-3">
-          {MOCK_IMAGES.map((img, idx) => (
+          {productMedia.map((img, idx) => (
             <ImageDetailCard
               key={img.fileName}
               id={`retailer-card-${idx}`}
@@ -861,7 +904,7 @@ export function RetailerImageBrowser() {
               previewSrc={img.previewSrc}
               previewAlt={img.fileName}
               checked={media.isChecked(img.fileName)}
-              onCheckedChange={() => media.toggle(img.fileName, MOCK_IMAGES.map(i => i.fileName))}
+              onCheckedChange={() => media.toggle(img.fileName, productMedia.map(i => i.fileName))}
               headerActions={
                 <button
                   className="p-1.5 hover:bg-muted rounded"
@@ -876,12 +919,13 @@ export function RetailerImageBrowser() {
             />
           ))}
         </div>
+        )}
 
-        {/* Download Modal — shared with the supplier (three-phase, dimension picker, real files) */}
+        {/* Download Modal — shared with the supplier (three-phase, ZIP/CSV picker, real files) */}
         <DownloadModal
           open={showDownloadModal}
           phase={downloadPhase}
-          uploadedFiles={MOCK_IMAGES.map(img => ({
+          uploadedFiles={productMedia.map(img => ({
             id: img.fileName,
             name: img.fileName,
             size: img.fileSizeBytes,
@@ -894,6 +938,8 @@ export function RetailerImageBrowser() {
           lastCsvPreview={lastCsvPreview}
           downloadSize={downloadSize}
           onDownloadSizeChange={setDownloadSize}
+          packageType={downloadPackageType}
+          onPackageTypeChange={setDownloadPackageType}
           onClose={() => setShowDownloadModal(false)}
           onDownload={() => { void handleRetailerDownload() }}
         />

@@ -42,6 +42,10 @@ type DownloadModalProps = {
   // Long-edge cap for the downloaded images; null = original size. Downscale only.
   downloadSize: number | null
   onDownloadSizeChange: (size: number | null) => void
+  // "zip" (default): one {product}_images.zip with the image binaries + metadata CSV.
+  // "csv": just the metadata CSV, no binaries.
+  packageType: "zip" | "csv"
+  onPackageTypeChange: (t: "zip" | "csv") => void
   onClose: () => void
   onDownload: () => void
 }
@@ -57,7 +61,7 @@ function formatFileSize(bytes: number): string {
   return (bytes / (1024 * 1024)).toFixed(1) + " MB"
 }
 
-export function DownloadModal({ open, phase, uploadedFiles, isChecked, uploadLevel, autoData, lastCsvPreview, downloadSize, onDownloadSizeChange, onClose, onDownload }: DownloadModalProps) {
+export function DownloadModal({ open, phase, uploadedFiles, isChecked, uploadLevel, autoData, lastCsvPreview, downloadSize, onDownloadSizeChange, packageType, onPackageTypeChange, onClose, onDownload }: DownloadModalProps) {
   // Free-typed custom long edge; empty/0/invalid means "no custom cap" (Original).
   const [customSize, setCustomSize] = useState("")
   if (!open) return null
@@ -147,12 +151,51 @@ export function DownloadModal({ open, phase, uploadedFiles, isChecked, uploadLev
                 </div>
               </div>
 
+              {/* Package choice — one ZIP with everything, or just the metadata CSV */}
+              <div className="mb-6">
+                <h4 className="text-sm font-medium text-foreground mb-3">Package:</h4>
+                <div className="flex flex-col gap-2">
+                  <button
+                    type="button"
+                    aria-pressed={packageType === "zip"}
+                    onClick={() => onPackageTypeChange("zip")}
+                    className={cn(
+                      "flex items-start gap-3 rounded border p-3 text-left transition-colors",
+                      packageType === "zip" ? "border-primary bg-primary/5" : "border-border hover:bg-muted/30",
+                    )}
+                  >
+                    <Package className={cn("mt-0.5 size-4 shrink-0", packageType === "zip" ? "text-primary" : "text-muted-foreground")} />
+                    <span className="text-sm">
+                      <span className="font-medium text-foreground">ZIP package</span>
+                      <span className="block text-xs text-muted-foreground">
+                        {autoData.productId || "product"}_images.zip — {selectedFiles.length} image{selectedFiles.length !== 1 ? "s" : ""} + metadata CSV in one file
+                      </span>
+                    </span>
+                  </button>
+                  <button
+                    type="button"
+                    aria-pressed={packageType === "csv"}
+                    onClick={() => onPackageTypeChange("csv")}
+                    className={cn(
+                      "flex items-start gap-3 rounded border p-3 text-left transition-colors",
+                      packageType === "csv" ? "border-primary bg-primary/5" : "border-border hover:bg-muted/30",
+                    )}
+                  >
+                    <FileText className={cn("mt-0.5 size-4 shrink-0", packageType === "csv" ? "text-primary" : "text-muted-foreground")} />
+                    <span className="text-sm">
+                      <span className="font-medium text-foreground">Metadata CSV only</span>
+                      <span className="block text-xs text-muted-foreground">Just the metadata file — no image binaries</span>
+                    </span>
+                  </button>
+                </div>
+              </div>
+
               {/* Files to Download — reflects the selection already made on the Product Media
                   grid/toolbar; no in-modal checkboxes, to keep selection to a single control. */}
               <div className="mb-6">
                 <h4 className="text-sm font-medium text-foreground mb-3">Package Contents:</h4>
                 <div className="space-y-2 max-h-48 overflow-y-auto">
-                  {selectedFiles.map((file) => (
+                  {packageType === "zip" && selectedFiles.map((file) => (
                     <div key={file.id} className="flex items-center gap-3 rounded border border-border bg-card p-3">
                       <div className="flex size-10 items-center justify-center rounded bg-muted">
                         {file.preview ? (
@@ -193,7 +236,9 @@ export function DownloadModal({ open, phase, uploadedFiles, isChecked, uploadLev
                 </div>
               </div>
 
-              {/* Image dimensions — long-edge cap, downscale only (aspect ratio preserved). */}
+              {/* Image dimensions — long-edge cap, downscale only (aspect ratio preserved).
+                  Irrelevant when only the CSV is downloaded. */}
+              {packageType === "zip" && (
               <div className="mb-6">
                 <h4 className="text-sm font-medium text-foreground mb-1 flex items-center gap-1.5">
                   <Ruler className="size-4 text-primary" />
@@ -244,6 +289,7 @@ export function DownloadModal({ open, phase, uploadedFiles, isChecked, uploadLev
                   </p>
                 )}
               </div>
+              )}
 
               {/* Info Note */}
               <div className="mb-6 flex items-start gap-2 rounded bg-primary/5 p-3 text-sm">
@@ -261,7 +307,9 @@ export function DownloadModal({ open, phase, uploadedFiles, isChecked, uploadLev
                 </Button>
                 <Button onClick={onDownload} disabled={selectedFiles.length === 0}>
                   <Download className="size-4 mr-2" />
-                  Download {selectedFiles.length} image{selectedFiles.length !== 1 ? "s" : ""} + metadata CSV
+                  {packageType === "zip"
+                    ? `Download ZIP (${selectedFiles.length} image${selectedFiles.length !== 1 ? "s" : ""} + CSV)`
+                    : "Download metadata CSV"}
                 </Button>
               </div>
             </>
@@ -276,7 +324,9 @@ export function DownloadModal({ open, phase, uploadedFiles, isChecked, uploadLev
               <div className="text-center">
                 <h3 className="text-lg font-medium text-foreground">Preparing your download</h3>
                 <p className="text-sm text-muted-foreground mt-1">
-                  Packaging {selectedFiles.length} images with metadata...
+                  {packageType === "zip"
+                    ? `Packaging ${selectedFiles.length} image${selectedFiles.length !== 1 ? "s" : ""} + metadata into one ZIP...`
+                    : "Preparing metadata CSV..."}
                 </p>
               </div>
               <div className="w-48 h-1.5 rounded-full bg-muted overflow-hidden">
@@ -298,18 +348,33 @@ export function DownloadModal({ open, phase, uploadedFiles, isChecked, uploadLev
 
               {/* Downloaded Files Summary */}
               <div className="rounded border border-border bg-muted/20 p-4 mb-6 text-left">
-                <div className="text-sm font-medium text-foreground mb-3">Downloaded Files:</div>
+                <div className="text-sm font-medium text-foreground mb-3">
+                  {packageType === "zip" ? "Downloaded ZIP:" : "Downloaded File:"}
+                </div>
                 <div className="space-y-2 max-h-32 overflow-y-auto">
-                  {selectedFiles.map((file) => (
-                    <div key={file.id} className="flex items-center gap-2 text-sm text-foreground">
+                  {packageType === "zip" ? (
+                    <>
+                      <div className="flex items-center gap-2 text-sm text-foreground">
+                        <Check className="size-4 text-tg-success" />
+                        <span className="font-medium">{autoData.productId || "product"}_images.zip</span>
+                      </div>
+                      {selectedFiles.map((file) => (
+                        <div key={file.id} className="flex items-center gap-2 pl-6 text-sm text-muted-foreground">
+                          <FileImage className="size-3.5" />
+                          <span>{file.name}</span>
+                        </div>
+                      ))}
+                      <div className="flex items-center gap-2 pl-6 text-sm text-muted-foreground">
+                        <FileText className="size-3.5" />
+                        <span>{autoData.productId || "product"}_image_metadata.csv</span>
+                      </div>
+                    </>
+                  ) : (
+                    <div className="flex items-center gap-2 text-sm text-foreground">
                       <Check className="size-4 text-tg-success" />
-                      <span>{file.name}</span>
+                      <span>{autoData.productId || "product"}_image_metadata.csv</span>
                     </div>
-                  ))}
-                  <div className="flex items-center gap-2 text-sm text-foreground">
-                    <Check className="size-4 text-tg-success" />
-                    <span>{autoData.productId || "product"}_image_metadata.csv</span>
-                  </div>
+                  )}
                 </div>
               </div>
 
