@@ -2,10 +2,8 @@
 
 import { useState } from "react"
 import {
-  X,
   Check,
   Info,
-  Pencil,
   AlertCircle,
   Sparkles,
   Loader2,
@@ -40,13 +38,9 @@ import { cn } from "@/lib/utils"
 import { getCategoryBricks } from "@/lib/gs1/generated-bricks"
 import type { UploadedFile } from "./uploaded-file"
 import { useAiAttributes, PRODUCT_CATEGORIES } from "./use-ai-attributes"
+import { SuggestionReviewTable, type SuggestionRow } from "./suggestion-review-table"
 import { ORIENTATION_OPTIONS, FACING_OPTIONS } from "./attribute-options"
-import type { ExtractedAttribute, UnresolvedAttribute } from "@/lib/gs1/types"
-
-// Attributes at or above this confidence are treated as "looks good" and collapsed by default;
-// below it they surface in the "Needs your attention" band. Review-by-exception: the human's
-// eye goes to the uncertain items first, but every attribute stays fully editable.
-const ATTENTION_THRESHOLD = 0.9
+import type { UnresolvedAttribute } from "@/lib/gs1/types"
 
 // ── Searchable combobox for picking a GS1 code-list value ───────────────────────
 // Used both to resolve an unresolved attribute (no current value → "Set value") and to
@@ -180,136 +174,6 @@ function UnresolvedSection({
   )
 }
 
-// ── Compact, review-by-exception product attribute card ─────────────────────────
-// One tight row: confidence dot + label + Accept/Reject/Edit. The value sits below; the
-// GS1 code and AI reasoning are hidden behind a "Details" disclosure so the supplier can
-// scan values fast and only dig in when something looks off. Every card — regardless of
-// confidence — keeps Accept / Reject / Edit (human-in-the-loop on all values).
-function ProductAttributeCard({
-  attr,
-  idx,
-  editing,
-  options,
-  onEditToggle,
-  onDecision,
-  onSelectValue,
-  onFieldChange,
-}: {
-  attr: ExtractedAttribute
-  idx: number
-  editing: boolean
-  options: { code: string; value: string }[]
-  onEditToggle: () => void
-  onDecision: (decision: "accepted" | "rejected" | "pending") => void
-  onSelectValue: (value: string) => void
-  onFieldChange: (field: "attributeValue" | "code", value: string) => void
-}) {
-  const [showDetails, setShowDetails] = useState(false)
-  const pct = Math.round(attr.confidence * 100)
-  const dotColor =
-    attr.confidence >= 0.9 ? "bg-tg-success"
-      : attr.confidence >= 0.75 ? "bg-tg-warning"
-      : "bg-destructive"
-
-  return (
-    <div
-      className={cn(
-        "flex flex-col gap-1.5 rounded border p-2.5",
-        attr.decision === "accepted" ? "border-tg-success/40 bg-card"
-          : attr.decision === "rejected" ? "border-border bg-muted/30 opacity-70"
-          : "border-border bg-card",
-      )}
-    >
-      <div className="flex items-center justify-between gap-2">
-        <div className="flex min-w-0 items-center gap-1.5">
-          <span className={cn("size-2 shrink-0 rounded-full", dotColor)} title={`${pct}% confidence`} />
-          <span className="truncate text-xs font-medium uppercase tracking-wide text-muted-foreground">{attr.codeListName}</span>
-          {attr.decision === "accepted" && <Check className="size-3 shrink-0 text-tg-success" />}
-          {attr.decision === "rejected" && <X className="size-3 shrink-0 text-muted-foreground" />}
-        </div>
-        <div className="flex shrink-0 items-center gap-0.5">
-          <Button
-            variant={attr.decision === "accepted" ? "default" : "ghost"}
-            size="icon"
-            className="size-7"
-            aria-label="Accept"
-            aria-pressed={attr.decision === "accepted"}
-            onClick={() => onDecision(attr.decision === "accepted" ? "pending" : "accepted")}
-          >
-            <Check className="size-3.5" />
-          </Button>
-          <Button
-            variant="ghost"
-            size="icon"
-            className={cn("size-7", attr.decision === "rejected" ? "bg-destructive/10 text-destructive" : "text-muted-foreground hover:text-destructive")}
-            aria-label="Reject"
-            aria-pressed={attr.decision === "rejected"}
-            onClick={() => onDecision(attr.decision === "rejected" ? "pending" : "rejected")}
-          >
-            <X className="size-3.5" />
-          </Button>
-          <Button
-            variant={editing ? "secondary" : "ghost"}
-            size="icon"
-            className="size-7 text-muted-foreground"
-            aria-label="Edit"
-            aria-pressed={editing}
-            onClick={onEditToggle}
-          >
-            <Pencil className="size-3.5" />
-          </Button>
-        </div>
-      </div>
-
-      {editing ? (
-        <div className="flex flex-col gap-2 pt-0.5">
-          {options.length > 0 ? (
-            <ValueCombobox
-              fullWidth
-              options={options}
-              value={options.some(v => v.value === attr.attributeValue) ? attr.attributeValue : undefined}
-              onSelect={onSelectValue}
-              placeholder="Select a value…"
-            />
-          ) : (
-            <Input
-              value={attr.attributeValue}
-              onChange={(e) => onFieldChange("attributeValue", e.target.value)}
-              className="h-8 bg-background"
-              autoFocus
-            />
-          )}
-          <Button size="sm" variant="outline" className="h-7 w-fit gap-1 px-2 text-xs" onClick={onEditToggle}>
-            <Check className="size-3" /> Done
-          </Button>
-        </div>
-      ) : (
-        <>
-          <p className="text-sm font-medium text-foreground">{attr.attributeValue}</p>
-          <button
-            type="button"
-            className="flex w-fit items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
-            onClick={() => setShowDetails(v => !v)}
-            aria-expanded={showDetails}
-          >
-            {showDetails ? <ChevronDown className="size-3" /> : <ChevronRight className="size-3" />}
-            Details
-          </button>
-          {showDetails && (
-            <div className="flex flex-col gap-1 pl-4">
-              <p className="text-xs text-muted-foreground">
-                GS1 Code: <span className="font-mono text-foreground">{attr.code}</span>
-                <span className="ml-2">Confidence: {pct}%</span>
-              </p>
-              {attr.reason && <p className="text-xs text-muted-foreground">{attr.reason}</p>}
-            </div>
-          )}
-        </>
-      )}
-    </div>
-  )
-}
-
 // Consolidated AI section (P1.1): one card, one entry point. Classification proposes a
 // brick from the images; the human confirms (or corrects via the manual panel); confirming
 // runs the extended-attribute extraction pass. Per-image detail suggestions live in the
@@ -325,10 +189,6 @@ type AiSectionProps = {
   onRequestReupload?: () => void
 }
 
-// Attributes at or above this confidence collapse into the "looks good" band; below it they
-// surface in "Needs attention" for review-by-exception (Task 3).
-const HIGH_CONFIDENCE = 0.9
-
 export function AiSection({ ai, uploadedFiles, onRequestReupload }: AiSectionProps) {
   const {
     aiCategory, setAiCategory, aiBrick, setAiBrick,
@@ -340,25 +200,13 @@ export function AiSection({ ai, uploadedFiles, onRequestReupload }: AiSectionPro
     runExtraction, runClassification, confirmClassification, confirmPrimaryImage,
     setAttributeDecision, updateAttributeField, selectAttributeValue, resolveUnresolvedAttribute,
     clearExtraction, clearShotSuggestions,
-    isExtracting, isComplete, isError, acceptedExtractedAttributes, pendingExtractedCount, acceptAllPending, acceptPendingByIndex,
+    isExtracting, isComplete, isError, acceptedExtractedAttributes, pendingExtractedCount, acceptAllPending,
   } = ai
 
   // Same-product gate (Task 2): with 2+ images, "Classify & extract" first asks the user to
   // confirm all images show the same product — the extraction prompt treats them as one
   // product, so mixed sets produce averaged, wrong attributes.
   const [gateOpen, setGateOpen] = useState(false)
-  // Per-attribute expansion (reasoning + GS1 code) in the compact cards.
-  const [expandedAttrs, setExpandedAttrs] = useState<Set<number>>(new Set())
-  // "N attributes look good" band, collapsed by default.
-  const [looksGoodOpen, setLooksGoodOpen] = useState(false)
-
-  const toggleExpanded = (idx: number) =>
-    setExpandedAttrs(prev => {
-      const next = new Set(prev)
-      if (next.has(idx)) next.delete(idx)
-      else next.add(idx)
-      return next
-    })
 
   // Manual category+brick correction panel — the fallback path when the AI proposal (or its
   // absence) isn't right. Picking a brick here confirms classification directly (see the
@@ -436,122 +284,11 @@ export function AiSection({ ai, uploadedFiles, onRequestReupload }: AiSectionPro
     </>
   )
 
-  // Compact attribute card (Task 3): label + decision dot + value + confidence on one row with
-  // Accept/Edit/Reject right-aligned; reasoning truncated to one line, expandable together with
-  // the GS1 code. Editing swaps the value for the searchable code — value combobox.
-  const renderCompactAttrCard = (attr: ExtractedAttribute, idx: number) => {
-    const editing = aiEditing?.index === idx
-    const expanded = expandedAttrs.has(idx)
-    const allowed = valuesForCodeList(attr.codeListName)
-    return (
-      <div
-        key={`${attr.code}-${idx}`}
-        className={cn(
-          "flex flex-col gap-1 rounded border px-3 py-2",
-          attr.decision === "accepted" ? "border-tg-success/40 bg-card"
-            : attr.decision === "rejected" ? "border-border bg-muted/30 opacity-70"
-            : "border-border bg-card"
-        )}
-      >
-        <div className="flex items-center gap-2 min-w-0">
-          {/* Decision/attention dot */}
-          <span
-            className={cn(
-              "size-2 shrink-0 rounded-full",
-              attr.decision === "accepted" ? "bg-tg-success"
-                : attr.decision === "rejected" ? "bg-muted-foreground/40"
-                : attr.confidence >= HIGH_CONFIDENCE ? "bg-tg-success/50"
-                : "bg-tg-warning"
-            )}
-          />
-          <span className="max-w-[180px] shrink-0 truncate text-xs font-medium uppercase tracking-wide text-muted-foreground" title={attr.codeListName}>
-            {attr.codeListName}
-          </span>
-          {editing ? (
-            allowed.length > 0 ? (
-              <UnresolvedCombobox
-                options={allowed}
-                triggerLabel={attr.attributeValue || "Set value"}
-                onSelect={(v) => { selectAttributeValue(idx, v); setAiEditing(null) }}
-              />
-            ) : (
-              <Input
-                value={attr.attributeValue}
-                onChange={(e) => updateAttributeField(idx, "attributeValue", e.target.value)}
-                onBlur={() => setAiEditing(null)}
-                onKeyDown={(e) => { if (e.key === "Enter") setAiEditing(null) }}
-                className="h-7 w-44 bg-background text-sm"
-                autoFocus
-              />
-            )
-          ) : (
-            <span className="truncate text-sm font-medium text-foreground" title={attr.attributeValue}>{attr.attributeValue}</span>
-          )}
-          <span className="shrink-0 text-xs text-muted-foreground">{Math.round(attr.confidence * 100)}%</span>
-          <div className="ml-auto flex shrink-0 items-center gap-1">
-            <Button
-              variant={attr.decision === "accepted" ? "default" : "outline"}
-              size="sm"
-              className="h-6 gap-1 px-1.5 text-xs"
-              aria-pressed={attr.decision === "accepted"}
-              onClick={() => setAttributeDecision(idx, attr.decision === "accepted" ? "pending" : "accepted")}
-            >
-              <Check className="size-3" /> Accept
-            </Button>
-            <Button
-              variant="outline"
-              size="sm"
-              className="h-6 gap-1 px-1.5 text-xs"
-              onClick={() => setAiEditing(editing ? null : { index: idx })}
-            >
-              <Pencil className="size-3" /> Edit
-            </Button>
-            <Button
-              variant="outline"
-              size="sm"
-              className={cn(
-                "h-6 gap-1 px-1.5 text-xs",
-                attr.decision === "rejected"
-                  ? "border-destructive/50 bg-destructive/10 text-destructive"
-                  : "text-muted-foreground hover:text-destructive"
-              )}
-              aria-pressed={attr.decision === "rejected"}
-              onClick={() => setAttributeDecision(idx, attr.decision === "rejected" ? "pending" : "rejected")}
-            >
-              <X className="size-3" /> Reject
-            </Button>
-          </div>
-        </div>
-        {/* One-line reasoning; expanding reveals the full text + GS1 code */}
-        <button
-          type="button"
-          onClick={() => toggleExpanded(idx)}
-          aria-expanded={expanded}
-          className="flex items-start gap-1 text-left"
-        >
-          {expanded
-            ? <ChevronDown className="mt-0.5 size-3 shrink-0 text-muted-foreground" />
-            : <ChevronRight className="mt-0.5 size-3 shrink-0 text-muted-foreground" />}
-          <span className={cn("text-xs text-muted-foreground", !expanded && "line-clamp-1")}>{attr.reason}</span>
-        </button>
-        {expanded && (
-          <p className="pl-4 text-xs text-muted-foreground">
-            GS1 Code: <span className="font-mono text-foreground">{attr.code}</span>
-          </p>
-        )}
-      </div>
-    )
-  }
-
-  // Editable AI results card — review-by-exception (Task 3): low-confidence attributes surface
-  // in an expanded "Needs attention" band; high-confidence ones collapse behind a count chip
-  // with an inline Accept all. Also shown post-confirm in the "View AI Attributes" drawer.
+  // Editable AI results card: every suggested attribute in one flat review table, sorted
+  // riskiest-first (ascending confidence) — the bar color carries the attention signal.
+  // Also shown post-confirm in the "View AI Attributes" drawer.
   const renderAiResultsCard = () => {
     if (!isComplete || !aiExtraction) return null
-    const indexed = aiExtraction.attributes.map((attr, idx) => ({ attr, idx }))
-    const needsAttention = indexed.filter(({ attr }) => attr.confidence < HIGH_CONFIDENCE)
-    const looksGood = indexed.filter(({ attr }) => attr.confidence >= HIGH_CONFIDENCE)
-    const looksGoodPending = looksGood.filter(({ attr }) => attr.decision === "pending")
     return (
       <div className="flex flex-col gap-4">
         {/* Results header */}
@@ -579,99 +316,69 @@ export function AiSection({ ai, uploadedFiles, onRequestReupload }: AiSectionPro
               )}
             </p>
           </div>
-          <div className="flex items-center gap-1 shrink-0">
-            {pendingExtractedCount > 0 && (
-              <Button variant="outline" size="sm" className="gap-1" onClick={acceptAllPending}>
-                <Check className="size-3.5" />
-                Accept All
-              </Button>
-            )}
-          </div>
         </div>
         <div className="flex items-start gap-2 rounded bg-muted/30 p-2">
           <Info className="size-3.5 text-muted-foreground mt-0.5 shrink-0" />
           <p className="text-xs text-muted-foreground">AI suggestions apply to all images of this product. Review each before saving.</p>
         </div>
 
-        {/* Product-level attribute cards — no wrapper box; bands lay flat inside the results card */}
+        {/* Product-level attribute review table — flat, riskiest suggestions first */}
         <div className="flex flex-col gap-3">
           {aiExtraction.attributes.length === 0 ? (
             <p className="text-sm text-muted-foreground">No extended attributes were suggested for this category.</p>
           ) : (
-            (() => {
-              const withIdx = aiExtraction.attributes.map((attr, idx) => ({ attr, idx }))
-              const needsAttention = withIdx.filter(({ attr }) => attr.confidence < ATTENTION_THRESHOLD)
-              const looksGood = withIdx.filter(({ attr }) => attr.confidence >= ATTENTION_THRESHOLD)
-              const looksGoodPending = looksGood.filter(({ attr }) => attr.decision === "pending").map(({ idx }) => idx)
-              const renderCard = ({ attr, idx }: { attr: ExtractedAttribute; idx: number }) => (
-                <ProductAttributeCard
-                  key={`${attr.code}-${idx}`}
-                  attr={attr}
-                  idx={idx}
-                  editing={aiEditing?.index === idx}
-                  options={valuesForCodeList(attr.codeListName)}
-                  onEditToggle={() => setAiEditing(aiEditing?.index === idx ? null : { index: idx })}
-                  onDecision={(d) => setAttributeDecision(idx, d)}
-                  onSelectValue={(v) => selectAttributeValue(idx, v)}
-                  onFieldChange={(f, v) => updateAttributeField(idx, f, v)}
-                />
-              )
-              return (
-                <div className="flex flex-col gap-3">
-                  {/* Needs attention band — low confidence, always expanded */}
-                  {needsAttention.length > 0 && (
-                    <div className="flex flex-col gap-2">
-                      <div className="flex items-center gap-1.5">
-                        <AlertCircle className="size-3.5 text-tg-warning" />
-                        <p className="text-xs font-semibold uppercase tracking-wide text-tg-warning">
-                          Needs your attention ({needsAttention.length})
-                        </p>
-                      </div>
-                      <div className="grid grid-cols-1 gap-2 md:grid-cols-2">
-                        {needsAttention.map(renderCard)}
-                      </div>
-                    </div>
-                  )}
-
-                  {/* Looks good band — high confidence, collapsed by default */}
-                  {looksGood.length > 0 && (
-                    <div className="flex flex-col overflow-hidden rounded border border-border bg-muted/20">
-                      <div className="flex items-center gap-2 px-3 py-2">
-                        <button
-                          type="button"
-                          className="flex flex-1 items-center gap-2 text-left"
-                          onClick={() => setLooksGoodOpen(v => !v)}
-                          aria-expanded={looksGoodOpen}
-                        >
-                          {looksGoodOpen
-                            ? <ChevronDown className="size-3.5 shrink-0 text-muted-foreground" />
-                            : <ChevronRight className="size-3.5 shrink-0 text-muted-foreground" />}
-                          <Check className="size-3.5 shrink-0 text-tg-success" />
-                          <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-                            {looksGood.length} attribute{looksGood.length !== 1 ? "s" : ""} look good
-                          </p>
-                        </button>
-                        {looksGoodPending.length > 0 && (
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            className="h-7 shrink-0 gap-1 px-2 text-xs"
-                            onClick={() => acceptPendingByIndex(looksGoodPending)}
-                          >
-                            <Check className="size-3" /> Accept all
-                          </Button>
-                        )}
-                      </div>
-                      {looksGoodOpen && (
-                        <div className="grid grid-cols-1 gap-2 px-3 pb-3 md:grid-cols-2">
-                          {looksGood.map(renderCard)}
-                        </div>
-                      )}
-                    </div>
-                  )}
-                </div>
-              )
-            })()
+            <SuggestionReviewTable
+              rows={aiExtraction.attributes.map((attr, idx): SuggestionRow => ({
+                id: String(idx),
+                label: attr.codeListName,
+                sublabel: attr.code,
+                value: attr.attributeValue,
+                helper: attr.reason,
+                confidence: attr.confidence,
+                status: attr.decision,
+              }))}
+              onConfirm={(id) => {
+                const idx = Number(id)
+                const attr = aiExtraction.attributes[idx]
+                if (attr) setAttributeDecision(idx, attr.decision === "accepted" ? "pending" : "accepted")
+              }}
+              onReject={(id) => {
+                const idx = Number(id)
+                const attr = aiExtraction.attributes[idx]
+                if (attr) setAttributeDecision(idx, attr.decision === "rejected" ? "pending" : "rejected")
+              }}
+              editingId={aiEditing ? String(aiEditing.index) : null}
+              onEditToggle={(id) => setAiEditing(id === null ? null : { index: Number(id) })}
+              renderEditor={(row, close) => {
+                const idx = Number(row.id)
+                const attr = aiExtraction.attributes[idx]
+                if (!attr) return null
+                const allowed = valuesForCodeList(attr.codeListName)
+                return allowed.length > 0 ? (
+                  <ValueCombobox
+                    fullWidth
+                    options={allowed}
+                    value={allowed.some(v => v.value === attr.attributeValue) ? attr.attributeValue : undefined}
+                    onSelect={(v) => { selectAttributeValue(idx, v); close() }}
+                    placeholder="Select a value…"
+                  />
+                ) : (
+                  <Input
+                    value={attr.attributeValue}
+                    onChange={(e) => updateAttributeField(idx, "attributeValue", e.target.value)}
+                    onBlur={close}
+                    onKeyDown={(e) => { if (e.key === "Enter") close() }}
+                    className="h-8 bg-background"
+                    autoFocus
+                  />
+                )
+              }}
+              headerAction={pendingExtractedCount > 0 ? (
+                <Button variant="outline" size="sm" className="h-7 gap-1 px-2 text-xs" onClick={acceptAllPending}>
+                  <Check className="size-3" /> Accept all ({pendingExtractedCount})
+                </Button>
+              ) : undefined}
+            />
           )}
 
           {/* Unresolved attributes — product level, collapsible */}

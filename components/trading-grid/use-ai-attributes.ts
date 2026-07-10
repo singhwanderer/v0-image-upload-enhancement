@@ -48,10 +48,11 @@ export type ProductExtractionResult = {
 // cross-file coupling); clippingPath is never suggested but is in the union so callers can
 // pass any image-detail key through unchanged.
 export type ShotSuggestionField = "orientation" | "facing" | "angle" | "clippingPath" | "imageDescription" | "imageStyle"
+export type ShotFieldStatus = "suggested" | "accepted" | "rejected"
 export type ShotSuggestionEntry = {
   values: Partial<Record<ShotSuggestionField, string>>
-  confidence: number
-  fieldStatus: Partial<Record<ShotSuggestionField, "suggested" | "accepted">>
+  confidences: Partial<Record<ShotSuggestionField, number>>
+  fieldStatus: Partial<Record<ShotSuggestionField, ShotFieldStatus>>
   loading: boolean
   error: string | null
 }
@@ -64,8 +65,6 @@ export type ShotSuggestionState = { [imageIndex: number]: ShotSuggestionEntry }
   imageType: string; purpose: string; orientation: string; locationType: string;
   externalLocation: string; imageStyle: string; facing: string; angle: string;
   clippingPath: string; imageDescription: string;
-  // Tracks whether the user has explicitly confirmed an AI-suggested value (dashed → solid).
-  orientationConfirmed?: boolean; facingConfirmed?: boolean; angleConfirmed?: boolean;
   }
 
 type UseAiAttributesParams = {
@@ -364,7 +363,7 @@ export function useAiAttributes({ uploadedFiles, attributes, setAttributesByImag
   const runShotSuggestionForImage = async (index: number) => {
     const file = uploadedFiles[index]
     if (!file) return
-    const blankEntry: ShotSuggestionEntry = { values: {}, confidence: 0, fieldStatus: {}, loading: false, error: null }
+    const blankEntry: ShotSuggestionEntry = { values: {}, confidences: {}, fieldStatus: {}, loading: false, error: null }
     setShotSuggestions(prev => ({
       ...prev,
       [index]: { ...(prev[index] ?? blankEntry), loading: true, error: null },
@@ -383,7 +382,7 @@ export function useAiAttributes({ uploadedFiles, attributes, setAttributesByImag
         const errBody = await res.json().catch(() => null)
         throw new Error(errBody?.error || `Suggestion failed (${res.status}).`)
       }
-      const data = await res.json() as { suggestions: { fileName: string; orientation: string; facing: string; angle: string; imageStyle: string; description: string; confidence: number }[] }
+      const data = await res.json() as { suggestions: { fileName: string; orientation: string; facing: string; angle: string; imageStyle: string; confidences?: Partial<Record<string, number>> }[] }
       const s = Array.isArray(data.suggestions) ? data.suggestions.find(x => x.fileName === file.name) : undefined
       if (!s) throw new Error("AI could not read this image — set its details manually.")
       const values: ShotSuggestionEntry["values"] = {}
@@ -391,20 +390,23 @@ export function useAiAttributes({ uploadedFiles, attributes, setAttributesByImag
       if (s.facing) values.facing = s.facing
       if (s.angle) values.angle = s.angle
       if (s.imageStyle) values.imageStyle = s.imageStyle
-      if (s.description) values.imageDescription = s.description
       const fieldStatus: ShotSuggestionEntry["fieldStatus"] = {}
-      ;(Object.keys(values) as ShotSuggestionField[]).forEach(k => { fieldStatus[k] = "suggested" })
+      const confidences: ShotSuggestionEntry["confidences"] = {}
+      ;(Object.keys(values) as ShotSuggestionField[]).forEach(k => {
+        fieldStatus[k] = "suggested"
+        confidences[k] = typeof s.confidences?.[k] === "number" ? s.confidences[k] : 0.5
+      })
       setAttributesByImage(prev => {
         const rec = { ...(prev[index] ?? attributes) }
         ;(Object.keys(values) as ShotSuggestionField[]).forEach(k => { rec[k] = values[k]! })
         return { ...prev, [index]: rec }
       })
-      setShotSuggestions(prev => ({ ...prev, [index]: { values, confidence: s.confidence, fieldStatus, loading: false, error: null } }))
+      setShotSuggestions(prev => ({ ...prev, [index]: { values, confidences, fieldStatus, loading: false, error: null } }))
     } catch (err) {
       setShotSuggestions(prev => ({
         ...prev,
         [index]: {
-          values: {}, confidence: 0, fieldStatus: {},
+          values: {}, confidences: {}, fieldStatus: {},
           loading: false,
           error: err instanceof Error ? err.message : "Suggestion failed. You can enter image details manually.",
         },
@@ -418,12 +420,70 @@ export function useAiAttributes({ uploadedFiles, attributes, setAttributesByImag
     await Promise.allSettled(uploadedFiles.map((_, i) => runShotSuggestionForImage(i)))
   }
 
-  // Confirm one suggested field (clicking into the field, or an explicit Accept). The value
-  // keeps its "AI" provenance tag.
+  // Confirm one suggested field (review-table Confirm). Toggles: confirming an already-
+  // accepted row reverts it to "suggested"; confirming a rejected row restores the AI value
+  // (it was cleared on reject) and accepts it.
   const acceptShotField = (index: number, field: ShotSuggestionField) => {
     setShotSuggestions(prev => {
       const entry = prev[index]
-      if (!entry || entry.fieldStatus[field] !== "suggested") return prev
+      const status = entry?.fieldStatus[field]
+      if (!entry || !status) return prev
+      if (status === "rejected") {
+        const restored = entry.values[field]
+        if (restored !== undefined) {
+          setAttributesByImage(p => {
+            const rec = { ...(p[index] ?? attributes) }
+            rec[field] = restored
+            return { ...p, [index]: rec }
+          })
+        }
+        return { ...prev, [index]: { ...entry, fieldStatus: { ...entry.fieldStatus, [field]: "accepted" } } }
+      }
+      const next: ShotFieldStatus = status === "suggested" ? "accepted" : "suggested"
+      return { ...prev, [index]: { ...entry, fieldStatus: { ...entry.fieldStatus, [field]: next } } }
+    })
+  }
+
+  // Reject one suggested field (review-table Reject): clears the value from the image's
+  // record so the rejected suggestion is never submitted. Rejecting again undoes it —
+  // the AI value is restored and the field returns to "suggested".
+  const rejectShotField = (index: number, field: ShotSuggestionField) => {
+    setShotSuggestions(prev => {
+      const entry = prev[index]
+      const status = entry?.fieldStatus[field]
+      if (!entry || !status) return prev
+      if (status === "rejected") {
+        const restored = entry.values[field]
+        if (restored !== undefined) {
+          setAttributesByImage(p => {
+            const rec = { ...(p[index] ?? attributes) }
+            rec[field] = restored
+            return { ...p, [index]: rec }
+          })
+        }
+        return { ...prev, [index]: { ...entry, fieldStatus: { ...entry.fieldStatus, [field]: "suggested" } } }
+      }
+      setAttributesByImage(p => {
+        const rec = { ...(p[index] ?? attributes) }
+        rec[field] = ""
+        return { ...p, [index]: rec }
+      })
+      return { ...prev, [index]: { ...entry, fieldStatus: { ...entry.fieldStatus, [field]: "rejected" } } }
+    })
+  }
+
+  // Commit an edited value from the review table: the new value is a human decision, so the
+  // row lands as "accepted" (unlike a manual form edit, which drops the row via
+  // overrideShotField).
+  const editShotField = (index: number, field: ShotSuggestionField, value: string) => {
+    setAttributesByImage(prev => {
+      const rec = { ...(prev[index] ?? attributes) }
+      rec[field] = value
+      return { ...prev, [index]: rec }
+    })
+    setShotSuggestions(prev => {
+      const entry = prev[index]
+      if (!entry || !entry.fieldStatus[field]) return prev
       return { ...prev, [index]: { ...entry, fieldStatus: { ...entry.fieldStatus, [field]: "accepted" } } }
     })
   }
@@ -486,6 +546,13 @@ export function useAiAttributes({ uploadedFiles, attributes, setAttributesByImag
 
   const anyShotSuggestLoading = Object.values(shotSuggestions).some(e => e.loading)
 
+  // Suggested-but-unreviewed field count across every image — drives the wizard header
+  // button label and the Step 3 warning.
+  const pendingShotFieldCount = Object.values(shotSuggestions).reduce(
+    (sum, e) => sum + Object.values(e.fieldStatus).filter(s => s === "suggested").length,
+    0,
+  )
+
   // Derived status flags from the single product-level extraction result
   const isExtracting = aiExtraction?.status === "extracting"
   const isComplete = aiExtraction?.status === "complete"
@@ -505,16 +572,6 @@ export function useAiAttributes({ uploadedFiles, attributes, setAttributesByImag
     })
   }
 
-  // Accept every still-pending suggestion whose index is in the given set — used to accept a
-  // single review band ("Looks good") without touching the other band.
-  const acceptPendingByIndex = (indices: number[]) => {
-    const set = new Set(indices)
-    setAiExtraction(prev => {
-      if (!prev) return prev
-      return { ...prev, attributes: prev.attributes.map((a, i) => set.has(i) && a.decision === "pending" ? { ...a, decision: "accepted" as const } : a) }
-    })
-  }
-
   return {
     aiCategory, setAiCategory, aiBrick, setAiBrick,
     aiExtraction, aiEditing, setAiEditing, shotSuggestions,
@@ -525,8 +582,8 @@ export function useAiAttributes({ uploadedFiles, attributes, setAttributesByImag
     runExtraction, runClassification, confirmClassification, confirmPrimaryImage,
     setAttributeDecision, updateAttributeField, selectAttributeValue, resolveUnresolvedAttribute,
     clearExtraction, clearShotSuggestions,
-    runShotSuggestionForImage, runAllShotSuggestions, acceptShotField, acceptShotImage, acceptAllShotSuggestions,
-    overrideShotField, clearShotSuggestionEntry, hasUnreviewedSuggestion, anyShotSuggestLoading,
-    isExtracting, isComplete, isError, hasExtraction, acceptedExtractedAttributes, pendingExtractedCount, acceptAllPending, acceptPendingByIndex,
+    runShotSuggestionForImage, runAllShotSuggestions, acceptShotField, rejectShotField, editShotField, acceptShotImage, acceptAllShotSuggestions,
+    overrideShotField, clearShotSuggestionEntry, hasUnreviewedSuggestion, anyShotSuggestLoading, pendingShotFieldCount,
+    isExtracting, isComplete, isError, hasExtraction, acceptedExtractedAttributes, pendingExtractedCount, acceptAllPending,
   }
 }

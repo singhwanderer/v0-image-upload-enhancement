@@ -3,7 +3,7 @@ import { GoogleGenAI } from "@google/genai"
 
 // Per-shot attribute suggestion route (P0.2b): given a product's images, propose the
 // per-image spec fields a vision model reads directly from the shot — orientation,
-// facing, angle, and a one-line description. Strictly optional: the manual per-shot
+// facing, angle, and image style. Strictly optional: the manual per-shot
 // form is complete without this. Server-only; GEMINI_API_KEY never reaches the client.
 export const runtime = "nodejs"
 export const maxDuration = 60
@@ -18,14 +18,16 @@ const FACING_CODES = ["1", "2", "3", "7", "8", "9"]
 const ANGLE_CODES = ["1", "2", "3", "7", "8", "9"]
 const IMAGE_STYLE_CODES = ["CSW", "PRO"]
 
+export type ShotSuggestionField = "orientation" | "facing" | "angle" | "imageStyle"
+
 export type ShotSuggestion = {
   fileName: string
   orientation: string
   facing: string
   angle: string
   imageStyle: string
-  description: string
-  confidence: number
+  // Per-field confidence so the review table can show one bar per suggestion.
+  confidences: Record<ShotSuggestionField, number>
 }
 
 export type ShotSuggestionsResponse = { suggestions: ShotSuggestion[] }
@@ -99,10 +101,9 @@ Allowed codes (answer ONLY with these):
 
 Rules:
 - Return one entry per image, matching fileName exactly.
-- description: one concise sentence describing what the image shows.
-- confidence: a number between 0 and 1 per entry.
+- confidences: a number between 0 and 1 for EACH of orientation, facing, angle, imageStyle — rate each field independently.
 - Return JSON only, no markdown fences, in exactly this shape:
-{ "suggestions": [ { "fileName": string, "orientation": string, "facing": string, "angle": string, "imageStyle": string, "description": string, "confidence": number } ] }`
+{ "suggestions": [ { "fileName": string, "orientation": string, "facing": string, "angle": string, "imageStyle": string, "confidences": { "orientation": number, "facing": number, "angle": number, "imageStyle": number } } ] }`
 
   const callGemini = async (): Promise<string> => {
     const ai = new GoogleGenAI({ apiKey })
@@ -141,18 +142,26 @@ Rules:
   const clean: ShotSuggestion[] = []
   for (const s of Array.isArray(parsed.suggestions) ? parsed.suggestions : []) {
     if (typeof s !== "object" || s === null) continue
-    const { fileName, orientation, facing, angle, imageStyle, description, confidence } = s as Record<string, unknown>
+    const { fileName, orientation, facing, angle, imageStyle, confidences, confidence } = s as Record<string, unknown>
     if (typeof fileName !== "string" || !knownNames.has(fileName)) continue
     const cleanOrientation = typeof orientation === "string" && ORIENTATION_CODES.includes(orientation) ? orientation : ""
     if (!cleanOrientation) continue // orientation is the point of this route
+    // Per-field confidences; a legacy top-level confidence (older model output) applies to all fields.
+    const rawConf = (typeof confidences === "object" && confidences !== null ? confidences : {}) as Record<string, unknown>
+    const fallback = confidence !== undefined ? clampConfidence(confidence) : 0.5
+    const confFor = (field: ShotSuggestionField) => (rawConf[field] !== undefined ? clampConfidence(rawConf[field]) : fallback)
     clean.push({
       fileName,
       orientation: cleanOrientation,
       facing: typeof facing === "string" && FACING_CODES.includes(facing) ? facing : "",
       angle: typeof angle === "string" && ANGLE_CODES.includes(angle) ? angle : "",
       imageStyle: typeof imageStyle === "string" && IMAGE_STYLE_CODES.includes(imageStyle) ? imageStyle : "",
-      description: typeof description === "string" ? description.trim().slice(0, 300) : "",
-      confidence: clampConfidence(confidence),
+      confidences: {
+        orientation: confFor("orientation"),
+        facing: confFor("facing"),
+        angle: confFor("angle"),
+        imageStyle: confFor("imageStyle"),
+      },
     })
   }
 

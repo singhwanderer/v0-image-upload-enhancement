@@ -38,24 +38,21 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog"
-import {
-  Sheet,
-  SheetContent,
-  SheetHeader,
-  SheetTitle,
-} from "@/components/ui/sheet"
 import { cn } from "@/lib/utils"
 import { validateImageBatch, type ValidationError } from "./upload-validation"
 import { measureImageFile } from "./image-metadata"
 import type { UploadedFile } from "./uploaded-file"
 import { buildImageMetadataCsv, downloadCsv, csvPreview, type ImageMetadataRow } from "./metadata-csv"
+import { downscaleImage, saveBlob } from "./image-resize"
 import { toast } from "@/hooks/use-toast"
 import { useMediaSelection } from "./use-media-selection"
 import { AiAttributesTable } from "./ai-attributes-table"
 import { AiSection } from "./ai-section"
+import { CataloguePushCard } from "./catalogue-push-card"
 import { DownloadModal } from "./download-modal"
 import { StepTwoForm, PER_SHOT_KEYS, isPerShotKey } from "./step-two-form"
-import { useAiAttributes } from "./use-ai-attributes"
+import { useAiAttributes, type ShotSuggestionField } from "./use-ai-attributes"
+import { SuggestionReviewTable, type SuggestionRow } from "./suggestion-review-table"
 import {
   ORIENTATION_OPTIONS,
   ANGLE_OPTIONS,
@@ -215,6 +212,9 @@ export function ImageUploadWizard({
   const [showProductMedia, setShowProductMedia] = useState(false)
   const [showDownloadModal, setShowDownloadModal] = useState(false)
   const [downloadPhase, setDownloadPhase] = useState<"select" | "preparing" | "complete">("select")
+  // Requested long-edge cap for downloaded images; null = original dimensions. Downscale only —
+  // images already within the cap download untouched.
+  const [downloadSize, setDownloadSize] = useState<number | null>(null)
   // First lines of the most recently generated metadata CSV, shown in the Complete phase.
   const [lastCsvPreview, setLastCsvPreview] = useState("")
   // Selection state for Product Media cards — drives selective download and (Supplier-only)
@@ -226,7 +226,6 @@ export function ImageUploadWizard({
     draft: typeof attributes
     touched: Partial<Record<keyof typeof attributes, boolean>>
   }>({ open: false, draft: {} as typeof attributes, touched: {} })
-  const [showAiAttributesDrawer, setShowAiAttributesDrawer] = useState(false)
   // activeImageIndex removed — supplier product-media uses stacked list (no active selection)
   // Inline validation errors from file drop/browse (Change 1)
   const [validationErrors, setValidationErrors] = useState<ValidationError[]>([])
@@ -269,6 +268,9 @@ export function ImageUploadWizard({
   // here; product-wide keys always resolve from `attributes` (P0.2a).
   const [attributesByImage, setAttributesByImage] = useState<{ [key: number]: typeof attributes }>({})
   const [activeAttributeImageIndex, setActiveAttributeImageIndex] = useState(0)
+  // Edit cursor for the per-image suggestion review table (separate from the product
+  // table's aiEditing). Scoped by image index so switching images closes the editor.
+  const [shotEditing, setShotEditing] = useState<{ index: number; field: ShotSuggestionField } | null>(null)
 
   const steps = [
     { number: 1, title: "Target & Files", description: "Select target and upload files" },
@@ -323,7 +325,7 @@ export function ImageUploadWizard({
     setAiCategory, setAiBrick, aiExtraction,
     setClassificationStatus, setClassificationConfidence,
     clearExtraction, clearShotSuggestions,
-    isComplete, hasExtraction, acceptedExtractedAttributes,
+    isComplete, acceptedExtractedAttributes,
     pendingExtractedCount, acceptAllPending, acceptAllShotSuggestions,
   } = ai
 
@@ -432,12 +434,14 @@ export function ImageUploadWizard({
   }
 
   // One spec-shaped CSV row per image (P0.5). Measured facts come from the decoded file;
-  // per-image attrs resolve exactly as the cards/exports do.
-  const buildMetadataCsvRows = (files: UploadedFile[]): ImageMetadataRow[] => {
+  // per-image attrs resolve exactly as the cards/exports do. When images were downscaled for
+  // this download, outputDims carries the actual downloaded dimensions per file id.
+  const buildMetadataCsvRows = (files: UploadedFile[], outputDims?: Map<string, { width: number; height: number }>): ImageMetadataRow[] => {
     const data = getAutoPopulatedData()
     return files.map(file => {
       const idx = uploadedFiles.indexOf(file)
       const fileAttrs = effectiveAttrs(idx)
+      const dims = outputDims?.get(file.id)
       return {
         action: "insert",
         image_level: uploadLevel === "gtin" ? "item" : "product",
@@ -456,27 +460,42 @@ export function ImageUploadWizard({
         angle: fileAttrs.angle,
         file_size: String(file.size),
         pixel_density: file.measured?.dpi != null ? String(file.measured.dpi) : "",
-        height: file.measured?.height != null ? String(file.measured.height) : "",
-        width: file.measured?.width != null ? String(file.measured.width) : "",
+        height: dims ? String(dims.height) : file.measured?.height != null ? String(file.measured.height) : "",
+        width: dims ? String(dims.width) : file.measured?.width != null ? String(file.measured.width) : "",
         clipping_path: fileAttrs.clippingPath,
         image_description: fileAttrs.imageDescription,
       }
     })
   }
 
-  // Handle bulk download: really generates and downloads the metadata CSV (incl. accepted
-  // GS1 extended attributes), then runs the three-phase flow. Image binaries stay simulated.
-  const handleBulkDownload = () => {
+  // Handle bulk download: really downloads the selected image binaries (downscaled to the
+  // chosen long-edge cap when one is set — never upscaled) plus the metadata CSV (incl.
+  // accepted GS1 extended attributes), whose width/height reflect the downloaded files.
+  const handleBulkDownload = async () => {
     const selectedFiles = uploadedFiles.filter(f => media.isChecked(f.id))
-    const csv = buildImageMetadataCsv(buildMetadataCsvRows(selectedFiles), acceptedExtractedAttributes)
-    downloadCsv(`${getAutoPopulatedData().productId || "product"}_image_metadata.csv`, csv)
-    setLastCsvPreview(csvPreview(csv))
     setDownloadPhase("preparing")
-    // Simulate preparation delay
-    setTimeout(() => {
+    try {
+      const outputDims = new Map<string, { width: number; height: number }>()
+      for (const file of selectedFiles) {
+        if (downloadSize != null) {
+          const out = await downscaleImage(file.file, downloadSize)
+          saveBlob(file.name, out.blob)
+          if (out.resized) outputDims.set(file.id, { width: out.width, height: out.height })
+        } else {
+          saveBlob(file.name, file.file)
+        }
+        // Brief pause between saves so the browser accepts each download trigger.
+        await new Promise(r => setTimeout(r, 250))
+      }
+      const csv = buildImageMetadataCsv(buildMetadataCsvRows(selectedFiles, outputDims), acceptedExtractedAttributes)
+      downloadCsv(`${getAutoPopulatedData().productId || "product"}_image_metadata.csv`, csv)
+      setLastCsvPreview(csvPreview(csv))
       setDownloadPhase("complete")
       toast({ title: "Download complete", description: `${selectedFiles.length} image${selectedFiles.length !== 1 ? "s" : ""} + metadata CSV downloaded.` })
-    }, 1500)
+    } catch {
+      setDownloadPhase("select")
+      toast({ title: "Download failed", description: "One or more images could not be prepared. Try again or download at original size." })
+    }
   }
 
   // Read locationType from the active record for consistency (Change 2b)
@@ -616,13 +635,6 @@ export function ImageUploadWizard({
             >
               <Trash2 className="size-4 text-muted-foreground" />
             </button>
-            <button
-              className="p-1.5 hover:bg-muted border border-border"
-              title={hasExtraction ? "View AI Attributes" : "Run AI"}
-              onClick={() => setShowAiAttributesDrawer(true)}
-            >
-              <Sparkles className="size-4 text-muted-foreground" />
-            </button>
           </div>
         </div>
 
@@ -699,6 +711,20 @@ export function ImageUploadWizard({
               <p className="text-xs text-muted-foreground mt-0.5">Available to retailer subscribers on next sync.</p>
             </div>
           </div>
+        )}
+
+        {/* Catalogue card — AI-derived attributes are product data, so they surface inline here
+            (not in a drawer) with a push-to-catalogue action covering every GTIN of the product. */}
+        {portalType === "supplier" && (
+          <CataloguePushCard
+            attributes={acceptedExtractedAttributes}
+            gtins={data.gtins.map(g => g.gtin)}
+            productId={data.productId}
+            valuesForCodeList={ai.valuesForCodeList}
+            category={aiExtraction?.category}
+            brickName={aiExtraction?.brickName}
+            brickCode={aiExtraction?.brickCode}
+          />
         )}
 
         {/* Sticky jump-to thumbnail strip — hidden when only 1 image (Acceptance #9) */}
@@ -1281,24 +1307,6 @@ export function ImageUploadWizard({
           </Button>
         </div>
 
-        {/* View AI Attributes drawer — editable (AI is the primary editing surface, unlike
-            manual GDSN attributes). Reuses the same Accept/Reject/Edit card as Step 2. */}
-        <Sheet open={showAiAttributesDrawer} onOpenChange={setShowAiAttributesDrawer}>
-          <SheetContent className="sm:max-w-xl overflow-y-auto">
-            <SheetHeader>
-              <SheetTitle className="flex items-center gap-2">
-                <Sparkles className="size-4 text-primary" />
-                AI-Extracted Attributes
-              </SheetTitle>
-            </SheetHeader>
-            <div className="px-4 pb-4 flex flex-col gap-4">
-              {/* P1.2/P1.1: the same classification-first, consolidated AI flow as Step 2 — no
-                  skip affordance here (images are already submitted; nothing to skip past). */}
-              {uploadedFiles.length > 0 ? <AiSection ai={ai} uploadedFiles={uploadedFiles} /> : <AiAttributesTable attributes={[]} />}
-            </div>
-          </SheetContent>
-        </Sheet>
-
         <DownloadModal
           open={showDownloadModal}
           phase={downloadPhase}
@@ -1307,8 +1315,10 @@ export function ImageUploadWizard({
           uploadLevel={uploadLevel}
           autoData={getAutoPopulatedData()}
           lastCsvPreview={lastCsvPreview}
+          downloadSize={downloadSize}
+          onDownloadSizeChange={setDownloadSize}
           onClose={() => setShowDownloadModal(false)}
-          onDownload={handleBulkDownload}
+          onDownload={() => { void handleBulkDownload() }}
         />
       </div>
     )
@@ -1866,10 +1876,8 @@ export function ImageUploadWizard({
             {/* ── Section 2: Image Details — image type/purpose/format (once per product) plus
                 per-image fields with filmstrip navigation (Task 4) ── */}
             {(() => {
-              const totalUnreviewed = uploadedFiles.reduce(
-                (acc, _, i) => acc + (ai.hasUnreviewedSuggestion(i) ? 1 : 0), 0
-              )
-              const hasPending = totalUnreviewed > 0
+              const pendingFields = ai.pendingShotFieldCount
+              const hasPending = pendingFields > 0
               const isLoading = ai.anyShotSuggestLoading
               return (
                 <div className="flex flex-wrap items-start justify-between gap-3">
@@ -1900,7 +1908,7 @@ export function ImageUploadWizard({
                       <Sparkles className="size-3.5" />
                     )}
                     {hasPending
-                      ? `Apply AI Suggestions (${totalUnreviewed})`
+                      ? `Confirm all AI suggestions (${pendingFields})`
                       : "Suggest with AI"}
                   </Button>
                 </div>
@@ -1971,7 +1979,7 @@ export function ImageUploadWizard({
                               <Loader2 className="size-3 animate-spin text-primary" />
                             </span>
                           ) : unreviewed ? (
-                            <span className="absolute -right-1.5 -top-1.5 flex size-4 items-center justify-center rounded-full bg-card ring-1 ring-border" title="Unreviewed AI suggestion">
+                            <span className="absolute -right-1.5 -top-1.5 flex size-4 items-center justify-center rounded-full bg-card ring-1 ring-border" title="AI suggestions to review">
                               <Sparkles className="size-3 text-primary" />
                             </span>
                           ) : (
@@ -2028,6 +2036,72 @@ export function ImageUploadWizard({
                 </p>
               )}
 
+              {/* Per-image AI suggestion review — same table design as Product Attributes.
+                  Confirm/Edit/Reject decide each suggestion; the form below stays neutral. */}
+              {(() => {
+                const imgIdx = activeAttributeImageIndex
+                const entry = ai.shotSuggestions[imgIdx]
+                if (!entry || entry.loading) return null
+                const FIELD_META: Partial<Record<ShotSuggestionField, { label: string; options: { value: string; label: string }[] }>> = {
+                  orientation: { label: "Orientation", options: ORIENTATION_OPTIONS },
+                  facing: { label: "Facing (GDSN)", options: FACING_OPTIONS },
+                  angle: { label: "Angle", options: ANGLE_OPTIONS },
+                  imageStyle: { label: "Image Style", options: IMAGE_STYLE_OPTIONS },
+                }
+                const fields = (Object.keys(FIELD_META) as ShotSuggestionField[]).filter(k => entry.fieldStatus[k])
+                if (fields.length === 0) return null
+                const current = effectiveAttrs(imgIdx)
+                const rows = fields.map((k): SuggestionRow => {
+                  const meta = FIELD_META[k]!
+                  // Rejected rows have an empty field value — show the AI's (struck-through) value.
+                  const raw = current[k] || entry.values[k] || ""
+                  const status = entry.fieldStatus[k]!
+                  return {
+                    id: k,
+                    label: meta.label,
+                    value: meta.options.find(o => o.value === raw)?.label ?? raw,
+                    confidence: entry.confidences[k] ?? 0.5,
+                    status: status === "suggested" ? "pending" : status,
+                  }
+                })
+                const imgPending = fields.filter(k => entry.fieldStatus[k] === "suggested").length
+                return (
+                  <div className="flex flex-col gap-2">
+                    <div className="flex items-center gap-1.5">
+                      <Sparkles className="size-3.5 text-primary" />
+                      <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">AI suggestions for this image</p>
+                    </div>
+                    <SuggestionReviewTable
+                      rows={rows}
+                      onConfirm={(id) => ai.acceptShotField(imgIdx, id as ShotSuggestionField)}
+                      onReject={(id) => ai.rejectShotField(imgIdx, id as ShotSuggestionField)}
+                      editingId={shotEditing && shotEditing.index === imgIdx ? shotEditing.field : null}
+                      onEditToggle={(id) => setShotEditing(id === null ? null : { index: imgIdx, field: id as ShotSuggestionField })}
+                      renderEditor={(row, close) => {
+                        const field = row.id as ShotSuggestionField
+                        const meta = FIELD_META[field]!
+                        return (
+                          <Select
+                            value={current[field] || undefined}
+                            onValueChange={(v) => { ai.editShotField(imgIdx, field, v); close() }}
+                          >
+                            <SelectTrigger size="sm" className="w-full max-w-56 bg-background"><SelectValue placeholder={`Select ${meta.label.toLowerCase()}...`} /></SelectTrigger>
+                            <SelectContent>
+                              {meta.options.map(o => <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>)}
+                            </SelectContent>
+                          </Select>
+                        )
+                      }}
+                      headerAction={imgPending > 0 ? (
+                        <Button variant="outline" size="sm" className="h-7 gap-1 px-2 text-xs" onClick={() => ai.acceptShotImage(imgIdx)}>
+                          <Check className="size-3" /> Confirm all ({imgPending})
+                        </Button>
+                      ) : undefined}
+                    />
+                  </div>
+                )
+              })()}
+
               <StepTwoForm
                 currentAttrs={getCurrentAttributes()}
                 updateAttrs={updateCurrentAttributes}
@@ -2037,8 +2111,6 @@ export function ImageUploadWizard({
                   ? [{ name: uploadedFiles[activeAttributeImageIndex].name, measured: uploadedFiles[activeAttributeImageIndex].measured }]
                   : []}
                 hideProductWide
-                suggestionStatus={ai.shotSuggestions[activeAttributeImageIndex]?.fieldStatus}
-                onAcceptField={(field) => ai.acceptShotField(activeAttributeImageIndex, field)}
               />
             </div>
 
@@ -2237,6 +2309,34 @@ export function ImageUploadWizard({
               </div>
             )}
 
+            {/* Per-image detail suggestions awaiting review. Unlike product attributes, these
+                values are already written into each image's record, so they WILL be submitted
+                as shown — surface that so unconfirmed AI values are a decision, not a default. */}
+            {ai.pendingShotFieldCount > 0 && (
+              <div className="rounded border border-tg-warning/40 bg-tg-warning/5 p-4 flex flex-col gap-3">
+                <div className="flex items-start gap-3">
+                  <AlertCircle className="size-4 text-tg-warning mt-0.5 shrink-0" />
+                  <div className="flex flex-col gap-1">
+                    <p className="text-sm font-medium text-foreground">
+                      {ai.pendingShotFieldCount} AI-suggested image detail{ai.pendingShotFieldCount !== 1 ? "s haven't" : " hasn't"} been confirmed
+                    </p>
+                    <p className="text-sm text-muted-foreground">
+                      These values will be submitted as shown. Confirm them now, or go back to review each image.
+                    </p>
+                  </div>
+                </div>
+                <div className="flex items-center gap-2 pl-7">
+                  <Button variant="outline" size="sm" className="gap-1" onClick={acceptAllShotSuggestions}>
+                    <Check className="size-3.5" />
+                    Confirm all {ai.pendingShotFieldCount}
+                  </Button>
+                  <Button variant="ghost" size="sm" onClick={handleBack}>
+                    Review images
+                  </Button>
+                </div>
+              </div>
+            )}
+
             {/* Syndication confirmation block — Task 2 */}
             {(() => {
               const d = getAutoPopulatedData()
@@ -2315,8 +2415,10 @@ export function ImageUploadWizard({
         uploadLevel={uploadLevel}
         autoData={getAutoPopulatedData()}
         lastCsvPreview={lastCsvPreview}
+        downloadSize={downloadSize}
+        onDownloadSizeChange={setDownloadSize}
         onClose={() => setShowDownloadModal(false)}
-        onDownload={handleBulkDownload}
+        onDownload={() => { void handleBulkDownload() }}
       />
     </div>
   )

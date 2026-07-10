@@ -2,7 +2,6 @@
 
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
-import { Sparkles } from "lucide-react"
 import {
   Select,
   SelectContent,
@@ -10,7 +9,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
-import { cn } from "@/lib/utils"
 import type { MeasuredImageMetadata } from "./image-metadata"
 import {
   ORIENTATION_OPTIONS,
@@ -52,43 +50,13 @@ export type StepTwoFormProps = {
   // so render every field as one flat list (drop the two group headers and the divider). The
   // measured-from-file block still shows.
   flatten?: boolean
-  // Per-field AI suggestion review state (Task 5). "suggested" renders the field muted/dashed
-  // with an "AI suggested" chip; "accepted" keeps a small "AI" provenance tag.
-  suggestionStatus?: Partial<Record<PerShotKey, "suggested" | "accepted">>
-  // Clicking into a "suggested" field confirms it (locks it to normal style with the AI tag).
-  onAcceptField?: (field: PerShotKey) => void
 }
 
 
-export function StepTwoForm({ currentAttrs, updateAttrs, uploadLevel, autoData, measuredFiles, hideProductWide, hidePerShot, flatten, suggestionStatus, onAcceptField }: StepTwoFormProps) {
+export function StepTwoForm({ currentAttrs, updateAttrs, uploadLevel, autoData, measuredFiles, hideProductWide, hidePerShot, flatten }: StepTwoFormProps) {
   // Group headers only make sense when both halves render in one form (Edit dialog); the
   // wizard's combined page provides its own section headings.
   const showGroupHeaders = !flatten && !hideProductWide && !hidePerShot
-
-  const fieldSuggestion = (k: PerShotKey) => suggestionStatus?.[k]
-  const acceptIfSuggested = (k: PerShotKey) => {
-    if (fieldSuggestion(k) === "suggested") onAcceptField?.(k)
-  }
-  // Muted, dashed treatment for a filled-but-unconfirmed AI suggestion.
-  const suggestedCls = (k: PerShotKey) =>
-    fieldSuggestion(k) === "suggested" ? "border-dashed border-primary/60 bg-primary/5 text-muted-foreground" : ""
-  const aiTag = (k: PerShotKey) => {
-    const s = fieldSuggestion(k)
-    if (!s) return null
-    return (
-      <span
-        className={cn(
-          "inline-flex items-center gap-0.5 rounded px-1 py-px text-[10px] font-medium leading-4",
-          s === "suggested" ? "bg-primary/10 text-primary" : "bg-muted text-muted-foreground"
-        )}
-        title={s === "suggested" ? "AI suggestion — click the field or edit to confirm" : "Value suggested by AI and confirmed"}
-      >
-        <Sparkles className="size-2.5" />
-        {s === "suggested" ? "AI suggested" : "AI"}
-      </span>
-    )
-  }
-
 
   return (
     <div className="flex flex-col gap-4">
@@ -226,51 +194,47 @@ export function StepTwoForm({ currentAttrs, updateAttrs, uploadLevel, autoData, 
 
             <div className="flex flex-col gap-2">
               <Label className="flex items-center gap-1.5 text-sm font-medium">
-                Orientation <span className="text-destructive">*</span> {aiTag("orientation")}
+                Orientation <span className="text-destructive">*</span>
               </Label>
               <Select
                 value={currentAttrs.orientation}
                 onValueChange={(v) => updateAttrs({ ...currentAttrs, orientation: v })}
-                onOpenChange={(o) => { if (o) acceptIfSuggested("orientation") }}
               >
-                <SelectTrigger className={cn("w-full bg-background", suggestedCls("orientation"))}><SelectValue placeholder="Select orientation..." /></SelectTrigger>
+                <SelectTrigger className="w-full bg-background"><SelectValue placeholder="Select orientation..." /></SelectTrigger>
                 <SelectContent>
                   {ORIENTATION_OPTIONS.map(o => <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>)}
                 </SelectContent>
               </Select>
             </div>
             <div className="flex flex-col gap-2">
-              <Label className="flex items-center gap-1.5 text-sm font-medium">Facing (GDSN) <span className="text-xs font-normal text-muted-foreground">(optional)</span> {aiTag("facing")}</Label>
+              <Label className="flex items-center gap-1.5 text-sm font-medium">Facing (GDSN) <span className="text-xs font-normal text-muted-foreground">(optional)</span></Label>
               <Select
                 value={currentAttrs.facing}
                 onValueChange={(v) => updateAttrs({ ...currentAttrs, facing: v })}
-                onOpenChange={(o) => { if (o) acceptIfSuggested("facing") }}
               >
-                <SelectTrigger className={cn("w-full bg-background", suggestedCls("facing"))}><SelectValue placeholder="Select facing..." /></SelectTrigger>
+                <SelectTrigger className="w-full bg-background"><SelectValue placeholder="Select facing..." /></SelectTrigger>
                 <SelectContent>{FACING_OPTIONS.map(o => <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>)}</SelectContent>
               </Select>
             </div>
             <div className="flex flex-col gap-2">
-              <Label className="flex items-center gap-1.5 text-sm font-medium">Angle <span className="text-xs font-normal text-muted-foreground">(optional)</span> {aiTag("angle")}</Label>
+              <Label className="flex items-center gap-1.5 text-sm font-medium">Angle <span className="text-xs font-normal text-muted-foreground">(optional)</span></Label>
               <Select
                 value={currentAttrs.angle}
                 onValueChange={(v) => updateAttrs({ ...currentAttrs, angle: v })}
-                onOpenChange={(o) => { if (o) acceptIfSuggested("angle") }}
               >
-                <SelectTrigger className={cn("w-full bg-background", suggestedCls("angle"))}><SelectValue placeholder="Select angle..." /></SelectTrigger>
+                <SelectTrigger className="w-full bg-background"><SelectValue placeholder="Select angle..." /></SelectTrigger>
                 <SelectContent>{ANGLE_OPTIONS.map(o => <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>)}</SelectContent>
               </Select>
             </div>
             <div className="flex flex-col gap-2">
               <Label className="flex items-center gap-1.5 text-sm font-medium">
-                Image Style <span className="text-xs font-normal text-muted-foreground">(optional)</span> {aiTag("imageStyle")}
+                Image Style <span className="text-xs font-normal text-muted-foreground">(optional)</span>
               </Label>
               <Select
                 value={currentAttrs.imageStyle}
                 onValueChange={(v) => updateAttrs({ ...currentAttrs, imageStyle: v })}
-                onOpenChange={(o) => { if (o) acceptIfSuggested("imageStyle") }}
               >
-                <SelectTrigger className={cn("w-full bg-background", suggestedCls("imageStyle"))}><SelectValue placeholder="Select style..." /></SelectTrigger>
+                <SelectTrigger className="w-full bg-background"><SelectValue placeholder="Select style..." /></SelectTrigger>
                 <SelectContent>{IMAGE_STYLE_OPTIONS.map(o => <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>)}</SelectContent>
               </Select>
             </div>
@@ -279,13 +243,12 @@ export function StepTwoForm({ currentAttrs, updateAttrs, uploadLevel, autoData, 
               <Input value={currentAttrs.clippingPath} onChange={(e) => updateAttrs({ ...currentAttrs, clippingPath: e.target.value })} placeholder="Path name..." className="bg-background" />
             </div>
             <div className="flex flex-col gap-2 md:col-span-2">
-              <Label className="flex items-center gap-1.5 text-sm font-medium">Image Description <span className="text-xs font-normal text-muted-foreground">(optional)</span> {aiTag("imageDescription")}</Label>
+              <Label className="flex items-center gap-1.5 text-sm font-medium">Image Description <span className="text-xs font-normal text-muted-foreground">(optional)</span></Label>
               <Input
                 value={currentAttrs.imageDescription}
                 onChange={(e) => updateAttrs({ ...currentAttrs, imageDescription: e.target.value })}
-                onFocus={() => acceptIfSuggested("imageDescription")}
                 placeholder="Enter description..."
-                className={cn("bg-background", suggestedCls("imageDescription"))}
+                className="bg-background"
               />
             </div>
           </div>

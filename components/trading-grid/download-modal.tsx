@@ -1,5 +1,6 @@
 "use client"
 
+import { useState } from "react"
 import {
   X,
   Check,
@@ -8,14 +9,17 @@ import {
   FileImage,
   FileText,
   CheckCircle2,
+  Ruler,
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
+import { Input } from "@/components/ui/input"
+import { cn } from "@/lib/utils"
 import type { UploadedFile } from "./uploaded-file"
 
 // Three-phase download modal (Select → Preparing → Complete). Reachable from both the
 // post-confirm Product Media view and the pre-confirm Step 1 file grid — two separate `return`
 // statements in the wizard — so it lives as its own component taking the download state and
-// selection predicate as props. Pure relocation from the wizard, no behavior change.
+// selection predicate as props.
 type DownloadModalProps = {
   open: boolean
   phase: "select" | "preparing" | "complete"
@@ -25,9 +29,15 @@ type DownloadModalProps = {
   uploadLevel: "product" | "product-color" | "gtin"
   autoData: { productId: string; selectedGtin: string; colorCode: string }
   lastCsvPreview: string
+  // Long-edge cap for the downloaded images; null = original size. Downscale only.
+  downloadSize: number | null
+  onDownloadSizeChange: (size: number | null) => void
   onClose: () => void
   onDownload: () => void
 }
+
+// Long-edge presets; only those actually smaller than the largest selected image are offered.
+const SIZE_PRESETS = [2048, 1024, 512]
 
 // Local copy of the wizard's trivial pure size formatter (kept in both places rather than
 // coupling the modal to the wizard's internals for three lines).
@@ -37,9 +47,29 @@ function formatFileSize(bytes: number): string {
   return (bytes / (1024 * 1024)).toFixed(1) + " MB"
 }
 
-export function DownloadModal({ open, phase, uploadedFiles, isChecked, uploadLevel, autoData, lastCsvPreview, onClose, onDownload }: DownloadModalProps) {
+export function DownloadModal({ open, phase, uploadedFiles, isChecked, uploadLevel, autoData, lastCsvPreview, downloadSize, onDownloadSizeChange, onClose, onDownload }: DownloadModalProps) {
+  // Free-typed custom long edge; empty/0/invalid means "no custom cap" (Original).
+  const [customSize, setCustomSize] = useState("")
   if (!open) return null
   const selectedFiles = uploadedFiles.filter(f => isChecked(f.id))
+  // Largest long edge across the selection — presets at or above it can't downscale anything.
+  // Unknown dimensions (measurement pending/failed) keep all presets; downscale never upscales.
+  const longEdges = selectedFiles
+    .map(f => Math.max(f.measured?.width ?? 0, f.measured?.height ?? 0))
+    .filter(n => n > 0)
+  const maxLongEdge = longEdges.length > 0 ? Math.max(...longEdges) : null
+  const visiblePresets = maxLongEdge != null ? SIZE_PRESETS.filter(p => p < maxLongEdge) : SIZE_PRESETS
+  const customActive = downloadSize != null && !SIZE_PRESETS.includes(downloadSize)
+  const applyCustom = (raw: string) => {
+    setCustomSize(raw)
+    const n = Number.parseInt(raw, 10)
+    if (!Number.isFinite(n) || n <= 0) {
+      if (customActive) onDownloadSizeChange(null)
+      return
+    }
+    // Clamp to the largest original long edge — larger values can only mean "original".
+    onDownloadSizeChange(maxLongEdge != null ? Math.min(n, maxLongEdge) : n)
+  }
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
       <div className="w-full max-w-lg rounded border border-border bg-card shadow-xl">
@@ -151,6 +181,58 @@ export function DownloadModal({ open, phase, uploadedFiles, isChecked, uploadLev
                     </div>
                   </div>
                 </div>
+              </div>
+
+              {/* Image dimensions — long-edge cap, downscale only (aspect ratio preserved). */}
+              <div className="mb-6">
+                <h4 className="text-sm font-medium text-foreground mb-1 flex items-center gap-1.5">
+                  <Ruler className="size-4 text-primary" />
+                  Image dimensions
+                </h4>
+                <p className="text-xs text-muted-foreground mb-3">
+                  Images larger than the chosen size are downscaled to it (longest edge, aspect ratio kept). Smaller images download at their original size — never upscaled.
+                </p>
+                <div className="flex flex-wrap items-center gap-2">
+                  <Button
+                    variant={downloadSize === null ? "default" : "outline"}
+                    size="sm"
+                    className="h-8 px-3 text-xs"
+                    aria-pressed={downloadSize === null}
+                    onClick={() => { onDownloadSizeChange(null); setCustomSize("") }}
+                  >
+                    Original
+                  </Button>
+                  {visiblePresets.map(p => (
+                    <Button
+                      key={p}
+                      variant={downloadSize === p ? "default" : "outline"}
+                      size="sm"
+                      className="h-8 px-3 text-xs"
+                      aria-pressed={downloadSize === p}
+                      onClick={() => { onDownloadSizeChange(p); setCustomSize("") }}
+                    >
+                      {p} px
+                    </Button>
+                  ))}
+                  <div className="flex items-center gap-1.5">
+                    <Input
+                      type="number"
+                      min={1}
+                      max={maxLongEdge ?? undefined}
+                      placeholder="Custom"
+                      value={customSize}
+                      onChange={(e) => applyCustom(e.target.value)}
+                      className={cn("h-8 w-24 bg-background text-xs", customActive && "border-primary")}
+                      aria-label="Custom longest edge in pixels"
+                    />
+                    <span className="text-xs text-muted-foreground">px</span>
+                  </div>
+                </div>
+                {downloadSize != null && (
+                  <p className="mt-2 text-xs text-muted-foreground">
+                    Downloading at up to <span className="font-medium text-foreground">{downloadSize} px</span> on the longest edge.
+                  </p>
+                )}
               </div>
 
               {/* Info Note */}
