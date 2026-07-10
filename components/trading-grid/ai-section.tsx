@@ -315,6 +315,17 @@ export function AiSection({ ai, uploadedFiles, onRequestReupload }: AiSectionPro
                 <span> — {aiExtraction.imageNames.join(", ")}</span>
               )}
             </p>
+            {/* Live provenance — measured facts only (model, wall-clock duration, finish time).
+                A skeptical demo viewer can't verify a badge, but variable real latency plus
+                image-specific reasoning below is texture mock data doesn't have. */}
+            {aiExtraction.analysis && (
+              <p className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                <span className="size-1.5 rounded-full bg-tg-success" />
+                Analyzed live by <span className="font-mono text-foreground">{aiExtraction.analysis.model}</span>
+                {" "}· {(aiExtraction.analysis.durationMs / 1000).toFixed(1)}s
+                {" "}· {new Date(aiExtraction.analysis.at).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" })}
+              </p>
+            )}
           </div>
         </div>
         <div className="flex items-start gap-2 rounded bg-muted/30 p-2">

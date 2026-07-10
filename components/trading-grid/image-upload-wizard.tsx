@@ -42,7 +42,7 @@ import { cn } from "@/lib/utils"
 import { validateImageBatch, type ValidationError } from "./upload-validation"
 import { measureImageFile } from "./image-metadata"
 import type { UploadedFile } from "./uploaded-file"
-import { buildImageMetadataCsv, downloadCsv, csvPreview, type ImageMetadataRow } from "./metadata-csv"
+import { buildImageMetadataCsv, downloadCsv, type ImageMetadataRow } from "./metadata-csv"
 import { buildZip, downscaleImage, saveBlob } from "./image-resize"
 import { toast } from "@/hooks/use-toast"
 import { useMediaSelection } from "./use-media-selection"
@@ -216,10 +216,9 @@ export function ImageUploadWizard({
   // Requested long-edge cap for downloaded images; null = original dimensions. Downscale only —
   // images already within the cap download untouched.
   const [downloadSize, setDownloadSize] = useState<number | null>(null)
-  // "zip" = one archive with image binaries + CSV; "csv" = metadata file only.
-  const [downloadPackageType, setDownloadPackageType] = useState<"zip" | "csv">("zip")
-  // First lines of the most recently generated metadata CSV, shown in the Complete phase.
-  const [lastCsvPreview, setLastCsvPreview] = useState("")
+  // Package contents: images (zipped) and/or the metadata CSV. Both on by default.
+  const [downloadIncludeImages, setDownloadIncludeImages] = useState(true)
+  const [downloadIncludeCsv, setDownloadIncludeCsv] = useState(true)
   // Selection state for Product Media cards — drives selective download and (Supplier-only)
   // bulk edit/delete gating.
   const media = useMediaSelection()
@@ -471,10 +470,10 @@ export function ImageUploadWizard({
     })
   }
 
-  // Handle bulk download. ZIP mode packages the selected image binaries (downscaled to the
-  // chosen long-edge cap when one is set — never upscaled) together with the metadata CSV
-  // (incl. accepted GS1 extended attributes, width/height reflecting the packaged files) into
-  // one archive. CSV mode downloads just the metadata file.
+  // Handle bulk download. With images included, the selected binaries (downscaled to the
+  // chosen long-edge cap when one is set — never upscaled) are packaged into one ZIP, with
+  // the metadata CSV (incl. accepted GS1 extended attributes, width/height reflecting the
+  // packaged files) inside when it's included too. CSV alone downloads as a plain file.
   const handleBulkDownload = async () => {
     const selectedFiles = uploadedFiles.filter(f => media.isChecked(f.id))
     const productId = getAutoPopulatedData().productId || "product"
@@ -482,7 +481,7 @@ export function ImageUploadWizard({
     try {
       const outputDims = new Map<string, { width: number; height: number }>()
       const zipEntries: Record<string, Uint8Array> = {}
-      if (downloadPackageType === "zip") {
+      if (downloadIncludeImages) {
         for (const file of selectedFiles) {
           let blob: Blob = file.file
           if (downloadSize != null) {
@@ -494,18 +493,17 @@ export function ImageUploadWizard({
         }
       }
       const csv = buildImageMetadataCsv(buildMetadataCsvRows(selectedFiles, outputDims), acceptedExtractedAttributes)
-      if (downloadPackageType === "zip") {
-        zipEntries[`${productId}_image_metadata.csv`] = new TextEncoder().encode(csv)
+      if (downloadIncludeImages) {
+        if (downloadIncludeCsv) zipEntries[`${productId}_image_metadata.csv`] = new TextEncoder().encode(csv)
         saveBlob(`${productId}_images.zip`, buildZip(zipEntries))
       } else {
         downloadCsv(`${productId}_image_metadata.csv`, csv)
       }
-      setLastCsvPreview(csvPreview(csv))
       setDownloadPhase("complete")
       toast({
         title: "Download complete",
-        description: downloadPackageType === "zip"
-          ? `${productId}_images.zip — ${selectedFiles.length} image${selectedFiles.length !== 1 ? "s" : ""} + metadata CSV.`
+        description: downloadIncludeImages
+          ? `${productId}_images.zip — ${selectedFiles.length} image${selectedFiles.length !== 1 ? "s" : ""}${downloadIncludeCsv ? " + metadata CSV" : ""}.`
           : "Metadata CSV downloaded.",
       })
     } catch {
@@ -1248,11 +1246,12 @@ export function ImageUploadWizard({
           isChecked={media.isChecked}
           uploadLevel={uploadLevel}
           autoData={getAutoPopulatedData()}
-          lastCsvPreview={lastCsvPreview}
           downloadSize={downloadSize}
           onDownloadSizeChange={setDownloadSize}
-          packageType={downloadPackageType}
-          onPackageTypeChange={setDownloadPackageType}
+          includeImages={downloadIncludeImages}
+          includeCsv={downloadIncludeCsv}
+          onIncludeImagesChange={setDownloadIncludeImages}
+          onIncludeCsvChange={setDownloadIncludeCsv}
           onClose={() => setShowDownloadModal(false)}
           onDownload={() => { void handleBulkDownload() }}
         />
@@ -2003,9 +2002,15 @@ export function ImageUploadWizard({
                 const imgPending = fields.filter(k => entry.fieldStatus[k] === "suggested").length
                 return (
                   <div className="flex flex-col gap-2">
-                    <div className="flex items-center gap-1.5">
+                    <div className="flex flex-wrap items-center gap-1.5">
                       <Sparkles className="size-3.5 text-primary" />
                       <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">AI suggestions for this image</p>
+                      {entry.analysis && (
+                        <span className="flex items-center gap-1.5 text-xs font-normal normal-case text-muted-foreground">
+                          <span className="size-1.5 rounded-full bg-tg-success" />
+                          live · <span className="font-mono">{entry.analysis.model}</span> · {(entry.analysis.durationMs / 1000).toFixed(1)}s
+                        </span>
+                      )}
                     </div>
                     <SuggestionReviewTable
                       rows={rows}
@@ -2350,11 +2355,12 @@ export function ImageUploadWizard({
         isChecked={media.isChecked}
         uploadLevel={uploadLevel}
         autoData={getAutoPopulatedData()}
-        lastCsvPreview={lastCsvPreview}
         downloadSize={downloadSize}
         onDownloadSizeChange={setDownloadSize}
-        packageType={downloadPackageType}
-        onPackageTypeChange={setDownloadPackageType}
+        includeImages={downloadIncludeImages}
+        includeCsv={downloadIncludeCsv}
+        onIncludeImagesChange={setDownloadIncludeImages}
+        onIncludeCsvChange={setDownloadIncludeCsv}
         onClose={() => setShowDownloadModal(false)}
         onDownload={() => { void handleBulkDownload() }}
       />

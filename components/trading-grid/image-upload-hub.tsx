@@ -15,7 +15,7 @@ import { Checkbox } from "@/components/ui/checkbox"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 import { cn } from "@/lib/utils"
 import { useMediaSelection } from "./use-media-selection"
-import { buildImageMetadataCsv, buildTableCsv, downloadCsv, csvPreview, type ImageMetadataRow } from "./metadata-csv"
+import { buildImageMetadataCsv, buildTableCsv, downloadCsv, type ImageMetadataRow } from "./metadata-csv"
 import { toast } from "@/hooks/use-toast"
 import { DownloadModal } from "./download-modal"
 import { ImageDetailCard } from "./image-detail-card"
@@ -356,10 +356,9 @@ export function RetailerImageBrowser() {
   const [downloadPhase, setDownloadPhase] = useState<"select" | "preparing" | "complete">("select")
   // Long-edge cap for downloaded images; null = original size (shared DownloadModal contract).
   const [downloadSize, setDownloadSize] = useState<number | null>(null)
-  // "zip" = one archive with image binaries + CSV; "csv" = metadata file only.
-  const [downloadPackageType, setDownloadPackageType] = useState<"zip" | "csv">("zip")
-  // First lines of the most recently generated metadata CSV, shown in the Complete phase.
-  const [lastCsvPreview, setLastCsvPreview] = useState("")
+  // Package contents: images (zipped) and/or the metadata CSV. Both on by default.
+  const [downloadIncludeImages, setDownloadIncludeImages] = useState(true)
+  const [downloadIncludeCsv, setDownloadIncludeCsv] = useState(true)
   // Lightbox: full-size view of a single product-media image
   const [lightboxImage, setLightboxImage] = useState<{ src: string; fileName: string } | null>(null)
   // Selection state for selective download (Retailer stays read-only — no edit/delete).
@@ -383,7 +382,7 @@ export function RetailerImageBrowser() {
     try {
       const outputDims = new Map<string, { width: number; height: number }>()
       const zipEntries: Record<string, Uint8Array> = {}
-      if (downloadPackageType === "zip") {
+      if (downloadIncludeImages) {
         for (const img of selected) {
           const res = await fetch(img.previewSrc)
           if (!res.ok) throw new Error(`Failed to fetch ${img.fileName}`)
@@ -423,18 +422,17 @@ export function RetailerImageBrowser() {
         }
       })
       const csv = buildImageMetadataCsv(rows)
-      if (downloadPackageType === "zip") {
-        zipEntries[`${productId}_image_metadata.csv`] = new TextEncoder().encode(csv)
+      if (downloadIncludeImages) {
+        if (downloadIncludeCsv) zipEntries[`${productId}_image_metadata.csv`] = new TextEncoder().encode(csv)
         saveBlob(`${productId}_images.zip`, buildZip(zipEntries))
       } else {
         downloadCsv(`${productId}_image_metadata.csv`, csv)
       }
-      setLastCsvPreview(csvPreview(csv))
       setDownloadPhase("complete")
       toast({
         title: "Download complete",
-        description: downloadPackageType === "zip"
-          ? `${productId}_images.zip — ${selected.length} image${selected.length !== 1 ? "s" : ""} + metadata CSV.`
+        description: downloadIncludeImages
+          ? `${productId}_images.zip — ${selected.length} image${selected.length !== 1 ? "s" : ""}${downloadIncludeCsv ? " + metadata CSV" : ""}.`
           : "Metadata CSV downloaded.",
       })
     } catch {
@@ -935,11 +933,12 @@ export function RetailerImageBrowser() {
           isChecked={media.isChecked}
           uploadLevel="product"
           autoData={{ productId: selectedProduct?.id ?? "", selectedGtin: "", colorCode: "" }}
-          lastCsvPreview={lastCsvPreview}
           downloadSize={downloadSize}
           onDownloadSizeChange={setDownloadSize}
-          packageType={downloadPackageType}
-          onPackageTypeChange={setDownloadPackageType}
+          includeImages={downloadIncludeImages}
+          includeCsv={downloadIncludeCsv}
+          onIncludeImagesChange={setDownloadIncludeImages}
+          onIncludeCsvChange={setDownloadIncludeCsv}
           onClose={() => setShowDownloadModal(false)}
           onDownload={() => { void handleRetailerDownload() }}
         />

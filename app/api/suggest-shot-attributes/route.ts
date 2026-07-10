@@ -30,7 +30,8 @@ export type ShotSuggestion = {
   confidences: Record<ShotSuggestionField, number>
 }
 
-export type ShotSuggestionsResponse = { suggestions: ShotSuggestion[] }
+// model: which model produced the suggestions — surfaced in the UI as live provenance.
+export type ShotSuggestionsResponse = { suggestions: ShotSuggestion[]; model?: string }
 
 type ImageInput = { fileName: string; imageBase64: string; mimeType: string }
 
@@ -165,5 +166,5 @@ Rules:
     })
   }
 
-  return NextResponse.json<ShotSuggestionsResponse>({ suggestions: clean })
+  return NextResponse.json<ShotSuggestionsResponse>({ suggestions: clean, model: GEMINI_MODEL })
 }
