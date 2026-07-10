@@ -12,6 +12,7 @@ import {
   Ruler,
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
+import { Checkbox } from "@/components/ui/checkbox"
 import { Input } from "@/components/ui/input"
 import { cn } from "@/lib/utils"
 import type { MeasuredImageMetadata } from "./image-metadata"
@@ -38,14 +39,15 @@ type DownloadModalProps = {
   isChecked: (id: string) => boolean
   uploadLevel: "product" | "product-color" | "gtin"
   autoData: { productId: string; selectedGtin: string; colorCode: string }
-  lastCsvPreview: string
   // Long-edge cap for the downloaded images; null = original size. Downscale only.
   downloadSize: number | null
   onDownloadSizeChange: (size: number | null) => void
-  // "zip" (default): one {product}_images.zip with the image binaries + metadata CSV.
-  // "csv": just the metadata CSV, no binaries.
-  packageType: "zip" | "csv"
-  onPackageTypeChange: (t: "zip" | "csv") => void
+  // What goes in the package: images (zipped), the metadata CSV, or both (CSV inside the
+  // zip). At least one must be on for Download to enable; CSV alone downloads as a plain file.
+  includeImages: boolean
+  includeCsv: boolean
+  onIncludeImagesChange: (v: boolean) => void
+  onIncludeCsvChange: (v: boolean) => void
   onClose: () => void
   onDownload: () => void
 }
@@ -61,7 +63,7 @@ function formatFileSize(bytes: number): string {
   return (bytes / (1024 * 1024)).toFixed(1) + " MB"
 }
 
-export function DownloadModal({ open, phase, uploadedFiles, isChecked, uploadLevel, autoData, lastCsvPreview, downloadSize, onDownloadSizeChange, packageType, onPackageTypeChange, onClose, onDownload }: DownloadModalProps) {
+export function DownloadModal({ open, phase, uploadedFiles, isChecked, uploadLevel, autoData, downloadSize, onDownloadSizeChange, includeImages, includeCsv, onIncludeImagesChange, onIncludeCsvChange, onClose, onDownload }: DownloadModalProps) {
   // Free-typed custom long edge; empty/0/invalid means "no custom cap" (Original).
   const [customSize, setCustomSize] = useState("")
   if (!open) return null
@@ -151,42 +153,49 @@ export function DownloadModal({ open, phase, uploadedFiles, isChecked, uploadLev
                 </div>
               </div>
 
-              {/* Package choice — one ZIP with everything, or just the metadata CSV */}
+              {/* Package contents — images, metadata CSV, or both (CSV rides inside the zip) */}
               <div className="mb-6">
                 <h4 className="text-sm font-medium text-foreground mb-3">Package:</h4>
                 <div className="flex flex-col gap-2">
-                  <button
-                    type="button"
-                    aria-pressed={packageType === "zip"}
-                    onClick={() => onPackageTypeChange("zip")}
+                  <label
                     className={cn(
-                      "flex items-start gap-3 rounded border p-3 text-left transition-colors",
-                      packageType === "zip" ? "border-primary bg-primary/5" : "border-border hover:bg-muted/30",
+                      "flex cursor-pointer items-start gap-3 rounded border p-3 transition-colors",
+                      includeImages ? "border-primary bg-primary/5" : "border-border hover:bg-muted/30",
                     )}
                   >
-                    <Package className={cn("mt-0.5 size-4 shrink-0", packageType === "zip" ? "text-primary" : "text-muted-foreground")} />
+                    <Checkbox
+                      checked={includeImages}
+                      onCheckedChange={(v) => onIncludeImagesChange(v === true)}
+                      className="mt-0.5"
+                    />
                     <span className="text-sm">
-                      <span className="font-medium text-foreground">ZIP package</span>
+                      <span className="font-medium text-foreground">Include images</span>
                       <span className="block text-xs text-muted-foreground">
-                        {autoData.productId || "product"}_images.zip — {selectedFiles.length} image{selectedFiles.length !== 1 ? "s" : ""} + metadata CSV in one file
+                        {selectedFiles.length} image{selectedFiles.length !== 1 ? "s" : ""} packaged as {autoData.productId || "product"}_images.zip
                       </span>
                     </span>
-                  </button>
-                  <button
-                    type="button"
-                    aria-pressed={packageType === "csv"}
-                    onClick={() => onPackageTypeChange("csv")}
+                  </label>
+                  <label
                     className={cn(
-                      "flex items-start gap-3 rounded border p-3 text-left transition-colors",
-                      packageType === "csv" ? "border-primary bg-primary/5" : "border-border hover:bg-muted/30",
+                      "flex cursor-pointer items-start gap-3 rounded border p-3 transition-colors",
+                      includeCsv ? "border-primary bg-primary/5" : "border-border hover:bg-muted/30",
                     )}
                   >
-                    <FileText className={cn("mt-0.5 size-4 shrink-0", packageType === "csv" ? "text-primary" : "text-muted-foreground")} />
+                    <Checkbox
+                      checked={includeCsv}
+                      onCheckedChange={(v) => onIncludeCsvChange(v === true)}
+                      className="mt-0.5"
+                    />
                     <span className="text-sm">
-                      <span className="font-medium text-foreground">Metadata CSV only</span>
-                      <span className="block text-xs text-muted-foreground">Just the metadata file — no image binaries</span>
+                      <span className="font-medium text-foreground">Include metadata CSV</span>
+                      <span className="block text-xs text-muted-foreground">
+                        One row per image, PIM/DAM-ready{includeImages ? " — added inside the ZIP" : " — downloads as a plain .csv"}
+                      </span>
                     </span>
-                  </button>
+                  </label>
+                  {!includeImages && !includeCsv && (
+                    <p className="text-xs text-destructive">Select at least one to download.</p>
+                  )}
                 </div>
               </div>
 
@@ -195,7 +204,7 @@ export function DownloadModal({ open, phase, uploadedFiles, isChecked, uploadLev
               <div className="mb-6">
                 <h4 className="text-sm font-medium text-foreground mb-3">Package Contents:</h4>
                 <div className="space-y-2 max-h-48 overflow-y-auto">
-                  {packageType === "zip" && selectedFiles.map((file) => (
+                  {includeImages && selectedFiles.map((file) => (
                     <div key={file.id} className="flex items-center gap-3 rounded border border-border bg-card p-3">
                       <div className="flex size-10 items-center justify-center rounded bg-muted">
                         {file.preview ? (
@@ -220,25 +229,27 @@ export function DownloadModal({ open, phase, uploadedFiles, isChecked, uploadLev
                     </div>
                   ))}
                   {/* Single machine-readable metadata artifact for the whole selection */}
-                  <div className="flex items-center gap-3 rounded border border-border bg-card p-3">
-                    <div className="flex size-10 items-center justify-center rounded bg-muted">
-                      <FileText className="size-5 text-tg-success" />
+                  {includeCsv && (
+                    <div className="flex items-center gap-3 rounded border border-border bg-card p-3">
+                      <div className="flex size-10 items-center justify-center rounded bg-muted">
+                        <FileText className="size-5 text-tg-success" />
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <span className="text-sm font-medium text-foreground truncate block">
+                          {autoData.productId || "product"}_image_metadata.csv
+                        </span>
+                        <span className="text-xs text-muted-foreground">
+                          {selectedFiles.length} row{selectedFiles.length !== 1 ? "s" : ""} — one per image
+                        </span>
+                      </div>
                     </div>
-                    <div className="flex-1 min-w-0">
-                      <span className="text-sm font-medium text-foreground truncate block">
-                        {autoData.productId || "product"}_image_metadata.csv
-                      </span>
-                      <span className="text-xs text-muted-foreground">
-                        {selectedFiles.length} row{selectedFiles.length !== 1 ? "s" : ""} — one per image
-                      </span>
-                    </div>
-                  </div>
+                  )}
                 </div>
               </div>
 
               {/* Image dimensions — long-edge cap, downscale only (aspect ratio preserved).
-                  Irrelevant when only the CSV is downloaded. */}
-              {packageType === "zip" && (
+                  Irrelevant when no image binaries are downloaded. */}
+              {includeImages && (
               <div className="mb-6">
                 <h4 className="text-sm font-medium text-foreground mb-1 flex items-center gap-1.5">
                   <Ruler className="size-4 text-primary" />
@@ -305,10 +316,10 @@ export function DownloadModal({ open, phase, uploadedFiles, isChecked, uploadLev
                 <Button variant="outline" onClick={onClose}>
                   Cancel
                 </Button>
-                <Button onClick={onDownload} disabled={selectedFiles.length === 0}>
+                <Button onClick={onDownload} disabled={(includeImages && selectedFiles.length === 0) || (!includeImages && !includeCsv)}>
                   <Download className="size-4 mr-2" />
-                  {packageType === "zip"
-                    ? `Download ZIP (${selectedFiles.length} image${selectedFiles.length !== 1 ? "s" : ""} + CSV)`
+                  {includeImages
+                    ? `Download ZIP (${selectedFiles.length} image${selectedFiles.length !== 1 ? "s" : ""}${includeCsv ? " + CSV" : ""})`
                     : "Download metadata CSV"}
                 </Button>
               </div>
@@ -324,8 +335,8 @@ export function DownloadModal({ open, phase, uploadedFiles, isChecked, uploadLev
               <div className="text-center">
                 <h3 className="text-lg font-medium text-foreground">Preparing your download</h3>
                 <p className="text-sm text-muted-foreground mt-1">
-                  {packageType === "zip"
-                    ? `Packaging ${selectedFiles.length} image${selectedFiles.length !== 1 ? "s" : ""} + metadata into one ZIP...`
+                  {includeImages
+                    ? `Packaging ${selectedFiles.length} image${selectedFiles.length !== 1 ? "s" : ""}${includeCsv ? " + metadata" : ""} into one ZIP...`
                     : "Preparing metadata CSV..."}
                 </p>
               </div>
@@ -349,10 +360,10 @@ export function DownloadModal({ open, phase, uploadedFiles, isChecked, uploadLev
               {/* Downloaded Files Summary */}
               <div className="rounded border border-border bg-muted/20 p-4 mb-6 text-left">
                 <div className="text-sm font-medium text-foreground mb-3">
-                  {packageType === "zip" ? "Downloaded ZIP:" : "Downloaded File:"}
+                  {includeImages ? "Downloaded ZIP:" : "Downloaded File:"}
                 </div>
                 <div className="space-y-2 max-h-32 overflow-y-auto">
-                  {packageType === "zip" ? (
+                  {includeImages ? (
                     <>
                       <div className="flex items-center gap-2 text-sm text-foreground">
                         <Check className="size-4 text-tg-success" />
@@ -364,10 +375,12 @@ export function DownloadModal({ open, phase, uploadedFiles, isChecked, uploadLev
                           <span>{file.name}</span>
                         </div>
                       ))}
-                      <div className="flex items-center gap-2 pl-6 text-sm text-muted-foreground">
-                        <FileText className="size-3.5" />
-                        <span>{autoData.productId || "product"}_image_metadata.csv</span>
-                      </div>
+                      {includeCsv && (
+                        <div className="flex items-center gap-2 pl-6 text-sm text-muted-foreground">
+                          <FileText className="size-3.5" />
+                          <span>{autoData.productId || "product"}_image_metadata.csv</span>
+                        </div>
+                      )}
                     </>
                   ) : (
                     <div className="flex items-center gap-2 text-sm text-foreground">
@@ -376,19 +389,6 @@ export function DownloadModal({ open, phase, uploadedFiles, isChecked, uploadLev
                     </div>
                   )}
                 </div>
-              </div>
-
-              {/* Metadata CSV Preview — first rows of the actually-downloaded file */}
-              <div className="rounded border border-border bg-card p-4 mb-6 text-left">
-                <div className="flex items-center justify-between mb-2">
-                  <span className="text-sm font-medium text-foreground">Metadata Preview</span>
-                  <span className="text-xs text-muted-foreground">
-                    {autoData.productId || "product"}_image_metadata.csv
-                  </span>
-                </div>
-                <pre className="text-xs text-muted-foreground bg-muted/30 p-3 rounded overflow-x-auto max-h-40 overflow-y-auto font-mono">
-{lastCsvPreview || "No metadata available"}
-                </pre>
               </div>
 
               <Button onClick={onClose}>

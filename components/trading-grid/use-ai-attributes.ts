@@ -19,11 +19,18 @@ type ExtractionApiResponse = {
   category: string
   brickCode?: string
   brickName?: string
+  model?: string
   imageCount: number
   imageNames: string[]
   attributes: Omit<ExtractedAttribute, "decision">[]
   unresolvedAttributes: UnresolvedAttribute[]
 }
+
+// Live provenance for an AI result: the model that produced it, the measured wall-clock
+// duration of the request, and when it completed. Honest metadata only — rendered so demo
+// viewers can tell live analysis from mock scaffolding.
+export type AiAnalysisMeta = { model: string; durationMs: number; at: number }
+const FALLBACK_MODEL = "gemini-2.5-flash"
 
 // ProductExtractionResult: product-level frontend state (one result for the whole product,
 // not one per image). Replaces the old per-image ExtractionResult / aiExtractions Record.
@@ -37,6 +44,7 @@ export type ProductExtractionResult = {
   unresolvedAttributes: UnresolvedAttribute[]
   status: "idle" | "extracting" | "complete" | "error"
   error?: string
+  analysis?: AiAnalysisMeta
 }
 
 // ── Per-image AI suggestions (Task 5) ──
@@ -55,6 +63,7 @@ export type ShotSuggestionEntry = {
   fieldStatus: Partial<Record<ShotSuggestionField, ShotFieldStatus>>
   loading: boolean
   error: string | null
+  analysis?: AiAnalysisMeta
 }
 export type ShotSuggestionState = { [imageIndex: number]: ShotSuggestionEntry }
 
@@ -259,6 +268,7 @@ export function useAiAttributes({ uploadedFiles, attributes, setAttributesByImag
         }))
       )
 
+      const startedAt = performance.now()
       const res = await fetch("/api/extract-attributes", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -280,6 +290,11 @@ export function useAiAttributes({ uploadedFiles, attributes, setAttributesByImag
         attributes: (Array.isArray(data.attributes) ? data.attributes : []).map(a => ({ ...a, decision: "pending" as const })),
         unresolvedAttributes: Array.isArray(data.unresolvedAttributes) ? data.unresolvedAttributes : [],
         status: "complete",
+        analysis: {
+          model: typeof data.model === "string" ? data.model : FALLBACK_MODEL,
+          durationMs: performance.now() - startedAt,
+          at: Date.now(),
+        },
       })
     } catch (err) {
       setAiExtraction({
@@ -370,6 +385,7 @@ export function useAiAttributes({ uploadedFiles, attributes, setAttributesByImag
     }))
     try {
       const imageBase64 = await fileToBase64(file.file)
+      const startedAt = performance.now()
       const res = await fetch("/api/suggest-shot-attributes", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -382,7 +398,12 @@ export function useAiAttributes({ uploadedFiles, attributes, setAttributesByImag
         const errBody = await res.json().catch(() => null)
         throw new Error(errBody?.error || `Suggestion failed (${res.status}).`)
       }
-      const data = await res.json() as { suggestions: { fileName: string; orientation: string; facing: string; angle: string; imageStyle: string; confidences?: Partial<Record<string, number>> }[] }
+      const data = await res.json() as { suggestions: { fileName: string; orientation: string; facing: string; angle: string; imageStyle: string; confidences?: Partial<Record<string, number>> }[]; model?: string }
+      const analysis: AiAnalysisMeta = {
+        model: typeof data.model === "string" ? data.model : FALLBACK_MODEL,
+        durationMs: performance.now() - startedAt,
+        at: Date.now(),
+      }
       const s = Array.isArray(data.suggestions) ? data.suggestions.find(x => x.fileName === file.name) : undefined
       if (!s) throw new Error("AI could not read this image — set its details manually.")
       const values: ShotSuggestionEntry["values"] = {}
@@ -401,7 +422,7 @@ export function useAiAttributes({ uploadedFiles, attributes, setAttributesByImag
         ;(Object.keys(values) as ShotSuggestionField[]).forEach(k => { rec[k] = values[k]! })
         return { ...prev, [index]: rec }
       })
-      setShotSuggestions(prev => ({ ...prev, [index]: { values, confidences, fieldStatus, loading: false, error: null } }))
+      setShotSuggestions(prev => ({ ...prev, [index]: { values, confidences, fieldStatus, loading: false, error: null, analysis } }))
     } catch (err) {
       setShotSuggestions(prev => ({
         ...prev,

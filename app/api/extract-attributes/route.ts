@@ -18,6 +18,8 @@ export type ExtractionApiResponse = {
   category: string
   brickCode?: string
   brickName?: string
+  // Which model produced this analysis — surfaced in the UI as live provenance.
+  model?: string
   imageCount: number
   imageNames: string[]
   attributes: {
@@ -162,6 +164,7 @@ export async function POST(request: Request) {
       category,
       brickCode: brick?.code,
       brickName: brick?.name,
+      model: GEMINI_MODEL,
       imageCount: validatedImages.length,
       imageNames: validatedImages.map(i => i.fileName),
       attributes: [],
@@ -367,6 +370,7 @@ Return JSON in exactly this shape:
     category,
     brickCode: brick?.code,
     brickName: brick?.name,
+    model: GEMINI_MODEL,
     imageCount: validatedImages.length,
     imageNames: validatedImages.map((i) => i.fileName),
     attributes: cleanAttributes,

@@ -80,8 +80,3 @@ export function downloadCsv(filename: string, csv: string): void {
   a.remove()
   URL.revokeObjectURL(url)
 }
-
-// First N lines of a CSV, for on-screen preview after download.
-export function csvPreview(csv: string, lineCount = 6): string {
-  return csv.split("\r\n").filter(Boolean).slice(0, lineCount).join("\n")
-}
