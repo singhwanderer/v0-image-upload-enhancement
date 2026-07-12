@@ -19,7 +19,7 @@ import { buildImageMetadataCsv, buildTableCsv, downloadCsv, type ImageMetadataRo
 import { toast } from "@/hooks/use-toast"
 import { DownloadModal } from "./download-modal"
 import { ImageDetailCard } from "./image-detail-card"
-import { buildZip, downscaleImage, saveBlob } from "./image-resize"
+import { buildZip, resizeToFit, saveBlob } from "./image-resize"
 
 // "SI-Still Shot" → "SI": the mock fixtures store display labels; the CSV carries codes.
 const codeOf = (label: string): string => label.split("-")[0] ?? label
@@ -354,8 +354,9 @@ export function RetailerImageBrowser() {
   // activeImageIndex removed — retailer product-media uses stacked list (no active selection)
   const [showDownloadModal, setShowDownloadModal] = useState(false)
   const [downloadPhase, setDownloadPhase] = useState<"select" | "preparing" | "complete">("select")
-  // Long-edge cap for downloaded images; null = original size (shared DownloadModal contract).
-  const [downloadSize, setDownloadSize] = useState<number | null>(null)
+  // Max width × height bounding box for downloaded images; null axis = uncapped (fit-within
+  // box, downscale only — see the DownloadModal "box" dimension mode).
+  const [downloadBox, setDownloadBox] = useState<{ width: number | null; height: number | null }>({ width: null, height: null })
   // Package contents: images (zipped) and/or the metadata CSV. Both on by default.
   const [downloadIncludeImages, setDownloadIncludeImages] = useState(true)
   const [downloadIncludeCsv, setDownloadIncludeCsv] = useState(true)
@@ -371,8 +372,8 @@ export function RetailerImageBrowser() {
   }
 
   // Retailer download. ZIP mode fetches the selected image binaries from the mock assets
-  // (downscaled to the chosen long-edge cap when one is set) and packages them with the
-  // spec-shaped metadata CSV into one archive; CSV mode downloads just the metadata file.
+  // (scaled to fit the chosen max width × height box when one is set) and packages them with
+  // the spec-shaped metadata CSV into one archive; CSV mode downloads just the metadata file.
   // Mirrors the supplier's handleBulkDownload.
   const handleRetailerDownload = async () => {
     const productMedia = mediaFor(selectedProduct?.id)
@@ -387,8 +388,8 @@ export function RetailerImageBrowser() {
           const res = await fetch(img.previewSrc)
           if (!res.ok) throw new Error(`Failed to fetch ${img.fileName}`)
           let blob = await res.blob()
-          if (downloadSize != null) {
-            const out = await downscaleImage(blob, downloadSize)
+          if (downloadBox.width != null || downloadBox.height != null) {
+            const out = await resizeToFit(blob, downloadBox.width, downloadBox.height)
             blob = out.blob
             if (out.resized) outputDims.set(img.fileName, { width: out.width, height: out.height })
           }
@@ -933,8 +934,12 @@ export function RetailerImageBrowser() {
           isChecked={media.isChecked}
           uploadLevel="product"
           autoData={{ productId: selectedProduct?.id ?? "", selectedGtin: "", colorCode: "" }}
-          downloadSize={downloadSize}
-          onDownloadSizeChange={setDownloadSize}
+          downloadSize={null}
+          onDownloadSizeChange={() => {}}
+          dimensionMode="box"
+          boxSize={downloadBox}
+          onBoxSizeChange={setDownloadBox}
+          csvIncludesProductAttributes={false}
           includeImages={downloadIncludeImages}
           includeCsv={downloadIncludeCsv}
           onIncludeImagesChange={setDownloadIncludeImages}
