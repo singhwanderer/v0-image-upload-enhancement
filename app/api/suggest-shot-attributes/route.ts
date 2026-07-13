@@ -9,7 +9,7 @@ export const runtime = "nodejs"
 export const maxDuration = 60
 
 const ALLOWED_MIME_TYPES = ["image/jpeg", "image/jpg", "image/png", "image/webp"]
-const GEMINI_MODEL = "gemini-2.5-flash"
+const GEMINI_MODEL = "gemini-3.1-flash-lite"
 
 // Kept in sync with the wizard's option lists (image-upload-wizard.tsx). The model may
 // only answer with these codes; anything else is dropped server-side.
