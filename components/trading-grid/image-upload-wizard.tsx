@@ -727,6 +727,19 @@ export function ImageUploadWizard({
           </div>
         )}
 
+        {/* Post-submit attribute generation — the same AI card as Step 2, reading the same `ai`
+            hook instance. If AI was run during upload its results already show as complete;
+            if it was skipped (or the images arrived via API without attributes), this is the
+            "enhance later" entry point. Product Attributes only — image details are set inline
+            per card above. Accepting here feeds CataloguePushCard below reactively. */}
+        {portalType === "supplier" && (
+          <AiSection
+            ai={ai}
+            uploadedFiles={uploadedFiles}
+            onRequestReupload={() => { setShowProductMedia(false); setCurrentStep(1) }}
+          />
+        )}
+
         {/* Catalogue card — AI-derived attributes are product data, so they surface inline here
             (not in a drawer) with a push-to-catalogue action covering every GTIN of the product. */}
         {portalType === "supplier" && (
