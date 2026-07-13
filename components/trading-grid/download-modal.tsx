@@ -40,8 +40,18 @@ type DownloadModalProps = {
   uploadLevel: "product" | "product-color" | "gtin"
   autoData: { productId: string; selectedGtin: string; colorCode: string }
   // Long-edge cap for the downloaded images; null = original size. Downscale only.
+  // Used when dimensionMode is "long-edge" (the default).
   downloadSize: number | null
   onDownloadSizeChange: (size: number | null) => void
+  // Dimension control style. "long-edge" (default) = a single longest-edge cap; "box" = a
+  // max width × height bounding box (both axes settable, aspect ratio preserved, no upscale).
+  dimensionMode?: "long-edge" | "box"
+  // Bounding box for "box" mode; either axis null = uncapped. Ignored in "long-edge" mode.
+  boxSize?: { width: number | null; height: number | null }
+  onBoxSizeChange?: (v: { width: number | null; height: number | null }) => void
+  // Whether the metadata CSV carries product (GS1 extended) attributes. Suppliers append
+  // them; the retailer CSV is image details only. Drives the modal's descriptive copy.
+  csvIncludesProductAttributes?: boolean
   // What goes in the package: images (zipped), the metadata CSV, or both (CSV inside the
   // zip). At least one must be on for Download to enable; CSV alone downloads as a plain file.
   includeImages: boolean
@@ -63,7 +73,7 @@ function formatFileSize(bytes: number): string {
   return (bytes / (1024 * 1024)).toFixed(1) + " MB"
 }
 
-export function DownloadModal({ open, phase, uploadedFiles, isChecked, uploadLevel, autoData, downloadSize, onDownloadSizeChange, includeImages, includeCsv, onIncludeImagesChange, onIncludeCsvChange, onClose, onDownload }: DownloadModalProps) {
+export function DownloadModal({ open, phase, uploadedFiles, isChecked, uploadLevel, autoData, downloadSize, onDownloadSizeChange, dimensionMode = "long-edge", boxSize, onBoxSizeChange, csvIncludesProductAttributes = true, includeImages, includeCsv, onIncludeImagesChange, onIncludeCsvChange, onClose, onDownload }: DownloadModalProps) {
   // Free-typed custom long edge; empty/0/invalid means "no custom cap" (Original).
   const [customSize, setCustomSize] = useState("")
   if (!open) return null
@@ -85,6 +95,38 @@ export function DownloadModal({ open, phase, uploadedFiles, isChecked, uploadLev
     }
     // Clamp to the largest original long edge — larger values can only mean "original".
     onDownloadSizeChange(maxLongEdge != null ? Math.min(n, maxLongEdge) : n)
+  }
+  // Per-axis largest original dimension across the selection, for box-mode presets/clamping.
+  const widths = selectedFiles.map(f => f.measured?.width ?? 0).filter(n => n > 0)
+  const heights = selectedFiles.map(f => f.measured?.height ?? 0).filter(n => n > 0)
+  const maxW = widths.length > 0 ? Math.max(...widths) : null
+  const maxH = heights.length > 0 ? Math.max(...heights) : null
+  const boxW = boxSize?.width ?? null
+  const boxH = boxSize?.height ?? null
+  const boxActive = boxW != null || boxH != null
+  // How many of the selected files this box will actually shrink, vs. pass through untouched —
+  // same fit formula as resizeToFit's per-image scale, for display only. One box applies to the
+  // whole batch (no per-image overrides); this just makes the mixed-outcome visible up front.
+  const filesWithDims = selectedFiles.filter(f => (f.measured?.width ?? 0) > 0 && (f.measured?.height ?? 0) > 0)
+  const willResizeCount = filesWithDims.filter(f => {
+    const capW = boxW ?? Infinity
+    const capH = boxH ?? Infinity
+    const w = f.measured?.width ?? 0
+    const h = f.measured?.height ?? 0
+    return Math.min(capW / w, capH / h, 1) < 1
+  }).length
+  // A box preset P×P is only useful if it shrinks at least one axis.
+  const visibleBoxPresets = SIZE_PRESETS.filter(p =>
+    (maxW == null && maxH == null) || (maxW != null && p < maxW) || (maxH != null && p < maxH),
+  )
+  // Box mode: parse a raw axis entry, clamp to the largest original for that axis (larger
+  // values just mean "original"), and merge into the { width, height } box. Blank = uncapped.
+  const applyBox = (axis: "width" | "height", raw: string) => {
+    const current = boxSize ?? { width: null, height: null }
+    const n = Number.parseInt(raw, 10)
+    const cap = axis === "width" ? maxW : maxH
+    const next = !Number.isFinite(n) || n <= 0 ? null : cap != null ? Math.min(n, cap) : n
+    onBoxSizeChange?.({ ...current, [axis]: next })
   }
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
@@ -189,7 +231,7 @@ export function DownloadModal({ open, phase, uploadedFiles, isChecked, uploadLev
                     <span className="text-sm">
                       <span className="font-medium text-foreground">Include metadata CSV</span>
                       <span className="block text-xs text-muted-foreground">
-                        One row per image, PIM/DAM-ready{includeImages ? " — added inside the ZIP" : " — downloads as a plain .csv"}
+                        One row per image{csvIncludesProductAttributes ? "" : " (image details only)"}, PIM/DAM-ready{includeImages ? " — added inside the ZIP" : " — downloads as a plain .csv"}
                       </span>
                     </span>
                   </label>
@@ -247,9 +289,10 @@ export function DownloadModal({ open, phase, uploadedFiles, isChecked, uploadLev
                 </div>
               </div>
 
-              {/* Image dimensions — long-edge cap, downscale only (aspect ratio preserved).
-                  Irrelevant when no image binaries are downloaded. */}
-              {includeImages && (
+              {/* Image dimensions — downscale only (aspect ratio preserved). Irrelevant when
+                  no image binaries are downloaded. "long-edge" mode caps a single longest
+                  edge; "box" mode caps width and height independently (fit inside the box). */}
+              {includeImages && dimensionMode === "long-edge" && (
               <div className="mb-6">
                 <h4 className="text-sm font-medium text-foreground mb-1 flex items-center gap-1.5">
                   <Ruler className="size-4 text-primary" />
@@ -302,12 +345,100 @@ export function DownloadModal({ open, phase, uploadedFiles, isChecked, uploadLev
               </div>
               )}
 
+              {/* Box mode — independent max width & height. Images scale to fit inside the box
+                  preserving aspect ratio; neither axis is ever upscaled. */}
+              {includeImages && dimensionMode === "box" && (
+              <div className="mb-6">
+                <h4 className="text-sm font-medium text-foreground mb-1 flex items-center gap-1.5">
+                  <Ruler className="size-4 text-primary" />
+                  Image dimensions
+                </h4>
+                <p className="text-xs text-muted-foreground mb-3">
+                  Set a maximum width and height. Images larger than the box are scaled to fit inside it (aspect ratio kept, never stretched). Smaller images download at their original size — never upscaled. Leave a field blank to cap only the other side.
+                </p>
+                <div className="flex flex-wrap items-center gap-2 mb-3">
+                  <Button
+                    variant={!boxActive ? "default" : "outline"}
+                    size="sm"
+                    className="h-8 px-3 text-xs"
+                    aria-pressed={!boxActive}
+                    onClick={() => onBoxSizeChange?.({ width: null, height: null })}
+                  >
+                    Original
+                  </Button>
+                  {visibleBoxPresets.map(p => (
+                    <Button
+                      key={p}
+                      variant={boxW === p && boxH === p ? "default" : "outline"}
+                      size="sm"
+                      className="h-8 px-3 text-xs"
+                      aria-pressed={boxW === p && boxH === p}
+                      onClick={() => onBoxSizeChange?.({ width: p, height: p })}
+                    >
+                      {p} × {p}
+                    </Button>
+                  ))}
+                </div>
+                <div className="flex flex-wrap items-center gap-3">
+                  <div className="flex items-center gap-1.5">
+                    <span className="text-xs text-muted-foreground w-16">Max width</span>
+                    <Input
+                      type="number"
+                      min={1}
+                      max={maxW ?? undefined}
+                      placeholder="Any"
+                      value={boxW ?? ""}
+                      onChange={(e) => applyBox("width", e.target.value)}
+                      className={cn("h-8 w-24 bg-background text-xs", boxW != null && "border-primary")}
+                      aria-label="Maximum width in pixels"
+                    />
+                    <span className="text-xs text-muted-foreground">px</span>
+                  </div>
+                  <div className="flex items-center gap-1.5">
+                    <span className="text-xs text-muted-foreground w-16">Max height</span>
+                    <Input
+                      type="number"
+                      min={1}
+                      max={maxH ?? undefined}
+                      placeholder="Any"
+                      value={boxH ?? ""}
+                      onChange={(e) => applyBox("height", e.target.value)}
+                      className={cn("h-8 w-24 bg-background text-xs", boxH != null && "border-primary")}
+                      aria-label="Maximum height in pixels"
+                    />
+                    <span className="text-xs text-muted-foreground">px</span>
+                  </div>
+                </div>
+                {boxActive && (
+                  <p className="mt-2 text-xs text-muted-foreground">
+                    Fitting inside{" "}
+                    <span className="font-medium text-foreground">
+                      {boxW != null ? `${boxW} px` : "any"} wide × {boxH != null ? `${boxH} px` : "any"} tall
+                    </span>.
+                  </p>
+                )}
+                {boxActive && filesWithDims.length > 0 && (
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    {willResizeCount === 0
+                      ? "All selected images are already within this box — every image downloads at its original size."
+                      : willResizeCount === filesWithDims.length
+                      ? `All ${willResizeCount} selected image${willResizeCount !== 1 ? "s" : ""} will be scaled down to fit.`
+                      : `${willResizeCount} of ${filesWithDims.length} selected images will be scaled down to fit; the rest are already smaller and download at their original size.`}
+                  </p>
+                )}
+              </div>
+              )}
+
               {/* Info Note */}
               <div className="mb-6 flex items-start gap-2 rounded bg-primary/5 p-3 text-sm">
                 <FileText className="size-4 text-primary mt-0.5 shrink-0" />
                 <div>
                   <span className="font-medium text-foreground">Metadata file (.csv)</span>
-                  <span className="text-muted-foreground"> contains one row per image with all attributes in the standard field layout — including measured file properties and accepted GS1 extended attributes — ready for PIM/DAM import.</span>
+                  <span className="text-muted-foreground">
+                    {csvIncludesProductAttributes
+                      ? " contains one row per image with all attributes in the standard field layout — including measured file properties and accepted GS1 extended attributes — ready for PIM/DAM import."
+                      : " contains one row per image with the image details in the standard field layout — measured file properties only, no product attributes — ready for PIM/DAM import."}
+                  </span>
                 </div>
               </div>
 
