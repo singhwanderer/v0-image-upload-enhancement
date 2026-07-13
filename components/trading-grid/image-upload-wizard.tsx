@@ -43,7 +43,7 @@ import { validateImageBatch, type ValidationError } from "./upload-validation"
 import { measureImageFile } from "./image-metadata"
 import type { UploadedFile } from "./uploaded-file"
 import { buildImageMetadataCsv, downloadCsv, type ImageMetadataRow } from "./metadata-csv"
-import { buildZip, downscaleImage, saveBlob } from "./image-resize"
+import { buildZip, resizeToFit, saveBlob } from "./image-resize"
 import { toast } from "@/hooks/use-toast"
 import { useMediaSelection } from "./use-media-selection"
 import { AiAttributesTable } from "./ai-attributes-table"
@@ -213,9 +213,10 @@ export function ImageUploadWizard({
   const [showProductMedia, setShowProductMedia] = useState(false)
   const [showDownloadModal, setShowDownloadModal] = useState(false)
   const [downloadPhase, setDownloadPhase] = useState<"select" | "preparing" | "complete">("select")
-  // Requested long-edge cap for downloaded images; null = original dimensions. Downscale only —
-  // images already within the cap download untouched.
-  const [downloadSize, setDownloadSize] = useState<number | null>(null)
+  // Max width × height bounding box for downloaded images; null axis = uncapped. Images scale to
+  // fit inside the box (aspect ratio preserved), never upscaled — those already within it download
+  // untouched. Mirrors the retailer browser's download box (see image-upload-hub.tsx).
+  const [downloadBox, setDownloadBox] = useState<{ width: number | null; height: number | null }>({ width: null, height: null })
   // Package contents: images (zipped) and/or the metadata CSV. Both on by default.
   const [downloadIncludeImages, setDownloadIncludeImages] = useState(true)
   const [downloadIncludeCsv, setDownloadIncludeCsv] = useState(true)
@@ -470,10 +471,11 @@ export function ImageUploadWizard({
     })
   }
 
-  // Handle bulk download. With images included, the selected binaries (downscaled to the
-  // chosen long-edge cap when one is set — never upscaled) are packaged into one ZIP, with
-  // the metadata CSV (incl. accepted GS1 extended attributes, width/height reflecting the
-  // packaged files) inside when it's included too. CSV alone downloads as a plain file.
+  // Handle bulk download. With images included, the selected binaries (scaled to fit the
+  // chosen max width × height box when one is set — aspect ratio kept, never upscaled) are
+  // packaged into one ZIP, with the metadata CSV (incl. accepted GS1 extended attributes,
+  // width/height reflecting the packaged files) inside when it's included too. CSV alone
+  // downloads as a plain file.
   const handleBulkDownload = async () => {
     const selectedFiles = uploadedFiles.filter(f => media.isChecked(f.id))
     const productId = getAutoPopulatedData().productId || "product"
@@ -484,8 +486,8 @@ export function ImageUploadWizard({
       if (downloadIncludeImages) {
         for (const file of selectedFiles) {
           let blob: Blob = file.file
-          if (downloadSize != null) {
-            const out = await downscaleImage(file.file, downloadSize)
+          if (downloadBox.width != null || downloadBox.height != null) {
+            const out = await resizeToFit(file.file, downloadBox.width, downloadBox.height)
             blob = out.blob
             if (out.resized) outputDims.set(file.id, { width: out.width, height: out.height })
           }
@@ -727,17 +729,33 @@ export function ImageUploadWizard({
           </div>
         )}
 
-        {/* Post-submit attribute generation — the same AI card as Step 2, reading the same `ai`
-            hook instance. If AI was run during upload its results already show as complete;
-            if it was skipped (or the images arrived via API without attributes), this is the
-            "enhance later" entry point. Product Attributes only — image details are set inline
-            per card above. Accepting here feeds CataloguePushCard below reactively. */}
+        {/* Post-submit AI attributes are read-only here — this is a review surface, not an
+            authoring one. Generation/editing (classify, extract, confirm/reject) happens in the
+            wizard's Attributes step; this card just summarizes the result and routes back there.
+            The full read-only attribute table is rendered by CataloguePushCard just below. */}
         {portalType === "supplier" && (
-          <AiSection
-            ai={ai}
-            uploadedFiles={uploadedFiles}
-            onRequestReupload={() => { setShowProductMedia(false); setCurrentStep(1) }}
-          />
+          <div className="rounded border border-border bg-card flex items-start gap-3 p-4">
+            <div className="flex size-9 shrink-0 items-center justify-center rounded bg-primary/10">
+              <Sparkles className="size-5 text-primary" />
+            </div>
+            <div className="flex-1">
+              <h3 className="text-sm font-semibold text-foreground">Product attributes</h3>
+              <p className="mt-0.5 text-sm text-muted-foreground">
+                {ai.hasExtraction
+                  ? `${acceptedExtractedAttributes.length} attribute${acceptedExtractedAttributes.length !== 1 ? "s" : ""} accepted`
+                    + (aiExtraction?.brickName ? ` · ${aiExtraction.brickName}` : "")
+                    + " — reviewed below. Edit them in the Attributes step."
+                  : "No AI attributes yet. Generate them in the Attributes step."}
+              </p>
+            </div>
+            <Button
+              className="shrink-0 gap-2"
+              onClick={() => { setShowProductMedia(false); setCurrentStep(2) }}
+            >
+              <Sparkles className="size-4" />
+              {ai.hasExtraction ? "Edit attributes" : "Generate attributes with AI"}
+            </Button>
+          </div>
         )}
 
         {/* Catalogue card — AI-derived attributes are product data, so they surface inline here
@@ -1259,8 +1277,11 @@ export function ImageUploadWizard({
           isChecked={media.isChecked}
           uploadLevel={uploadLevel}
           autoData={getAutoPopulatedData()}
-          downloadSize={downloadSize}
-          onDownloadSizeChange={setDownloadSize}
+          downloadSize={null}
+          onDownloadSizeChange={() => {}}
+          dimensionMode="box"
+          boxSize={downloadBox}
+          onBoxSizeChange={setDownloadBox}
           includeImages={downloadIncludeImages}
           includeCsv={downloadIncludeCsv}
           onIncludeImagesChange={setDownloadIncludeImages}
@@ -2368,8 +2389,11 @@ export function ImageUploadWizard({
         isChecked={media.isChecked}
         uploadLevel={uploadLevel}
         autoData={getAutoPopulatedData()}
-        downloadSize={downloadSize}
-        onDownloadSizeChange={setDownloadSize}
+        downloadSize={null}
+        onDownloadSizeChange={() => {}}
+        dimensionMode="box"
+        boxSize={downloadBox}
+        onBoxSizeChange={setDownloadBox}
         includeImages={downloadIncludeImages}
         includeCsv={downloadIncludeCsv}
         onIncludeImagesChange={setDownloadIncludeImages}
