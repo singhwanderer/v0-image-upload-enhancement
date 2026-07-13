@@ -104,6 +104,17 @@ export function DownloadModal({ open, phase, uploadedFiles, isChecked, uploadLev
   const boxW = boxSize?.width ?? null
   const boxH = boxSize?.height ?? null
   const boxActive = boxW != null || boxH != null
+  // How many of the selected files this box will actually shrink, vs. pass through untouched —
+  // same fit formula as resizeToFit's per-image scale, for display only. One box applies to the
+  // whole batch (no per-image overrides); this just makes the mixed-outcome visible up front.
+  const filesWithDims = selectedFiles.filter(f => (f.measured?.width ?? 0) > 0 && (f.measured?.height ?? 0) > 0)
+  const willResizeCount = filesWithDims.filter(f => {
+    const capW = boxW ?? Infinity
+    const capH = boxH ?? Infinity
+    const w = f.measured?.width ?? 0
+    const h = f.measured?.height ?? 0
+    return Math.min(capW / w, capH / h, 1) < 1
+  }).length
   // A box preset P×P is only useful if it shrinks at least one axis.
   const visibleBoxPresets = SIZE_PRESETS.filter(p =>
     (maxW == null && maxH == null) || (maxW != null && p < maxW) || (maxH != null && p < maxH),
@@ -404,6 +415,15 @@ export function DownloadModal({ open, phase, uploadedFiles, isChecked, uploadLev
                     <span className="font-medium text-foreground">
                       {boxW != null ? `${boxW} px` : "any"} wide × {boxH != null ? `${boxH} px` : "any"} tall
                     </span>.
+                  </p>
+                )}
+                {boxActive && filesWithDims.length > 0 && (
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    {willResizeCount === 0
+                      ? "All selected images are already within this box — every image downloads at its original size."
+                      : willResizeCount === filesWithDims.length
+                      ? `All ${willResizeCount} selected image${willResizeCount !== 1 ? "s" : ""} will be scaled down to fit.`
+                      : `${willResizeCount} of ${filesWithDims.length} selected images will be scaled down to fit; the rest are already smaller and download at their original size.`}
                   </p>
                 )}
               </div>

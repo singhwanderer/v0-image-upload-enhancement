@@ -151,7 +151,7 @@ export function TradingGridLayout({
   }
 
   return (
-    <div className="flex min-h-screen flex-col bg-background">
+    <div className="flex h-screen flex-col bg-background">
       {/* Header */}
       <header className="flex h-12 items-center justify-between bg-gradient-to-r from-tg-header-start to-tg-header-end px-4 text-white">
         <div className="flex items-center gap-4">
@@ -206,9 +206,9 @@ export function TradingGridLayout({
         </div>
       </header>
 
-      <div className="flex flex-1">
-        {/* Left Sidebar Navigation */}
-        <aside className="w-56 flex-shrink-0 border-r border-border bg-sidebar">
+      <div className="flex flex-1 min-h-0">
+        {/* Left Sidebar Navigation — its own scroll region, independent of main content */}
+        <aside className="w-56 flex-shrink-0 overflow-y-auto border-r border-border bg-sidebar">
           <nav className="flex flex-col py-2">
             {navSections.map((section) => (
               <div key={section.id} className="border-b border-sidebar-border last:border-b-0">

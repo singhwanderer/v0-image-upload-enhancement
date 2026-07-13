@@ -14,7 +14,6 @@ import { Label } from "@/components/ui/label"
 import { Checkbox } from "@/components/ui/checkbox"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 import { cn } from "@/lib/utils"
-import { useMediaSelection } from "./use-media-selection"
 import { buildImageMetadataCsv, buildTableCsv, downloadCsv, type ImageMetadataRow } from "./metadata-csv"
 import { toast } from "@/hooks/use-toast"
 import { DownloadModal } from "./download-modal"
@@ -362,11 +361,32 @@ export function RetailerImageBrowser() {
   const [downloadIncludeCsv, setDownloadIncludeCsv] = useState(true)
   // Lightbox: full-size view of a single product-media image
   const [lightboxImage, setLightboxImage] = useState<{ src: string; fileName: string } | null>(null)
-  // Selection state for selective download (Retailer stays read-only — no edit/delete).
-  const media = useMediaSelection()
+  // Bulk selection — explicit and local to this view (retailer has no edit/delete, so it never
+  // needed the shared useMediaSelection hook's "empty set = everything" convenience). Empty by
+  // default: nothing is pre-checked when the page loads.
+  const [selected, setSelected] = useState<Set<string>>(new Set())
+  const toggleSelected = (id: string) => {
+    setSelected(prev => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+  }
+  // The set of file names the open/opening download modal targets — resolved once when the
+  // modal opens, independent of `selected`, so a per-card download can never mutate the bulk
+  // selection and a bulk download always reflects the bar's current state at click time.
+  const [downloadTargetIds, setDownloadTargetIds] = useState<Set<string>>(new Set())
 
-  const openDownloadModal = (presetIds?: string[]) => {
-    if (presetIds && presetIds.length > 0) media.selectOnly(presetIds[0])
+  // Bulk bar's Download action: current explicit selection, or everything if nothing is checked.
+  const openBulkDownload = (allIds: string[]) => {
+    setDownloadTargetIds(selected.size > 0 ? new Set(selected) : new Set(allIds))
+    setDownloadPhase("select")
+    setShowDownloadModal(true)
+  }
+  // Per-card Download action: always just that one file, never touches `selected`.
+  const openSingleDownload = (fileName: string) => {
+    setDownloadTargetIds(new Set([fileName]))
     setDownloadPhase("select")
     setShowDownloadModal(true)
   }
@@ -377,14 +397,14 @@ export function RetailerImageBrowser() {
   // Mirrors the supplier's handleBulkDownload.
   const handleRetailerDownload = async () => {
     const productMedia = mediaFor(selectedProduct?.id)
-    const selected = productMedia.filter(img => media.isChecked(img.fileName))
+    const targeted = productMedia.filter(img => downloadTargetIds.has(img.fileName))
     const productId = selectedProduct?.id ?? "product"
     setDownloadPhase("preparing")
     try {
       const outputDims = new Map<string, { width: number; height: number }>()
       const zipEntries: Record<string, Uint8Array> = {}
       if (downloadIncludeImages) {
-        for (const img of selected) {
+        for (const img of targeted) {
           const res = await fetch(img.previewSrc)
           if (!res.ok) throw new Error(`Failed to fetch ${img.fileName}`)
           let blob = await res.blob()
@@ -396,7 +416,7 @@ export function RetailerImageBrowser() {
           zipEntries[img.fileName] = new Uint8Array(await blob.arrayBuffer())
         }
       }
-      const rows: ImageMetadataRow[] = selected.map(img => {
+      const rows: ImageMetadataRow[] = targeted.map(img => {
         const dims = outputDims.get(img.fileName)
         return {
           action: "insert",
@@ -433,7 +453,7 @@ export function RetailerImageBrowser() {
       toast({
         title: "Download complete",
         description: downloadIncludeImages
-          ? `${productId}_images.zip — ${selected.length} image${selected.length !== 1 ? "s" : ""}${downloadIncludeCsv ? " + metadata CSV" : ""}.`
+          ? `${productId}_images.zip — ${targeted.length} image${targeted.length !== 1 ? "s" : ""}${downloadIncludeCsv ? " + metadata CSV" : ""}.`
           : "Metadata CSV downloaded.",
       })
     } catch {
@@ -462,6 +482,7 @@ export function RetailerImageBrowser() {
 
   const handleProductSelect = (product: typeof MOCK_PRODUCTS[0]) => {
     setSelectedProduct(product)
+    setSelected(new Set())
     setCurrentView("product-media")
   }
 
@@ -789,36 +810,7 @@ export function RetailerImageBrowser() {
       <div className="flex flex-col gap-6">
         {renderBreadcrumb()}
 
-        {/* Toolbar — selection + download; read-only (no edit/delete) */}
-        <div className="flex items-center gap-2 border border-border bg-card p-1 w-fit">
-          {productMedia.length > 0 && (
-            <label className="flex items-center gap-2 px-2 cursor-pointer select-none">
-              <Checkbox
-                checked={media.isAllSelected(productMedia.map(i => i.fileName))}
-                onCheckedChange={(checked) =>
-                  checked ? media.selectAll(productMedia.map(i => i.fileName)) : media.clear()
-                }
-              />
-              <span className="text-xs text-muted-foreground">
-                {media.selectedIds.size === 0
-                  ? `All ${productMedia.length} selected`
-                  : `${media.selectedIds.size} selected`}
-              </span>
-            </label>
-          )}
-          <div className="flex items-center gap-1">
-            <button
-              className="p-1.5 hover:bg-muted disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-transparent"
-              title="Download"
-              disabled={productMedia.length === 0}
-              onClick={() => openDownloadModal()}
-            >
-              <Download className="size-4 text-muted-foreground" />
-            </button>
-          </div>
-        </div>
-
-        {/* Context Info */}
+        {/* Context Info — static reference data, not sticky */}
         <div className="text-sm space-y-1">
           <div><span className="font-medium text-muted-foreground">Trading Partner Name:</span> <span className="text-foreground">{selectedVendor?.name}</span></div>
           <div><span className="font-medium text-muted-foreground">Account Number:</span> <span className="text-foreground">{selectedVendor?.accountNumber}</span></div>
@@ -843,9 +835,49 @@ export function RetailerImageBrowser() {
           })()}
         </div>
 
-        {/* Sticky jump-to thumbnail strip — hidden when only 1 image (Acceptance #9) */}
+        {/* Selection + download bar — sticky header for the card list below it, so it stays
+            visible while scrolling instead of floating disconnected near the breadcrumb.
+            Explicit, real selection state: nothing checked by default (no invisible
+            "empty = everything" convention), and a "Clear" link reaches a genuine 0-selected
+            state. Read-only (no edit/delete) — download is the only bulk action. */}
+        {productMedia.length > 0 && (
+          <div className="sticky top-0 z-20 flex items-center justify-between gap-3 border border-border bg-card px-3 py-2 shadow-sm">
+            <div className="flex items-center gap-2">
+              <label className="flex items-center gap-2 cursor-pointer select-none">
+                <Checkbox
+                  checked={selected.size > 0 && selected.size === productMedia.length}
+                  onCheckedChange={(checked) =>
+                    checked ? setSelected(new Set(productMedia.map(i => i.fileName))) : setSelected(new Set())
+                  }
+                />
+                <span className="text-sm text-muted-foreground">
+                  {selected.size === 0 ? "Select images to download" : `${selected.size} selected`}
+                </span>
+              </label>
+              {selected.size > 0 && (
+                <button
+                  type="button"
+                  className="text-sm text-tg-link hover:underline"
+                  onClick={() => setSelected(new Set())}
+                >
+                  Clear
+                </button>
+              )}
+            </div>
+            <Button
+              size="sm"
+              onClick={() => openBulkDownload(productMedia.map(i => i.fileName))}
+            >
+              <Download className="size-4 mr-2" />
+              {selected.size === 0 ? `Download all (${productMedia.length})` : `Download (${selected.size}) selected`}
+            </Button>
+          </div>
+        )}
+
+        {/* Sticky jump-to thumbnail strip — hidden when only 1 image (Acceptance #9). Sits
+            below the selection bar (both stay pinned while scrolling the card list). */}
         {productMedia.length > 1 && (
-          <div className="sticky top-0 z-10 bg-card border border-border p-2 flex gap-2 overflow-x-auto shadow-sm">
+          <div className="sticky top-[52px] z-10 bg-card border border-border p-2 flex gap-2 overflow-x-auto shadow-sm">
             {productMedia.map((img, idx) => (
               <button
                 key={idx}
@@ -902,13 +934,13 @@ export function RetailerImageBrowser() {
               ]}
               previewSrc={img.previewSrc}
               previewAlt={img.fileName}
-              checked={media.isChecked(img.fileName)}
-              onCheckedChange={() => media.toggle(img.fileName, productMedia.map(i => i.fileName))}
+              checked={selected.has(img.fileName)}
+              onCheckedChange={() => toggleSelected(img.fileName)}
               headerActions={
                 <button
                   className="p-1.5 hover:bg-muted rounded"
                   title="Download this image"
-                  onClick={() => openDownloadModal([img.fileName])}
+                  onClick={() => openSingleDownload(img.fileName)}
                 >
                   <Download className="size-3.5 text-muted-foreground" />
                 </button>
@@ -931,7 +963,7 @@ export function RetailerImageBrowser() {
             preview: img.previewSrc,
             measured: { width: img.width, height: img.height, dpi: img.dpi },
           }))}
-          isChecked={media.isChecked}
+          isChecked={(id) => downloadTargetIds.has(id)}
           uploadLevel="product"
           autoData={{ productId: selectedProduct?.id ?? "", selectedGtin: "", colorCode: "" }}
           downloadSize={null}
