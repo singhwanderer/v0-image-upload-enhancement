@@ -131,11 +131,13 @@ Rules:
   let rawText: string
   try {
     rawText = await callGemini()
-  } catch {
+  } catch (firstErr) {
+    console.warn("[suggest-brick] Gemini first attempt failed:", firstErr instanceof Error ? firstErr.message : String(firstErr))
     try {
       await new Promise(resolve => setTimeout(resolve, 2000))
       rawText = await callGemini()
-    } catch {
+    } catch (retryErr) {
+      console.error("[suggest-brick] Gemini retry also failed:", retryErr instanceof Error ? retryErr.message : String(retryErr))
       return NextResponse.json({ error: "AI classification failed. Please continue manually." }, { status: 500 })
     }
   }
