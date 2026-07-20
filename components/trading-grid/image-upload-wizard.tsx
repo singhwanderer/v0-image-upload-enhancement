@@ -994,7 +994,7 @@ export function ImageUploadWizard({
                             </button>
                           )}
                         </div>
-                        <p className="text-xs text-muted-foreground">Max 500 KB &middot; JPG only</p>
+                        <p className="text-xs text-muted-foreground">Max 5 MB per image · 50 MB per product · JPG/PNG</p>
                       </div>
                     </div>
                   </div>
@@ -1666,7 +1666,7 @@ export function ImageUploadWizard({
                     </Button>
                   </label>
                   <p className="text-xs text-muted-foreground">
-                    Max 500 KB each &middot; JPG only &middot;{" "}
+                    Max 5 MB per image · 50 MB per product · JPG/PNG &middot;{" "}
                     <a href="#" className="text-tg-link hover:underline">
                       View GS1 guidelines
                     </a>

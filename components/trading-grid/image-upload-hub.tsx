@@ -299,7 +299,7 @@ export function ImageUploadLanding({ onUploadClick }: ImageUploadLandingProps) {
             <div className="flex gap-4 text-sm text-muted-foreground">
               <span className="flex items-center gap-1.5">
                 <FileImage className="size-4 text-primary" />
-                JPG / JPEG
+                JPG / JPEG / PNG
               </span>
             </div>
           </div>
@@ -307,7 +307,7 @@ export function ImageUploadLanding({ onUploadClick }: ImageUploadLandingProps) {
           <div className="flex-1">
             <h3 className="text-sm font-semibold text-foreground mb-2">Max File Size</h3>
             <div className="text-sm text-muted-foreground">
-              500 KB per image
+              5 MB per image · 50 MB per product
             </div>
           </div>
           <div className="w-px self-stretch bg-border" />
