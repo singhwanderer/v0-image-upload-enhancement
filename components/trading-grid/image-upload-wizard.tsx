@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useCallback } from "react"
+import { useState, useCallback, useEffect, useRef } from "react"
 import { 
   X, 
   ChevronRight, 
@@ -42,6 +42,9 @@ import { cn } from "@/lib/utils"
 import { validateImageBatch, type ValidationError } from "./upload-validation"
 import { measureImageFile } from "./image-metadata"
 import type { UploadedFile } from "./uploaded-file"
+import { COMPLIANCE_STANDARDS, getComplianceStandard } from "./compliance-standards"
+import { evaluateCompliance, fetchAiImageSignal, type ComplianceReport, type AiImageSignal } from "./compliance-check"
+import { ComplianceResultsPanel } from "./compliance-results-panel"
 import { buildImageMetadataCsv, downloadCsv, type ImageMetadataRow } from "./metadata-csv"
 import { buildZip, resizeToFit, saveBlob } from "./image-resize"
 import { toast } from "@/hooks/use-toast"
@@ -232,6 +235,12 @@ export function ImageUploadWizard({
   // activeImageIndex removed — supplier product-media uses stacked list (no active selection)
   // Inline validation errors from file drop/browse (Change 1)
   const [validationErrors, setValidationErrors] = useState<ValidationError[]>([])
+  // Compliance standard selector — which retailer/GS1 rule set staged files are checked against.
+  const [complianceStandardId, setComplianceStandardId] = useState(COMPLIANCE_STANDARDS[0].id)
+  const [complianceReports, setComplianceReports] = useState<{ [fileId: string]: ComplianceReport }>({})
+  // undefined = not fetched yet, null = fetched but unavailable, else the Gemini signal
+  const [aiImageSignals, setAiImageSignals] = useState<{ [fileId: string]: AiImageSignal | null }>({})
+  const aiCheckInFlight = useRef<Set<string>>(new Set())
   // Submission phase for progress card (Change 4)
   const [submissionPhase, setSubmissionPhase] = useState<"idle" | "uploading" | "complete" | "partial-failure">("idle")
   // Per-file submission status (Change 4)
@@ -375,6 +384,49 @@ export function ImageUploadWizard({
       })
     })
   }, [uploadedFiles])
+
+  // Fetches the Gemini-backed AI-generated-image signal for each staged file, once per file,
+  // only when the currently selected standard actually requires that rule.
+  useEffect(() => {
+    const standard = getComplianceStandard(complianceStandardId)
+    if (!standard.rules.requiresNonAiGenerated) return
+    uploadedFiles.forEach((f) => {
+      if (aiImageSignals[f.id] !== undefined || aiCheckInFlight.current.has(f.id)) return
+      aiCheckInFlight.current.add(f.id)
+      void fetchAiImageSignal(f).then((signal) => {
+        aiCheckInFlight.current.delete(f.id)
+        setAiImageSignals(prev => ({ ...prev, [f.id]: signal }))
+      })
+    })
+  }, [uploadedFiles, complianceStandardId, aiImageSignals])
+
+  // Re-evaluates every staged file's compliance report whenever the file set, the selected
+  // standard, or a file's measured metadata / AI signal changes.
+  useEffect(() => {
+    const standard = getComplianceStandard(complianceStandardId)
+    let cancelled = false
+    void (async () => {
+      const entries = await Promise.all(
+        uploadedFiles.map(async (f): Promise<[string, ComplianceReport] | null> => {
+          if (!f.measured) return null
+          const aiSignal = standard.rules.requiresNonAiGenerated ? aiImageSignals[f.id] : null
+          const report = await evaluateCompliance(f.file, f.measured, standard, aiSignal)
+          return [f.id, report]
+        }),
+      )
+      if (cancelled) return
+      setComplianceReports(() => {
+        const next: { [fileId: string]: ComplianceReport } = {}
+        entries.forEach((e) => {
+          if (e) next[e[0]] = e[1]
+        })
+        return next
+      })
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [uploadedFiles, complianceStandardId, aiImageSignals])
 
   const handleDrop = useCallback((e: React.DragEvent) => {
     e.preventDefault()
@@ -1645,6 +1697,26 @@ export function ImageUploadWizard({
               </div>
             </div>
 
+            {/* Compliance Standard — which rule set staged images are checked against */}
+            <div className="flex flex-col gap-2">
+              <Label className="text-sm font-medium">Compliance Standard</Label>
+              <Select value={complianceStandardId} onValueChange={setComplianceStandardId}>
+                <SelectTrigger className="w-full bg-background md:w-80">
+                  <SelectValue placeholder="Select a compliance standard..." />
+                </SelectTrigger>
+                <SelectContent>
+                  {COMPLIANCE_STANDARDS.map((standard) => (
+                    <SelectItem key={standard.id} value={standard.id}>
+                      {standard.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <p className="text-xs text-muted-foreground">
+                {COMPLIANCE_STANDARDS.find(s => s.id === complianceStandardId)?.description}
+              </p>
+            </div>
+
             {/* File Upload Zone — only shown for ACL (computer upload) */}
             {attributes.locationType === "ACL" && (
               <div className="flex flex-col gap-4">
@@ -2172,6 +2244,13 @@ export function ImageUploadWizard({
                 ))}
               </div>
             </div>
+
+            {/* Compliance Check — per-file rule results for the selected standard */}
+            <ComplianceResultsPanel
+              standard={getComplianceStandard(complianceStandardId)}
+              files={uploadedFiles}
+              reports={complianceReports}
+            />
 
             {/* Attributes Summary — product attributes once, then image details per image (P0.2a) */}
             <div className="rounded border border-border bg-card p-4">
