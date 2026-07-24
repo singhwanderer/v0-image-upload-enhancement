@@ -1,9 +1,8 @@
 "use client"
 
-import { CheckCircle2, AlertCircle, Loader2 } from "lucide-react"
+import { CheckCircle2, AlertCircle, MinusCircle } from "lucide-react"
 import { Badge } from "@/components/ui/badge"
 import { cn } from "@/lib/utils"
-import type { ComplianceStandard } from "./compliance-standards"
 import type { ComplianceReport } from "./compliance-check"
 import type { UploadedFile } from "./uploaded-file"
 
@@ -24,7 +23,7 @@ function StatusBadge({ status }: { status: ComplianceReport["status"] }) {
   }
   return (
     <Badge variant="outline" className="gap-1 text-muted-foreground">
-      <Loader2 className="size-3.5 animate-spin" /> Checking…
+      <MinusCircle className="size-3.5" /> Needs review
     </Badge>
   )
 }
@@ -35,7 +34,7 @@ function RuleRow({ rule }: { rule: ComplianceReport["rules"][number] }) {
       <div className="flex items-center gap-2 min-w-0">
         {rule.passed === true && <CheckCircle2 className="size-3.5 shrink-0 text-green-600 dark:text-green-400" />}
         {rule.passed === false && <AlertCircle className="size-3.5 shrink-0 text-destructive" />}
-        {rule.passed === null && <Loader2 className="size-3.5 shrink-0 animate-spin text-muted-foreground" />}
+        {rule.passed === null && <MinusCircle className="size-3.5 shrink-0 text-muted-foreground" />}
         <span className="text-foreground truncate">{rule.label}</span>
       </div>
       <div className="flex shrink-0 items-center gap-2 text-muted-foreground">
@@ -46,47 +45,40 @@ function RuleRow({ rule }: { rule: ComplianceReport["rules"][number] }) {
   )
 }
 
+// Renders per-file rule results only — no outer card or title. Meant to sit inside a Dialog,
+// whose own DialogHeader/DialogTitle carries the standard name so this stays compact and
+// doesn't duplicate that framing.
 export function ComplianceResultsPanel({
-  standard,
   files,
   reports,
 }: {
-  standard: ComplianceStandard
   files: UploadedFile[]
   reports: { [fileId: string]: ComplianceReport }
 }) {
   return (
-    <div className="rounded border border-border bg-card p-4">
-      <div className="mb-3 flex items-center justify-between">
-        <div>
-          <h3 className="text-sm font-semibold text-foreground">Compliance Check — {standard.label}</h3>
-          <p className="text-xs text-muted-foreground">{standard.description}</p>
-        </div>
-      </div>
-      <div className="flex flex-col gap-3">
-        {files.map((file) => {
-          const report = reports[file.id]
-          return (
-            <div key={file.id} className="rounded border border-border/70 bg-muted/20 p-3">
-              <div className="mb-2 flex items-center justify-between gap-2">
-                <span className="truncate text-xs font-medium text-foreground" title={file.name}>
-                  {file.name}
-                </span>
-                {report ? <StatusBadge status={report.status} /> : <StatusBadge status="pending" />}
-              </div>
-              {report ? (
-                <div className="divide-y divide-border/50">
-                  {report.rules.map((rule) => (
-                    <RuleRow key={rule.id} rule={rule} />
-                  ))}
-                </div>
-              ) : (
-                <p className="text-xs text-muted-foreground">Waiting for image metadata…</p>
-              )}
+    <div className="flex flex-col gap-3">
+      {files.map((file) => {
+        const report = reports[file.id]
+        return (
+          <div key={file.id} className="rounded border border-border/70 bg-muted/20 p-3">
+            <div className="mb-2 flex items-center justify-between gap-2">
+              <span className="truncate text-xs font-medium text-foreground" title={file.name}>
+                {file.name}
+              </span>
+              {report ? <StatusBadge status={report.status} /> : <StatusBadge status="pending" />}
             </div>
-          )
-        })}
-      </div>
+            {report ? (
+              <div className="divide-y divide-border/50">
+                {report.rules.map((rule) => (
+                  <RuleRow key={rule.id} rule={rule} />
+                ))}
+              </div>
+            ) : (
+              <p className="text-xs text-muted-foreground">Waiting for image metadata…</p>
+            )}
+          </div>
+        )
+      })}
     </div>
   )
 }

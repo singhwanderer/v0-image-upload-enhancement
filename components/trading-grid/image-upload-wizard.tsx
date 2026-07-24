@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useCallback, useEffect, useRef } from "react"
+import { useState, useCallback } from "react"
 import { 
   X, 
   ChevronRight, 
@@ -236,11 +236,15 @@ export function ImageUploadWizard({
   // Inline validation errors from file drop/browse (Change 1)
   const [validationErrors, setValidationErrors] = useState<ValidationError[]>([])
   // Compliance standard selector — which retailer/GS1 rule set staged files are checked against.
+  // Checking is on-demand (button click), not automatic: results only compute, and the AI
+  // signal only gets fetched, when the supplier explicitly asks for a check.
   const [complianceStandardId, setComplianceStandardId] = useState(COMPLIANCE_STANDARDS[0].id)
   const [complianceReports, setComplianceReports] = useState<{ [fileId: string]: ComplianceReport }>({})
-  // undefined = not fetched yet, null = fetched but unavailable, else the Gemini signal
+  // Cache of resolved Gemini signals so re-running the check doesn't re-hit the API for a
+  // file already checked. null = fetched but unavailable; absent = not fetched yet.
   const [aiImageSignals, setAiImageSignals] = useState<{ [fileId: string]: AiImageSignal | null }>({})
-  const aiCheckInFlight = useRef<Set<string>>(new Set())
+  const [complianceCheckRunning, setComplianceCheckRunning] = useState(false)
+  const [complianceModalOpen, setComplianceModalOpen] = useState(false)
   // Submission phase for progress card (Change 4)
   const [submissionPhase, setSubmissionPhase] = useState<"idle" | "uploading" | "complete" | "partial-failure">("idle")
   // Per-file submission status (Change 4)
@@ -385,46 +389,43 @@ export function ImageUploadWizard({
     })
   }, [uploadedFiles])
 
-  // Fetches the Gemini-backed AI-generated-image signal for each staged file, once per file,
-  // only when the currently selected standard actually requires that rule.
-  useEffect(() => {
-    const standard = getComplianceStandard(complianceStandardId)
-    if (!standard.rules.requiresNonAiGenerated) return
-    uploadedFiles.forEach((f) => {
-      if (aiImageSignals[f.id] !== undefined || aiCheckInFlight.current.has(f.id)) return
-      aiCheckInFlight.current.add(f.id)
-      void fetchAiImageSignal(f).then((signal) => {
-        aiCheckInFlight.current.delete(f.id)
-        setAiImageSignals(prev => ({ ...prev, [f.id]: signal }))
-      })
-    })
-  }, [uploadedFiles, complianceStandardId, aiImageSignals])
-
-  // Re-evaluates every staged file's compliance report whenever the file set, the selected
-  // standard, or a file's measured metadata / AI signal changes.
-  useEffect(() => {
-    const standard = getComplianceStandard(complianceStandardId)
-    let cancelled = false
-    void (async () => {
+  // On-demand compliance check, triggered by the "Check Compliance" button. Awaits the
+  // Gemini AI-generated-image signal (for files that don't already have a cached one) BEFORE
+  // evaluating any rules, so results never render a "checking…" placeholder — by the time the
+  // modal opens, every rule (including the AI one) already has a final answer.
+  const runComplianceCheck = useCallback(async () => {
+    if (uploadedFiles.length === 0) return
+    setComplianceCheckRunning(true)
+    try {
+      const standard = getComplianceStandard(complianceStandardId)
+      const resolvedSignals = new Map<string, AiImageSignal | null>()
       const entries = await Promise.all(
-        uploadedFiles.map(async (f): Promise<[string, ComplianceReport] | null> => {
-          if (!f.measured) return null
-          const aiSignal = standard.rules.requiresNonAiGenerated ? aiImageSignals[f.id] : null
-          const report = await evaluateCompliance(f.file, f.measured, standard, aiSignal)
+        uploadedFiles.map(async (f): Promise<[string, ComplianceReport]> => {
+          let aiSignal: AiImageSignal | null = null
+          if (standard.rules.requiresNonAiGenerated) {
+            aiSignal = aiImageSignals[f.id] !== undefined ? aiImageSignals[f.id] : await fetchAiImageSignal(f)
+            resolvedSignals.set(f.id, aiSignal)
+          }
+          const measured = f.measured ?? (await measureImageFile(f.file))
+          const report = await evaluateCompliance(f.file, measured, standard, aiSignal)
           return [f.id, report]
         }),
       )
-      if (cancelled) return
+      if (resolvedSignals.size > 0) {
+        setAiImageSignals(prev => {
+          const next = { ...prev }
+          resolvedSignals.forEach((signal, fileId) => { next[fileId] = signal })
+          return next
+        })
+      }
       setComplianceReports(() => {
         const next: { [fileId: string]: ComplianceReport } = {}
-        entries.forEach((e) => {
-          if (e) next[e[0]] = e[1]
-        })
+        entries.forEach(([fileId, report]) => { next[fileId] = report })
         return next
       })
-    })()
-    return () => {
-      cancelled = true
+      setComplianceModalOpen(true)
+    } finally {
+      setComplianceCheckRunning(false)
     }
   }, [uploadedFiles, complianceStandardId, aiImageSignals])
 
@@ -1697,25 +1698,60 @@ export function ImageUploadWizard({
               </div>
             </div>
 
-            {/* Compliance Standard — which rule set staged images are checked against */}
+            {/* Compliance Standard — which rule set staged images are checked against.
+                Checking is on-demand: picking a standard doesn't run anything by itself. */}
             <div className="flex flex-col gap-2">
               <Label className="text-sm font-medium">Compliance Standard</Label>
-              <Select value={complianceStandardId} onValueChange={setComplianceStandardId}>
-                <SelectTrigger className="w-full bg-background md:w-80">
-                  <SelectValue placeholder="Select a compliance standard..." />
-                </SelectTrigger>
-                <SelectContent>
-                  {COMPLIANCE_STANDARDS.map((standard) => (
-                    <SelectItem key={standard.id} value={standard.id}>
-                      {standard.label}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+              <div className="flex flex-wrap items-center gap-3">
+                <Select value={complianceStandardId} onValueChange={setComplianceStandardId}>
+                  <SelectTrigger className="w-full bg-background md:w-80">
+                    <SelectValue placeholder="Select a compliance standard..." />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {COMPLIANCE_STANDARDS.map((standard) => (
+                      <SelectItem key={standard.id} value={standard.id}>
+                        {standard.label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={runComplianceCheck}
+                  disabled={uploadedFiles.length === 0 || complianceCheckRunning}
+                >
+                  {complianceCheckRunning ? <Loader2 className="size-4 animate-spin" /> : null}
+                  Check Compliance
+                </Button>
+                {Object.keys(complianceReports).length > 0 && !complianceCheckRunning && (
+                  <button
+                    type="button"
+                    onClick={() => setComplianceModalOpen(true)}
+                    className="text-xs text-tg-link hover:underline"
+                  >
+                    View last results
+                  </button>
+                )}
+              </div>
               <p className="text-xs text-muted-foreground">
                 {COMPLIANCE_STANDARDS.find(s => s.id === complianceStandardId)?.description}
               </p>
             </div>
+
+            {/* Compliance results — on-demand modal (Check Compliance button above), never
+                inline, so it never disrupts the upload flow. */}
+            <Dialog open={complianceModalOpen} onOpenChange={setComplianceModalOpen}>
+              <DialogContent className="max-w-2xl max-h-[85vh] overflow-y-auto">
+                <DialogHeader>
+                  <DialogTitle>
+                    Compliance Check — {COMPLIANCE_STANDARDS.find(s => s.id === complianceStandardId)?.label}
+                  </DialogTitle>
+                </DialogHeader>
+                <ComplianceResultsPanel files={uploadedFiles} reports={complianceReports} />
+              </DialogContent>
+            </Dialog>
 
             {/* File Upload Zone — only shown for ACL (computer upload) */}
             {attributes.locationType === "ACL" && (
@@ -2245,12 +2281,39 @@ export function ImageUploadWizard({
               </div>
             </div>
 
-            {/* Compliance Check — per-file rule results for the selected standard */}
-            <ComplianceResultsPanel
-              standard={getComplianceStandard(complianceStandardId)}
-              files={uploadedFiles}
-              reports={complianceReports}
-            />
+            {/* Compliance Check — compact summary only; full per-rule results live in the
+                on-demand modal (shared with the Step 1 "Check Compliance" button) so this
+                step's layout stays focused on the submission review, not a full-screen panel. */}
+            <div className="rounded border border-border bg-card p-4">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <h3 className="text-sm font-semibold text-foreground">Compliance Check</h3>
+                  <p className="text-xs text-muted-foreground">
+                    {COMPLIANCE_STANDARDS.find(s => s.id === complianceStandardId)?.label}
+                  </p>
+                </div>
+                <div className="flex items-center gap-3">
+                  <span className="text-xs text-muted-foreground">
+                    {Object.keys(complianceReports).length > 0
+                      ? `${uploadedFiles.filter(f => complianceReports[f.id]?.status === "compliant").length} of ${uploadedFiles.length} compliant`
+                      : "Not checked yet"}
+                  </span>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={() => {
+                      if (Object.keys(complianceReports).length > 0) setComplianceModalOpen(true)
+                      else void runComplianceCheck()
+                    }}
+                    disabled={uploadedFiles.length === 0 || complianceCheckRunning}
+                  >
+                    {complianceCheckRunning ? <Loader2 className="size-4 animate-spin" /> : null}
+                    {Object.keys(complianceReports).length > 0 ? "View Details" : "Check Compliance"}
+                  </Button>
+                </div>
+              </div>
+            </div>
 
             {/* Attributes Summary — product attributes once, then image details per image (P0.2a) */}
             <div className="rounded border border-border bg-card p-4">
