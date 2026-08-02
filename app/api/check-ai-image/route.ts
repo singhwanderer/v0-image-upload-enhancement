@@ -6,7 +6,7 @@ export const runtime = "nodejs"
 export const maxDuration = 30
 
 const ALLOWED_MIME_TYPES = ["image/jpeg", "image/jpg", "image/png", "image/webp"]
-const GEMINI_MODEL = "gemini-3.1-flash-lite"
+const GEMINI_MODEL = "gemini-3.5-flash-lite"
 
 // CheckAiImageResponse: a heuristic signal, not a guarantee — Gemini is asked to judge
 // visual signs of AI generation (unnatural textures, warped detail, inconsistent lighting/

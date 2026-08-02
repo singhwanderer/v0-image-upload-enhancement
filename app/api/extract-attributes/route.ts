@@ -10,7 +10,7 @@ export const maxDuration = 60
 // Categories mirror the GPC matrix sheets (see lib/gs1/types.ts + scripts/generate-gs1-data.mjs).
 const ALLOWED_CATEGORIES = ["Clothing", "Shoes", "Bags", "Jewelry", "Beauty", "Accessories"] as const
 const ALLOWED_MIME_TYPES = ["image/jpeg", "image/jpg", "image/png", "image/webp"]
-const GEMINI_MODEL = "gemini-3.1-flash-lite"
+const GEMINI_MODEL = "gemini-3.5-flash-lite"
 
 // ExtractionApiResponse: product-level response shape returned by this route.
 // Does not include status — that is a client-side lifecycle concern.

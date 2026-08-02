@@ -118,7 +118,7 @@ Rules:
 
 ## AI architecture and its non-negotiables
 
-Four Gemini routes, all `runtime = "nodejs"`, all on `gemini-3.1-flash-lite` via `@google/genai`.
+Four Gemini routes, all `runtime = "nodejs"`, all on `gemini-3.5-flash-lite` via `@google/genai`.
 Each route: validates its input, builds the prompt, calls Gemini (extraction retries once
 silently after 2s), strips markdown fences from the response, then **re-validates the model's
 output against the authoritative GS1 map** — model-supplied codes are always overwritten with
@@ -213,7 +213,7 @@ and its file:line citations are stale:
 |---|---|
 | `ai-extraction.md` | Developer notes on the extraction pipeline — largely current |
 | `ai-extraction-readiness.md` | Stakeholder readiness write-up; describes per-image parallel calls (extraction is now a single product-level call) |
-| `gemini-prompts.md` | Verbatim prompt transcripts — **stale**: says `gemini-2.5-flash` and "exactly three routes"; there are now four routes on `gemini-3.1-flash-lite` |
+| `gemini-prompts.md` | Verbatim prompt transcripts — **stale**: says `gemini-2.5-flash` and "exactly three routes"; there are now four routes on `gemini-3.5-flash-lite` |
 | `p0.1-auto-capture-technical-note.md` | Why auto-capture needs no AI; line refs predate later edits |
 | `ux-audit-supplier-retailer-flows.md` | Self-labeled historical snapshot (pre-GS1-rebuild) |
 | `ux-audit-v2-image-data-richness.md` | Later audit; the source of the P0.x recommendation numbering used in code comments |
