@@ -11,7 +11,7 @@ export const runtime = "nodejs"
 export const maxDuration = 60
 
 const ALLOWED_MIME_TYPES = ["image/jpeg", "image/jpg", "image/png", "image/webp"]
-const GEMINI_MODEL = "gemini-3.1-flash-lite"
+const GEMINI_MODEL = "gemini-3.5-flash-lite"
 
 export type BrickSuggestionResponse = {
   category: string
